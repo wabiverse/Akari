@@ -1,0 +1,20 @@
+{
+    "Plugins": [
+        {
+            "Info": {
+                "Types": {
+                    "HdAkariRendererPlugin": {
+                        "bases": ["HdRendererPlugin"],
+                        "displayName": "Akari",
+                        "priority": 99
+                    }
+                }
+            },
+            "LibraryPath": "",
+            "Name": "HdAkari",
+            "ResourcePath": ".",
+            "Root": ".",
+            "Type": "library"
+        }
+    ]
+}

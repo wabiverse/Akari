@@ -1,0 +1,4 @@
+module HdAkari {
+  header "HdAkari/akariBridge.h"
+  export *
+}
