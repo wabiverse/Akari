@@ -79,7 +79,7 @@ Credit is required if the code is distributed.
 ### Text shaping
 
 **kb_text_shape** — single-header Unicode text segmentation and OpenType shaping, by Jimmy Lefevre
-https://github.com/jlefevre/kb (part of the `kb` single-header library collection)
+https://github.com/JimmyLefevre/kb (part of the `kb` single-header library collection)
 License: zlib
 
 **FreeType** — font loading and outline extraction
