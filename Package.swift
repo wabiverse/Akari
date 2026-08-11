@@ -17,7 +17,7 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/wabiverse/swift-usd.git", branch: "dev"),
     .package(url: "https://github.com/wabiverse/Lattice.git", branch: "main"),
-    .package(path: "../SwiftLabGL"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.0.2"),
   ],
   targets: [
     .target(
