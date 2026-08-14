@@ -17,11 +17,17 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/wabiverse/swift-usd.git", branch: "dev"),
     .package(url: "https://github.com/wabiverse/Lattice.git", branch: "main"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.0.2"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.0.3"),
   ],
   targets: [
     .target(
-      name: "AkariCore"
+      name: "AkariCore",
+      dependencies: [
+        .product(name: "LabGL", package: "SwiftLabGL")
+      ],
+      swiftSettings: [
+        .interoperabilityMode(.Cxx)
+      ]
     ),
 
     .target(

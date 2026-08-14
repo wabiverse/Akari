@@ -230,7 +230,7 @@ public extension Akari
       // tonemap stage: exposure, view transform, gamma, dither seed.
       LabFXEngine.shared.setTonemap(exposure: ctx.settings.color.exposure,
                                     gamma: ctx.settings.color.gamma,
-                                    viewTransform: ctx.settings.color.viewTransform.uniform,
+                                    viewTransform: ctx.settings.color.viewTransform,
                                     frameIndex: ctx.frameIndex)
     }
   }

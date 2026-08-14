@@ -62,6 +62,9 @@ public extension Akari
     private var lastWidth = 0
     private var lastHeight = 0
 
+    /// The last GL_TONEMAP_* operator applied to the tonemap pass.
+    private var lastTonemap = GLenum(0)
+
     /// IBL is expensive, this sets a flag to bake it once.
     private var iblNeedsBake = true
     private static let kIblPassNames = [
@@ -202,24 +205,28 @@ public extension Akari
     /// - Parameters:
     ///   - exposure: exposure setting the tonemap pass reads.
     ///   - gamma: gamma setting the tonemap pass reads.
-    ///   - viewTransform: (e.g. AgX) setting the tonemap pass reads.
+    ///   - viewTransform: (e.g. AgX) selects the LabGL tonemap operator.
     ///   - frameIndex: per frame counter to seed the dither.
     public func setTonemap(exposure: Float,
                            gamma: Float,
-                           viewTransform: Int32,
+                           viewTransform: ViewTransform,
                            frameIndex: UInt64)
     {
       var expV = exposure
-      runtime.setUniform("exposure", UInt32(GL_FLOAT), &expV)
+      runtime.setUniform("exposure", GLenum(GL_FLOAT), &expV)
 
       var gammaV = gamma
-      runtime.setUniform("gamma", UInt32(GL_FLOAT), &gammaV)
-
-      var vtV = Float(viewTransform)
-      runtime.setUniform("viewTransform", UInt32(GL_FLOAT), &vtV)
+      runtime.setUniform("gamma", GLenum(GL_FLOAT), &gammaV)
 
       var fIdx = Int32(frameIndex & 0xFFFF)
-      runtime.setUniform("frameIndex", UInt32(GL_INT), &fIdx)
+      runtime.setUniform("frameIndex", GLenum(GL_INT), &fIdx)
+
+      if GLenum(viewTransform.uniform) != lastTonemap
+      {
+        lastTonemap = GLenum(viewTransform.uniform)
+        
+        runtime.setPassTonemap("tonemap", GLenum(viewTransform.uniform))
+      }
     }
 
     /// Executes the deferred graph, presents, and wraps the final color texture into
@@ -510,7 +517,7 @@ public extension Akari
         draw: quad
         depth test: never
         write depth: no
-        use shader: tonemap
+        use shader: agx
         inputs: [color.final]
         outputs: tonemap [ tonemap ]
 
@@ -2095,6 +2102,7 @@ public extension Akari
           source:
           ```glsl
           const float PI = 3.14159265358979;
+          const float LIGHT_INTENSITY = 3.0;
 
           vec2 dirToUV(vec3 dir)
           {
@@ -2168,7 +2176,7 @@ public extension Akari
               vec3 F = F_Schlick(f0, LoH);
               vec3 Fr = D * Vis * F;
               vec3 Fd = diffuseColor / PI;
-              color += (Fd + Fr) * NoL * vec3(1.0, 0.97, 0.92) * 5.0;
+              color += (Fd + Fr) * NoL * vec3(1.0, 0.97, 0.92) * LIGHT_INTENSITY;
             }
 
             vec3 dfg = texture(u_dfg_texture, vec2(NoV, perceptualRoughness)).rgb;
@@ -2211,6 +2219,7 @@ public extension Akari
           source msl:
           ```msl
           constexpr constant float PI = 3.14159265358979;
+          constexpr constant float LIGHT_INTENSITY = 3.0;
 
           float2 dirToUV(float3 dir)
           {
@@ -2286,7 +2295,7 @@ public extension Akari
                 float3 F = F_Schlick(f0, LoH);
                 float3 Fr = D * Vis * F;
                 float3 Fd = diffuseColor / PI;
-                color += (Fd + Fr) * NoL * float3(1.0, 0.97, 0.92) * 5.0;
+                color += (Fd + Fr) * NoL * float3(1.0, 0.97, 0.92) * LIGHT_INTENSITY;
               }
 
               float3 dfg = texture(u_dfg_texture, float2(NoV, perceptualRoughness)).rgb;
@@ -2324,572 +2333,6 @@ public extension Akari
 
               o_final_texture = float4(color, 1.0);
             }
-          }
-          ```
-
-      shader: tonemap
-        uniforms: [ u_final_texture: sampler2d,
-                    exposure: float,
-                    gamma: float,
-                    viewTransform: float,
-                    frameIndex: int,
-                    u_resolution: vec2 <- auto-resolution,
-                    u_framebuffer_to_rec2020: mat3 <- auto-tonemap-framebuffer,
-                    u_rec2020_to_display: mat3 <- auto-tonemap-display ]
-        varying:  [ texCoord: vec2 ]
-
-        vsh:
-          attributes:
-          [ a_position: vec3 <- position,
-            a_uv: vec2 <- texcoord ]
-
-          source:
-          ```glsl
-          void main()
-          {
-            var.texCoord = a_uv;
-            gl_Position = vec4(a_position, 1.0);
-          }
-          ```
-
-          source msl:
-          ```msl
-          var.texCoord = a_uv;
-          gl_Position = float4(a_position, 1.0);
-          ```
-
-        fsh:
-          source:
-          ```glsl
-
-          const mat3 AgXInset = mat3(
-            0.856627153315983, 0.137318972929847, 0.11189821299995,
-            0.0951212405381588, 0.761241990602591, 0.0767994186031903,
-            0.0482516061458583, 0.101439036467562, 0.811302368396859);
-
-          const mat3 AgXOutset = mat3(
-            1.12710058, -0.14132976, -0.14132976,
-            -0.11060664,  1.1578237, -0.11060664,
-            -0.01649394, -0.01649394,  1.25193641);
-
-          const float AgxMinEv = -12.47393;
-          const float AgxMaxEv = 4.026069;
-
-          vec3 agxContrastApprox(vec3 x)
-          {
-            vec3 x2 = x * x;
-            vec3 x4 = x2 * x2;
-            vec3 x6 = x4 * x2;
-            return -17.86 * x6 * x
-                 + 78.01 * x6
-                 - 126.7 * x4 * x
-                 + 92.06 * x4
-                 - 28.72 * x2 * x
-                 + 4.361 * x2
-                 - 0.1718 * x
-                 + 0.002857;
-          }
-
-          vec3 agx(vec3 v)
-          {
-            v = max(v, vec3(0.0));
-            v = AgXInset * v;
-            v = max(v, vec3(1E-10));
-            v = log2(v);
-            v = (v - AgxMinEv) / (AgxMaxEv - AgxMinEv);
-            v = clamp(v, 0.0, 1.0);
-            v = agxContrastApprox(v);
-            v = AgXOutset * v;
-            v = pow(max(v, vec3(0.0)), vec3(2.2));
-            return v;
-          }
-
-          const mat3 Rec2020_to_AP0 = mat3(
-            0.66868028, 0.04490008, 0.0,
-            0.15181768, 0.86216027, 0.02782752,
-            0.17716327, 0.10190731, 1.0515471);
-
-          const mat3 AP0_to_AP1 = mat3(
-            1.4514393161, -0.0765537734, 0.0083161484,
-            -0.2365107469, 1.1762296998, -0.0060324498,
-            -0.2149285693, -0.0996759264, 0.9977163014);
-
-          const mat3 AP1_to_Rec2020 = mat3(
-            1.0417988, -0.00168309, -0.00521046,
-            -0.01074163, 1.00035025, -0.02264483,
-            -0.00696194, -0.00140818, 0.95244411);
-
-          const mat3 AP1_to_XYZ = mat3(
-            0.6624541811, 0.2722287168, -0.0055746495,
-            0.1340042065, 0.6740817658, 0.0040607335,
-            0.1561876870, 0.0536895174, 1.0103391003);
-
-          const mat3 XYZ_to_AP1 = mat3(
-            1.6410233797, -0.6636628587, 0.0117218943,
-            -0.3248032942, 1.6153315917, -0.0082844420,
-            -0.2364246952, 0.0167563477, 0.9883948585);
-
-          const vec3 LUMINANCE_AP1 = vec3(0.272229, 0.674082, 0.0536895);
-
-          float rgb2Saturation(vec3 rgb)
-          {
-            float mi = min(rgb.r, min(rgb.g, rgb.b));
-            float ma = max(rgb.r, max(rgb.g, rgb.b));
-            return (max(ma, 1e-5) - max(mi, 1e-5)) / max(ma, 1e-2);
-          }
-
-          float rgb2YC(vec3 rgb)
-          {
-            float chroma = sqrt(rgb.b * (rgb.b - rgb.g) +
-                                rgb.g * (rgb.g - rgb.r) +
-                                rgb.r * (rgb.r - rgb.b));
-            return (rgb.b + rgb.g + rgb.r + 1.75 * chroma) / 3.0;
-          }
-
-          float sigmoidShaper(float x)
-          {
-            float t = max(1.0 - abs(x / 2.0), 0.0);
-            return (1.0 + sign(x) * (1.0 - t * t)) / 2.0;
-          }
-
-          float glowFwd(float ycIn, float glowGainIn, float glowMid)
-          {
-            if (ycIn <= 2.0 / 3.0 * glowMid) {
-              return glowGainIn;
-            }
-            if (ycIn >= 2.0 * glowMid) {
-              return 0.0;
-            }
-            return glowGainIn * (glowMid / ycIn - 0.5);
-          }
-
-          float rgb2Hue(vec3 rgb)
-          {
-            if (rgb.x == rgb.y && rgb.y == rgb.z) {
-              return 0.0;
-            }
-            float hue = 57.2957795 * atan(sqrt(3.0) * (rgb.y - rgb.z),
-                                          2.0 * rgb.x - rgb.y - rgb.z);
-            return (hue < 0.0) ? hue + 360.0 : hue;
-          }
-
-          float centerHue(float hue, float centerH)
-          {
-            float h = hue - centerH;
-            if (h < -180.0) {
-              h += 360.0;
-            } else if (h > 180.0) {
-              h -= 360.0;
-            }
-            return h;
-          }
-
-          vec3 darkSurroundToDimSurround(vec3 linearCV)
-          {
-            const float DIM_SURROUND_GAMMA = 0.9811;
-            vec3 xyz = AP1_to_XYZ * linearCV;
-
-            // xyY chromaticities, guarded against pure black (0/0).
-            float sum = max(xyz.x + xyz.y + xyz.z, 1e-5);
-            float x = xyz.x / sum;
-            float y = xyz.y / sum;
-
-            float Y = pow(clamp(xyz.y, 0.0, 65504.0), DIM_SURROUND_GAMMA);
-            float a = Y / max(y, 1e-5);
-
-            return XYZ_to_AP1 * vec3(x * a, Y, (1.0 - x - y) * a);
-          }
-
-          vec3 aces(vec3 color)
-          {
-            const float RRT_GLOW_GAIN = 0.05;
-            const float RRT_GLOW_MID = 0.08;
-            const float RRT_RED_SCALE = 0.82;
-            const float RRT_RED_PIVOT = 0.03;
-            const float RRT_RED_HUE = 0.0;
-            const float RRT_RED_WIDTH = 135.0;
-            const float RRT_SAT_FACTOR = 0.96;
-            const float ODT_SAT_FACTOR = 0.93;
-
-            vec3 ap0 = Rec2020_to_AP0 * color;
-
-            float saturation = rgb2Saturation(ap0);
-            float ycIn = rgb2YC(ap0);
-            float s = sigmoidShaper((saturation - 0.4) / 0.2);
-            ap0 *= 1.0 + glowFwd(ycIn, RRT_GLOW_GAIN * s, RRT_GLOW_MID);
-
-            float hueWeight = smoothstep(0.0, 1.0,
-              1.0 - abs(2.0 * centerHue(rgb2Hue(ap0), RRT_RED_HUE) / RRT_RED_WIDTH));
-            hueWeight *= hueWeight;
-            ap0.r += hueWeight * saturation * (RRT_RED_PIVOT - ap0.r) *
-                     (1.0 - RRT_RED_SCALE);
-
-            vec3 ap1 = clamp(AP0_to_AP1 * ap0, vec3(0.0), vec3(65504.0));
-            ap1 = mix(vec3(dot(ap1, LUMINANCE_AP1)), ap1, RRT_SAT_FACTOR);
-
-            const float a = 2.785085;
-            const float b = 0.107772;
-            const float c = 2.936045;
-            const float d = 0.887122;
-            const float e = 0.806889;
-            vec3 rgbPost = (ap1 * (a * ap1 + b)) / (ap1 * (c * ap1 + d) + e);
-
-            vec3 linearCV = darkSurroundToDimSurround(rgbPost);
-            linearCV = mix(vec3(dot(linearCV, LUMINANCE_AP1)), linearCV, ODT_SAT_FACTOR);
-            return AP1_to_Rec2020 * linearCV;
-          }
-
-          vec3 filmic(vec3 x)
-          {
-            return (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
-          }
-
-          vec3 pbrNeutral(vec3 color)
-          {
-            const float startCompression = 0.8 - 0.04;
-            const float desaturation = 0.15;
-            float x = min(color.r, min(color.g, color.b));
-            float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
-            color -= offset;
-
-            float peak = max(color.r, max(color.g, color.b));
-            if (peak < startCompression) {
-              return color;
-            }
-
-            const float d = 1.0 - startCompression;
-            float newPeak = 1.0 - d * d / (peak + d - startCompression);
-            color *= newPeak / peak;
-
-            float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
-            return mix(color, vec3(newPeak), g);
-          }
-
-          vec3 srgbEncode(vec3 c)
-          {
-            vec3 lo = c * 12.92;
-            vec3 hi = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
-            return vec3(c.r <= 0.0031308 ? lo.r : hi.r,
-                        c.g <= 0.0031308 ? lo.g : hi.g,
-                        c.b <= 0.0031308 ? lo.b : hi.b);
-          }
-
-          float ditherNoise(vec2 fragCoord, int frameIndex)
-          {
-            vec3 p3 = fract(vec3(fragCoord.x, fragCoord.y, float(frameIndex)) * 0.1031);
-            p3 += dot(p3, p3.yzx + 33.33);
-            return fract((p3.x + p3.y) * p3.z);
-          }
-
-          void main()
-          {
-            vec4 hdr = texture(u_final_texture, var.texCoord);
-
-            vec3 c = hdr.rgb * pow(2.0, exposure);
-
-            c = u_framebuffer_to_rec2020 * c;
-
-            int vt = int(viewTransform);
-            if (vt == 0) {
-              // AgX (default).
-              c = agx(c);
-              c = u_rec2020_to_display * c;
-            } else if (vt == 1) {
-              // Filmic.
-              c = filmic(c);
-              c = u_rec2020_to_display * c;
-              c = srgbEncode(c);
-            } else if (vt == 2) {
-              // ACES.
-              c = aces(c);
-              c = u_rec2020_to_display * c;
-              c = srgbEncode(c);
-            } else if (vt == 3) {
-              // Khronos PBR Neutral.
-              c = pbrNeutral(c);
-              c = u_rec2020_to_display * c;
-              c = srgbEncode(c);
-            } else {
-              // Standard.
-              c = clamp(c, 0.0, 1.0);
-              c = u_rec2020_to_display * c;
-              c = srgbEncode(c);
-            }
-
-            // post transform gamma trim (default 1.0 = untouched).
-            c = pow(max(c, vec3(0.0)), vec3(1.0 / gamma));
-
-            // dither before the 8-bit AOV write to hide banding.
-            c += (ditherNoise(var.texCoord * u_resolution, frameIndex) - 0.5) / 255.0;
-
-            o_tonemap_texture = vec4(c, hdr.a);
-          }
-          ```
-
-          source msl:
-          ```msl
-
-          float3 agxContrastApprox(float3 x)
-          {
-            float3 x2 = x * x;
-            float3 x4 = x2 * x2;
-            float3 x6 = x4 * x2;
-            return -17.86 * x6 * x
-                 + 78.01 * x6
-                 - 126.7 * x4 * x
-                 + 92.06 * x4
-                 - 28.72 * x2 * x
-                 + 4.361 * x2
-                 - 0.1718 * x
-                 + 0.002857;
-          }
-
-          float3 agx(float3 v)
-          {
-            const float3x3 AgXInset = float3x3(
-              float3(0.856627153315983, 0.137318972929847, 0.11189821299995),
-              float3(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
-              float3(0.0482516061458583, 0.101439036467562, 0.811302368396859)
-            );
-            const float3x3 AgXOutset = float3x3(
-              float3(1.12710058, -0.14132976, -0.14132976),
-              float3(-0.11060664, 1.1578237, -0.11060664),
-              float3(-0.01649394, -0.01649394, 1.25193641)
-            );
-            const float AgxMinEv = -12.47393;
-            const float AgxMaxEv = 4.026069;
-
-            v = max(v, float3(0.0));
-            v = AgXInset * v;
-            v = max(v, float3(1E-10));
-            v = log2(v);
-            v = (v - AgxMinEv) / (AgxMaxEv - AgxMinEv);
-            v = clamp(v, 0.0, 1.0);
-            v = agxContrastApprox(v);
-            v = AgXOutset * v;
-            v = pow(max(v, float3(0.0)), float3(2.2));
-            return v;
-          }
-
-          float rgb2Saturation(float3 rgb)
-          {
-            float mi = min(rgb.r, min(rgb.g, rgb.b));
-            float ma = max(rgb.r, max(rgb.g, rgb.b));
-            return (max(ma, 1e-5) - max(mi, 1e-5)) / max(ma, 1e-2);
-          }
-
-          float rgb2YC(float3 rgb)
-          {
-            float chroma = sqrt(rgb.b * (rgb.b - rgb.g) +
-                                rgb.g * (rgb.g - rgb.r) +
-                                rgb.r * (rgb.r - rgb.b));
-            return (rgb.b + rgb.g + rgb.r + 1.75 * chroma) / 3.0;
-          }
-
-          float sigmoidShaper(float x)
-          {
-            float t = max(1.0 - abs(x / 2.0), 0.0);
-            return (1.0 + sign(x) * (1.0 - t * t)) / 2.0;
-          }
-
-          float glowFwd(float ycIn, float glowGainIn, float glowMid)
-          {
-            if (ycIn <= 2.0 / 3.0 * glowMid) {
-              return glowGainIn;
-            }
-            if (ycIn >= 2.0 * glowMid) {
-              return 0.0;
-            }
-            return glowGainIn * (glowMid / ycIn - 0.5);
-          }
-
-          float rgb2Hue(float3 rgb)
-          {
-            if (rgb.x == rgb.y && rgb.y == rgb.z) {
-              return 0.0;
-            }
-            float hue = 57.2957795 * atan2(sqrt(3.0) * (rgb.y - rgb.z),
-                                           2.0 * rgb.x - rgb.y - rgb.z);
-            return (hue < 0.0) ? hue + 360.0 : hue;
-          }
-
-          float centerHue(float hue, float centerH)
-          {
-            float h = hue - centerH;
-            if (h < -180.0) {
-              h += 360.0;
-            } else if (h > 180.0) {
-              h -= 360.0;
-            }
-            return h;
-          }
-
-          float3 darkSurroundToDimSurround(float3 linearCV)
-          {
-            const float DIM_SURROUND_GAMMA = 0.9811;
-            const float3x3 AP1_to_XYZ = float3x3(
-              float3(0.6624541811, 0.2722287168, -0.0055746495),
-              float3(0.1340042065, 0.6740817658, 0.0040607335),
-              float3(0.1561876870, 0.0536895174, 1.0103391003)
-            );
-            const float3x3 XYZ_to_AP1 = float3x3(
-              float3(1.6410233797, -0.6636628587, 0.0117218943),
-              float3(-0.3248032942, 1.6153315917, -0.0082844420),
-              float3(-0.2364246952, 0.0167563477, 0.9883948585)
-            );
-
-            float3 xyz = AP1_to_XYZ * linearCV;
-
-            // xyY chromaticities, guarded against pure black (0/0).
-            float sum = max(xyz.x + xyz.y + xyz.z, 1e-5);
-            float x = xyz.x / sum;
-            float y = xyz.y / sum;
-
-            float Y = pow(clamp(xyz.y, 0.0, 65504.0), DIM_SURROUND_GAMMA);
-            float a = Y / max(y, 1e-5);
-
-            return XYZ_to_AP1 * float3(x * a, Y, (1.0 - x - y) * a);
-          }
-
-          float3 aces(float3 color)
-          {
-            const float3x3 Rec2020_to_AP0 = float3x3(
-              float3(0.66868028, 0.04490008, 0.0),
-              float3(0.15181768, 0.86216027, 0.02782752),
-              float3(0.17716327, 0.10190731, 1.0515471)
-            );
-            const float3x3 AP0_to_AP1 = float3x3(
-              float3(1.4514393161, -0.0765537734, 0.0083161484),
-              float3(-0.2365107469, 1.1762296998, -0.0060324498),
-              float3(-0.2149285693, -0.0996759264, 0.9977163014)
-            );
-            const float3x3 AP1_to_Rec2020 = float3x3(
-              float3(1.0417988, -0.00168309, -0.00521046),
-              float3(-0.01074163, 1.00035025, -0.02264483),
-              float3(-0.00696194, -0.00140818, 0.95244411)
-            );
-            const float3 LUMINANCE_AP1 = float3(0.272229, 0.674082, 0.0536895);
-            const float RRT_GLOW_GAIN = 0.05;
-            const float RRT_GLOW_MID = 0.08;
-            const float RRT_RED_SCALE = 0.82;
-            const float RRT_RED_PIVOT = 0.03;
-            const float RRT_RED_HUE = 0.0;
-            const float RRT_RED_WIDTH = 135.0;
-            const float RRT_SAT_FACTOR = 0.96;
-            const float ODT_SAT_FACTOR = 0.93;
-
-            float3 ap0 = Rec2020_to_AP0 * color;
-
-            float saturation = rgb2Saturation(ap0);
-            float ycIn = rgb2YC(ap0);
-            float s = sigmoidShaper((saturation - 0.4) / 0.2);
-            ap0 *= 1.0 + glowFwd(ycIn, RRT_GLOW_GAIN * s, RRT_GLOW_MID);
-
-            float hueWeight = smoothstep(0.0, 1.0,
-              1.0 - abs(2.0 * centerHue(rgb2Hue(ap0), RRT_RED_HUE) / RRT_RED_WIDTH));
-            hueWeight *= hueWeight;
-            ap0.r += hueWeight * saturation * (RRT_RED_PIVOT - ap0.r) *
-                     (1.0 - RRT_RED_SCALE);
-
-            float3 ap1 = clamp(AP0_to_AP1 * ap0, float3(0.0), float3(65504.0));
-            ap1 = mix(float3(dot(ap1, LUMINANCE_AP1)), ap1, RRT_SAT_FACTOR);
-
-            const float a = 2.785085;
-            const float b = 0.107772;
-            const float c = 2.936045;
-            const float d = 0.887122;
-            const float e = 0.806889;
-            float3 rgbPost = (ap1 * (a * ap1 + b)) / (ap1 * (c * ap1 + d) + e);
-
-            float3 linearCV = darkSurroundToDimSurround(rgbPost);
-            linearCV = mix(float3(dot(linearCV, LUMINANCE_AP1)), linearCV, ODT_SAT_FACTOR);
-            return AP1_to_Rec2020 * linearCV;
-          }
-
-          float3 filmic(float3 x)
-          {
-            return (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
-          }
-
-          float3 pbrNeutral(float3 color)
-          {
-            const float startCompression = 0.8 - 0.04;
-            const float desaturation = 0.15;
-            float x = min(color.r, min(color.g, color.b));
-            float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
-            color -= offset;
-
-            float peak = max(color.r, max(color.g, color.b));
-            if (peak < startCompression) {
-              return color;
-            }
-
-            const float d = 1.0 - startCompression;
-            float newPeak = 1.0 - d * d / (peak + d - startCompression);
-            color *= newPeak / peak;
-
-            float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
-            return mix(color, float3(newPeak), g);
-          }
-
-          float3 srgbEncode(float3 c)
-          {
-            float3 lo = c * 12.92;
-            float3 hi = 1.055 * pow(max(c, float3(0.0)), float3(1.0 / 2.4)) - 0.055;
-            return float3(c.r <= 0.0031308 ? lo.r : hi.r,
-                          c.g <= 0.0031308 ? lo.g : hi.g,
-                          c.b <= 0.0031308 ? lo.b : hi.b);
-          }
-
-          float ditherNoise(float2 fragCoord, int frameIndex)
-          {
-            float3 p3 = fract(float3(fragCoord.x, fragCoord.y, float(frameIndex)) * 0.1031);
-            p3 += dot(p3, p3.yzx + 33.33);
-            return fract((p3.x + p3.y) * p3.z);
-          }
-
-          //@main
-          {
-            float4 hdr = texture(u_final_texture, var.texCoord);
-
-            float3 c = hdr.rgb * pow(2.0, exposure);
-
-            c = u_framebuffer_to_rec2020 * c;
-
-            int vt = int(viewTransform + 0.5);
-            if (vt == 0) {
-              // AgX (default)
-              c = agx(c);
-              c = u_rec2020_to_display * c;
-            } else if (vt == 1) {
-              // Filmic.
-              c = filmic(c);
-              c = u_rec2020_to_display * c;
-              c = srgbEncode(c);
-            } else if (vt == 2) {
-              // ACES.
-              c = aces(c);
-              c = u_rec2020_to_display * c;
-              c = srgbEncode(c);
-            } else if (vt == 3) {
-              // Khronos PBR Neutral.
-              c = pbrNeutral(c);
-              c = u_rec2020_to_display * c;
-              c = srgbEncode(c);
-            } else {
-              // Standard.
-              c = clamp(c, 0.0, 1.0);
-              c = u_rec2020_to_display * c;
-              c = srgbEncode(c);
-            }
-
-            // post transform gamma trim (default 1.0 = untouched).
-            c = pow(max(c, float3(0.0)), float3(1.0));
-
-            // dither before the 8-bit AOV write to hide banding.
-            c += (ditherNoise(var.texCoord * u_resolution, frameIndex) - 0.5) / 255.0;
-
-            o_tonemap_texture = float4(c, hdr.a);
           }
           ```
       """

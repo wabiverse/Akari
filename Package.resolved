@@ -1,13 +1,13 @@
 {
-  "originHash" : "0e65ee5d4241aeb0fd8ca08cee2d021a03104d35b924396b5f2aab154b1e9ff3",
+  "originHash" : "4455471a5325190ad09cced6196182f4d3d289b1b92f2e3d208bd62bdbcd8273",
   "pins" : [
     {
       "identity" : "imgui",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/the-swift-collective/imgui",
       "state" : {
-        "revision" : "a324b2cb33615ddb6d55ce5aa1dc0d7514b6bec1",
-        "version" : "1.91.9"
+        "revision" : "5bd25cffd4ad22635563aa29c59ebee56943964e",
+        "version" : "1.92.0"
       }
     },
     {
@@ -123,8 +123,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-syntax",
       "state" : {
-        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
-        "version" : "603.0.2"
+        "revision" : "2b59c0c741e9184ab057fd22950b491076d42e91",
+        "version" : "603.0.0"
       }
     },
     {
@@ -150,8 +150,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/furbytm/SwiftLabGL.git",
       "state" : {
-        "revision" : "8ac3e375b7b23a837dd5ed070d889abe586fdd7a",
-        "version" : "0.0.2"
+        "revision" : "72980a4798d8868c4cbd53f9cb2f9f593c8e87ad",
+        "version" : "0.0.3"
       }
     },
     {
