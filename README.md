@@ -76,6 +76,37 @@ Paper: https://jcgt.org/published/0006/02/02/ (JCGT 2017)
 License: dual MIT / Apache 2.0. The patent has been dedicated to the public domain.
 Credit is required if the code is distributed.
 
+### Tonemap operators
+
+**AgX** — filmic tone mapping algorithm, by Troy Sobotka and EaryChow's AgXBaseRec2020
+matrices, used as the default view transform in Blender and adapted from Google Filament's
+minimal AgX implementation.
+Reference shaders: https://github.com/google/filament/blob/main/filament/src/ToneMapper.cpp
+Original AgX: https://github.com/sobotka/AgX
+EaryChow's AgX: https://github.com/EaryChow/AgX_LUT_Gen
+Blender: https://www.blender.org
+License: Apache 2.0
+Credit is required if the code is distributed.
+
+**ACES** — ACES RRT+ODT tone mapping is adapted from Filament's ACES implementation, by Google
+Reference shaders: https://github.com/google/filament/blob/main/filament/src/ToneMapper.cpp
+ACES: https://github.com/aces-aswf/aces-core
+License: Apache 2.0
+Credit is required if the code is distributed.
+
+**Guy ACES, Hill ACES, Narkowicz ACES** — additional ACES curve fits, by Tizian Zeltner
+https://github.com/tizian/tonemapper
+License: MIT
+
+**Filmic Tonemap Operators** — filmic tonemapping operators, by Tizian Zeltner
+https://github.com/tizian/tonemapper
+License: MIT
+
+**Khronos PBR Neutral** — neutral tone mapper, by the Khronos Group
+Reference shaders: https://github.com/KhronosGroup/ToneMapping/tree/main/PBR_Neutral
+License: Apache 2.0
+Credit is required if the code is distributed.
+
 ### Text shaping
 
 **kb_text_shape** — single-header Unicode text segmentation and OpenType shaping, by Jimmy Lefevre
