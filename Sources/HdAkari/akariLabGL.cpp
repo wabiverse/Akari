@@ -42,8 +42,7 @@
 #include "HdAkari/scene.h"
 #include "akariGeometry.h"
 
-#include <labgl/labgl_capture.h>
-#include <labgl/labgl_dispatch.h>
+#include <labgl/labgl.h>
 
 #include <Gf/matrix4d.h>
 #include <Gf/matrix4f.h>
@@ -68,11 +67,11 @@ extern "C" void AkariSceneRecordCapture(void *renderParamPtr, void *captureBuffe
   labgl_captureClear(buf);
   labgl_captureStart(buf);
 
-  LABGLDISPATCH_glEnable(GL_DEPTH_TEST);
-  LABGLDISPATCH_glDepthFunc(GL_LESS);
+  glEnable(GL_DEPTH_TEST);
+  glDepthFunc(GL_LESS);
 
-  LABGLDISPATCH_glMatrixMode(GL_PROJECTION);
-  LABGLDISPATCH_glLoadMatrixf(proj);
+  glMatrixMode(GL_PROJECTION);
+  glLoadMatrixf(proj);
 
   const GfMatrix4d viewM = ToMatrix4d(view);
 
@@ -90,19 +89,18 @@ extern "C" void AkariSceneRecordCapture(void *renderParamPtr, void *captureBuffe
       continue;
     }
 
-    LABGLDISPATCH_glMatrixMode(GL_MODELVIEW);
+    glMatrixMode(GL_MODELVIEW);
     const GfMatrix4f mv(mesh.transform * viewM);
-    LABGLDISPATCH_glLoadMatrixf(mv.GetArray());
+    glLoadMatrixf(mv.GetArray());
 
-    LABGLDISPATCH_glColor3f(mesh.displayColor[0], mesh.displayColor[1],
-                            mesh.displayColor[2]);
-    LABGLDISPATCH_glBegin(GL_TRIANGLES);
+    glColor3f(mesh.displayColor[0], mesh.displayColor[1], mesh.displayColor[2]);
+    glBegin(GL_TRIANGLES);
     for (int const idx : indices) {
       const float *v = &verts[static_cast<size_t>(idx) * 6];
-      LABGLDISPATCH_glNormal3f(v[3], v[4], v[5]);
-      LABGLDISPATCH_glVertex3f(v[0], v[1], v[2]);
+      glNormal3f(v[3], v[4], v[5]);
+      glVertex3f(v[0], v[1], v[2]);
     }
-    LABGLDISPATCH_glEnd();
+    glEnd();
   }
 
   labgl_captureStop();
