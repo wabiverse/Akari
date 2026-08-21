@@ -78,6 +78,9 @@ extension AkariDemo
         sectionHeader("SAMPLING")
         samplesRow
         renderSamplesRow
+        
+        sectionHeader("LIGHTING")
+        environmentSunHeightRow
 
         sectionHeader("FEATURES")
         featuresSection
@@ -175,6 +178,20 @@ extension AkariDemo
       }
     }
 
+    private var environmentSunHeightRow: some View
+    {
+      VStack(alignment: .leading, spacing: 2)
+      {
+        HStack(spacing: 6)
+        {
+          key("Environment Sun Height")
+          value(String(format: "%.2f", state.environmentSunHeight))
+        }
+        Slider(value: state.$environmentSunHeight.onChange { _ in state.apply() }, in: -1 ... 1)
+          .frame(width: 160)
+      }
+    }
+    
     private var featuresSection: some View
     {
       HStack(alignment: .top, spacing: 16)

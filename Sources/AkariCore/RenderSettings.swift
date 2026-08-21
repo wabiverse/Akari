@@ -62,6 +62,8 @@ public struct RenderSettings: Sendable
   public var features: RenderFeatures = RenderSettings.features(for: .medium)
   /// Scene exposure + display view transform (AgX by default).
   public var color: ColorPipeline = .init()
+  /// Scene light settings.
+  public var light: LightSettings = .init()
   /// Frame rate the interactive pipeline budgets toward.
   public var targetFrameRate: Int = 60
   /// Viewport sample count (defaults to 16).
@@ -77,6 +79,7 @@ public struct RenderSettings: Sendable
   public init(quality: RenderQuality = .medium,
               features: RenderFeatures? = nil,
               color: ColorPipeline = ColorPipeline(),
+              light: LightSettings = LightSettings(),
               targetFrameRate: Int = 60,
               samples: Int = 16,
               renderSamples: Int = 64,
@@ -85,6 +88,7 @@ public struct RenderSettings: Sendable
     self.quality = quality
     self.features = features ?? Self.features(for: quality)
     self.color = color
+    self.light = light
     self.targetFrameRate = targetFrameRate
     self.samples = samples
     self.renderSamples = renderSamples

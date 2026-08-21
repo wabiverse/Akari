@@ -38,80 +38,17 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-import AkariCore
-import AkariRender
-import SwiftCrossUI
-
-extension AkariDemo
+/// Scene light settings.
+public struct LightSettings: Sendable
 {
-  /// The live render settings the HUD edits.
-  @MainActor
-  final class HUDState: ObservableObject
+  /// Sun height, for day/night approximation.
+  public var sunHeight: Float = 0
+  
+  public init()
+  {}
+  
+  public init(sunHeight: Float)
   {
-    @Published var viewTransform: ViewTransform?
-    @Published var quality: RenderQuality?
-    @Published var exposure: Double
-    @Published var gamma: Double
-    @Published var samples: Double
-    @Published var renderSamples: Double
-    @Published var environmentSunHeight: Double
-    @Published var features: RenderFeatures
-
-    private let engine: Akari.RenderEngine
-
-    init(engine: Akari.RenderEngine)
-    {
-      self.engine = engine
-      let s = engine.settings
-      viewTransform = s.color.viewTransform
-      quality = s.quality
-      exposure = Double(s.color.exposure)
-      gamma = Double(s.color.gamma)
-      samples = Double(s.samples)
-      renderSamples = Double(s.renderSamples)
-      environmentSunHeight = Double(s.light.sunHeight)
-      features = s.features
-    }
-
-    /// How many frame graph passes the engine currently runs.
-    var activePassCount: Int
-    {
-      engine.activePasses.count
-    }
-
-    /// Push the current HUD state into the engine.
-    func apply()
-    {
-      var settings = engine.settings
-      settings.quality = quality ?? .medium
-      settings.features = features
-      settings.color.viewTransform = viewTransform ?? .agx
-      settings.color.exposure = Float(exposure)
-      settings.color.gamma = Float(gamma)
-      settings.samples = Int(samples)
-      settings.renderSamples = Int(renderSamples)
-      settings.light.sunHeight = Float(environmentSunHeight)
-      engine.settings = settings
-    }
-
-    /// Snap the feature toggles to a quality tier's default feature set.
-    func applyPreset(_ q: RenderQuality)
-    {
-      quality = q
-      features = RenderSettings.features(for: q)
-    }
-
-    /// A binding the HUD toggles write through for one feature.
-    func binding(for feature: RenderFeatures) -> Binding<Bool>
-    {
-      Binding(
-        get: { self.features.contains(feature) },
-        set: { on in
-          if on { self.features.insert(feature) }
-          else { self.features.remove(feature) }
-          self.apply()
-        }
-      )
-    }
+    self.sunHeight = sunHeight
   }
 }

@@ -112,7 +112,8 @@ public extension Akari
       // with split sum IBL into the scene HDR color.
       LabFXEngine.shared.setLighting(
         iblEnabled: ctx.settings.features.contains(.imageBasedLighting),
-        projection: ctx.camera.projection
+        projection: ctx.camera.projection,
+        sunHeight: ctx.settings.light.sunHeight
       )
     }
   }

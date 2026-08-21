@@ -67,8 +67,22 @@ public extension Akari
 
     /// IBL is expensive, this sets a flag to bake it once.
     private var iblNeedsBake = true
+    /// The last sunHeight value to determine if IBL needs rebaking.
+    private var lastSunHeight: Float = 0
+    {
+      didSet
+      {
+        // prevent redundant state changes.
+        guard oldValue != lastSunHeight else { return }
+        
+        // when sunHeight changes the sky cubemap changes,
+        // so the prefiltered IBL maps must be regenerated.
+        setIblPasses(active: true)
+        iblNeedsBake = true
+      }
+    }
     private static let kIblPassNames = [
-      "env gen",
+      "sky cook",
       "prefilter 0",
       "prefilter 1",
       "prefilter 2",
@@ -180,14 +194,14 @@ public extension Akari
       runtime.setViewMatrix(view.m)
     }
 
-    /// Sets the deferred lighting stage state: the split sum IBL toggle and
-    /// the inverse projection the resolve shader reconstructs world space
-    /// positions with.
+    /// Sets the deferred lighting stage state: the split sum IBL toggle,
+    /// the inverse projection, and the Hosek-Wilkie sky parameters.
     ///
     /// - Parameters:
     ///   - iblEnabled: gates the split sum IBL lobes.
     ///   - projection: 16 row-major floats, view->clip.
-    public func setLighting(iblEnabled: Bool, projection: Matrix4)
+     ///  - sunHeight: height of the sun [-1, 1] for day/night.
+    public func setLighting(iblEnabled: Bool, projection: Matrix4, sunHeight: Float)
     {
       var iblOn: Float = iblEnabled ? 1 : 0
       runtime.setUniform("u_iblEnabled", UInt32(GL_FLOAT), &iblOn)
@@ -197,6 +211,10 @@ public extension Akari
       { buf in
         runtime.setUniform("u_invProj", UInt32(GL_FLOAT_MAT4), buf.baseAddress)
       }
+
+      var sunHeightV = sunHeight
+      runtime.setUniform("sunHeight", GLenum(GL_FLOAT), &sunHeightV)
+      lastSunHeight = sunHeight // handles IBL rebaking, if changed.
     }
 
     /// Sets the tonemap stage state: exposure, gamma,
@@ -282,11 +300,17 @@ public extension Akari
         return
       }
       graph = parsed
-
-      // pin the IBL generation targets to fixed 2:1 / square resolutions so
-      // the shaders texel<->direction mapping is the standard equirect that
-      // is independent of the window size.
-      runtime.setBufferSize("env", 512, 256)
+      
+      // set hosek wilkie sky compute buffer.
+      let data = HosekWilkieSkyData.flattenedFloats()
+      data.withUnsafeBufferPointer
+      { buf in
+        runtime.setComputeBuffer("hosekData",
+                                 buf.baseAddress,
+                                 buf.count * MemoryLayout<Float>.stride)
+      }
+      
+      // set other shader buffer sizes.
       for level in 0 ..< 6
       {
         runtime.setBufferSize("pref\(level)", 128, 64)
@@ -363,10 +387,13 @@ public extension Akari
             position, f16x4, scale: 1.0
             normal, f16x4, scale: 1.0 ]
 
-      buffer: env
-        has depth: no
+      buffer: envCube
         textures:
-          [ env, f16x4, scale: 0.25 ]
+          has mips: yes
+          has depth: no
+          size: [256 256]
+          cube: yes
+          [ envCube, f16x4, scale: 1.0 ]
 
       buffer: pref0
         has depth: no
@@ -424,19 +451,20 @@ public extension Akari
         clear outputs: yes
         outputs: gbuffer [diffuse, position, normal]
 
-      pass: env gen
-        draw: quad
-        depth test: never
-        write depth: no
-        use shader: env-gen
-        outputs: env [ env ]
+      pass: sky cook
+        draw: compute
+        use shader: hosek-wilkie
+        dispatch: [ 64, 64, 6 ]
+        threadgroup: [ 16, 16, 1 ]
+        inputs: [hosekData.data]
+        outputs: envCube [ envCube ]
 
       pass: prefilter 0
         draw: quad
         depth test: never
         write depth: no
         use shader: prefilter-lvl0
-        inputs: [env.env]
+        inputs: [envCube.envCube]
         outputs: pref0 [ pref0 ]
 
       pass: prefilter 1
@@ -444,7 +472,7 @@ public extension Akari
         depth test: never
         write depth: no
         use shader: prefilter-lvl1
-        inputs: [env.env]
+        inputs: [envCube.envCube]
         outputs: pref1 [ pref1 ]
 
       pass: prefilter 2
@@ -452,7 +480,7 @@ public extension Akari
         depth test: never
         write depth: no
         use shader: prefilter-lvl2
-        inputs: [env.env]
+        inputs: [envCube.envCube]
         outputs: pref2 [ pref2 ]
 
       pass: prefilter 3
@@ -460,7 +488,7 @@ public extension Akari
         depth test: never
         write depth: no
         use shader: prefilter-lvl3
-        inputs: [env.env]
+        inputs: [envCube.envCube]
         outputs: pref3 [ pref3 ]
 
       pass: prefilter 4
@@ -468,7 +496,7 @@ public extension Akari
         depth test: never
         write depth: no
         use shader: prefilter-lvl4
-        inputs: [env.env]
+        inputs: [envCube.envCube]
         outputs: pref4 [ pref4 ]
 
       pass: prefilter 5
@@ -476,7 +504,7 @@ public extension Akari
         depth test: never
         write depth: no
         use shader: prefilter-lvl5
-        inputs: [env.env]
+        inputs: [envCube.envCube]
         outputs: pref5 [ pref5 ]
 
       pass: irradiance gen
@@ -484,7 +512,7 @@ public extension Akari
         depth test: never
         write depth: no
         use shader: irradiance-gen
-        inputs: [env.env]
+        inputs: [envCube.envCube]
         outputs: irradiance [ irradiance ]
 
       pass: dfg gen
@@ -508,7 +536,7 @@ public extension Akari
         write depth: no
         use shader: deferred-shade
         inputs: [gbuffer.diffuse, gbuffer.position, gbuffer.normal,
-                 env.env, pref0.pref0, pref1.pref1,
+                 envCube.envCube, pref0.pref0, pref1.pref1,
                  pref2.pref2, pref3.pref3, pref4.pref4,
                  pref5.pref5, irradiance.irradiance, dfg.dfg]
         outputs: color [ final ]
@@ -575,273 +603,310 @@ public extension Akari
           o_normal_texture = float4(var.normalEye, 1.0);
           ```
 
-      shader: env-gen
-        uniforms: []
-        varying:  [ texCoord: vec2 ]
-
-        vsh:
-          attributes:
-          [ a_position: vec3 <- position,
-            a_uv: vec2 <- texcoord ]
-
+      shader: hosek-wilkie
+        uniforms: [ sunHeight: float ]
+        csh:
           source:
           ```glsl
+          layout(std430, binding=0) readonly buffer HosekData {
+            float values[3600];
+          } hosekData;
+
+          const float PI = 3.14159265358979323846;
+          const float SKY_SCALE = 0.02;
+
+          vec3 cubeFaceDir(vec2 uv, int face)
+          {
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(vec3( 1.0, -v, -u));
+            if (face == 1) return normalize(vec3(-1.0, -v,  u));
+            if (face == 2) return normalize(vec3( u,  1.0, -v));
+            if (face == 3) return normalize(vec3( u, -1.0,  v));
+            if (face == 4) return normalize(vec3( u, -v,  1.0));
+            return normalize(vec3(-u, -v, -1.0));
+          }
+
+          float hosekWilkieSkyRadiance(mat3 config, float cosTheta, float gamma)
+          {
+            cosTheta = max(cosTheta, 0.0);
+            float expM = exp(config[1][1] * gamma);
+            float rayM = cos(gamma) * cos(gamma);
+            float mieM = (1.0 + rayM) / pow(1.0 + config[2][2] * config[2][2]
+                         - 2.0 * config[2][2] * cos(gamma), 1.5);
+            float zenith = sqrt(cosTheta);
+            return (1.0 + config[0][0] * exp(config[0][1] / (cosTheta + 0.01)))
+                 * (config[0][2] + config[1][0] * expM
+                    + config[1][2] * rayM + config[2][0] * mieM
+                    + config[2][1] * zenith);
+          }
+
           void main()
           {
-            var.texCoord = a_uv;
-            gl_Position = vec4(a_position, 1.0);
+            ivec3 gid = ivec3(gl_GlobalInvocationID);
+            ivec2 texel = gid.xy;
+            int face = gid.z;
+            ivec2 size = imageSize(out_envCube);
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            vec3 dir = cubeFaceDir(vec2(u, v), face);
+
+            // Map sunHeight [0=horizon, 1=zenith] to a proper elevation angle.
+            // At 0 the sun sits on the horizon, at 1 it is directly overhead.
+            float sunElevAngle = clamp(sunHeight, 0.0, 1.0) * 75.0 * PI / 180.0;
+            vec3 sunDir = normalize(vec3(0.4 * cos(sunElevAngle),
+                                         sin(sunElevAngle),
+                                         -0.5 * cos(sunElevAngle)));
+
+            // --- HORIZON SMOOTHING PREPARATION ---
+            float skyCosTheta = max(dir.y, 0.001);
+            vec3 horizonDir = normalize(vec3(dir.x, 0.0, dir.z));
+            float horizonCosTheta = 0.0;
+
+            float cospsiSky = dot(dir, sunDir);
+            float gammaSky = acos(clamp(cospsiSky, -1.0, 1.0));
+
+            float cospsiHorizon = dot(horizonDir, sunDir);
+            float gammaHorizon = acos(clamp(cospsiHorizon, -1.0, 1.0));
+            // -------------------------------------
+
+            // Hosek-Wilkie cooking
+            float se = pow(clamp(sunHeight, 0.0, 1.0), 1.0 / 3.0);
+            float remE = 1.0 - se;
+            float e0 = remE*remE*remE*remE*remE;
+            float e1 = 5.0*remE*remE*remE*remE*se;
+            float e2 = 10.0*remE*remE*remE*se*se;
+            float e3 = 10.0*remE*remE*se*se*se;
+            float e4 = 5.0*remE*se*se*se*se;
+            float e5 = se*se*se*se*se;
+
+            float r = 0.0, g = 0.0, b = 0.0;
+            float r_hor = 0.0, g_hor = 0.0, b_hor = 0.0;
+
+            for (int ch = 0; ch < 3; ch++) {
+              int chOff = ch * 1080;
+              int radOff = 3240 + ch * 120;
+              vec3 c0 = vec3(0.0), c1 = vec3(0.0), c2 = vec3(0.0);
+
+              for (int i = 0; i < 3; i++) {
+                int b = chOff + 54 + i;
+                float lo = e0*hosekData.values[b] + e1*hosekData.values[b+9]
+                         + e2*hosekData.values[b+18] + e3*hosekData.values[b+27]
+                         + e4*hosekData.values[b+36] + e5*hosekData.values[b+45];
+                int b2 = chOff + 108 + i;
+                float hi = e0*hosekData.values[b2] + e1*hosekData.values[b2+9]
+                         + e2*hosekData.values[b2+18] + e3*hosekData.values[b2+27]
+                         + e4*hosekData.values[b2+36] + e5*hosekData.values[b2+45];
+                c0[i] = 0.8 * lo + 0.2 * hi;
+              }
+              for (int i = 0; i < 3; i++) {
+                int b = chOff + 54 + (i+3);
+                float lo = e0*hosekData.values[b] + e1*hosekData.values[b+9]
+                         + e2*hosekData.values[b+18] + e3*hosekData.values[b+27]
+                         + e4*hosekData.values[b+36] + e5*hosekData.values[b+45];
+                int b2 = chOff + 108 + (i+3);
+                float hi = e0*hosekData.values[b2] + e1*hosekData.values[b2+9]
+                         + e2*hosekData.values[b2+18] + e3*hosekData.values[b2+27]
+                         + e4*hosekData.values[b2+36] + e5*hosekData.values[b2+45];
+                c1[i] = 0.8 * lo + 0.2 * hi;
+              }
+              for (int i = 0; i < 3; i++) {
+                int b = chOff + 54 + (i+6);
+                float lo = e0*hosekData.values[b] + e1*hosekData.values[b+9]
+                         + e2*hosekData.values[b+18] + e3*hosekData.values[b+27]
+                         + e4*hosekData.values[b+36] + e5*hosekData.values[b+45];
+                int b2 = chOff + 108 + (i+6);
+                float hi = e0*hosekData.values[b2] + e1*hosekData.values[b2+9]
+                         + e2*hosekData.values[b2+18] + e3*hosekData.values[b2+27]
+                         + e4*hosekData.values[b2+36] + e5*hosekData.values[b2+45];
+                c2[i] = 0.8 * lo + 0.2 * hi;
+              }
+
+              mat3 cfg = mat3(c0, c1, c2);
+
+              int rb = radOff + 6;
+              float radLo = e0*hosekData.values[rb] + e1*hosekData.values[rb+1]
+                          + e2*hosekData.values[rb+2] + e3*hosekData.values[rb+3]
+                          + e4*hosekData.values[rb+4] + e5*hosekData.values[rb+5];
+              rb = radOff + 12;
+              float radHi = e0*hosekData.values[rb] + e1*hosekData.values[rb+1]
+                          + e2*hosekData.values[rb+2] + e3*hosekData.values[rb+3]
+                          + e4*hosekData.values[rb+4] + e5*hosekData.values[rb+5];
+              float rad = 0.8 * radLo + 0.2 * radHi;
+
+              float sky = hosekWilkieSkyRadiance(cfg, skyCosTheta, gammaSky) * rad;
+
+              if (ch == 0) r = sky;
+              else if (ch == 1) g = sky;
+              else b = sky;
+
+              float hor = hosekWilkieSkyRadiance(cfg, horizonCosTheta, gammaHorizon) * rad;
+              if (ch == 0) r_hor = hor;
+              else if (ch == 1) g_hor = hor;
+              else b_hor = hor;
+            }
+
+            // --- GAUSSIAN BLEND EXECUTION ---
+            vec3 skyColor = vec3(r, g, b);
+            vec3 horizonColor = vec3(r_hor, g_hor, b_hor);
+            float sigma = 0.12;
+            float gaussianFactor = exp(-(dir.y * dir.y) / (2.0 * sigma * sigma));
+            vec3 blendedColor = mix(skyColor, horizonColor, gaussianFactor * 0.5);
+            // ---------------------------------
+
+            // Night fade: smoothly darken below horizon.
+            float nightFade = smoothstep(-0.3, 0.05, sunHeight);
+
+            imageStore(out_envCube, ivec3(texel, face),
+                       vec4(max(blendedColor * SKY_SCALE * nightFade, vec3(0.0)), 1.0));
           }
           ```
 
           source msl:
           ```msl
-          var.texCoord = a_uv;
-          gl_Position = float4(a_position, 1.0);
-          ```
+          constexpr constant float PI = 3.14159265358979323846;
+          constexpr constant float SKY_SCALE = 0.02;
 
-        fsh:
-          source:
-          ```glsl
-          const float PI = 3.1415926536;
-
-          struct AkariSkyPerezParameters {
-            float horizonDarkening;
-            float horizonScattering;
-            float solarIntensity;
-            float solarWidth;
-            float backscattering;
-          };
-          
-          // Preetham 1999 analytic sky (https://dl.acm.org/doi/pdf/10.1145/311535.311545)
-          float AkariSkyPerez(AkariSkyPerezParameters params, float theta, float gamma)
+          float3 cubeFaceDir(float2 uv, int face)
           {
-            float cosTheta = cos(theta);
-            float cosGamma = cos(gamma);
-
-            float horizonGradient = 1.0 + params.horizonDarkening * exp(params.horizonScattering / max(cosTheta, 1e-5));
-            float solarScattering = 1.0 + params.solarIntensity * exp(params.solarWidth * gamma) + params.backscattering * cosGamma * cosGamma;
-            
-            return horizonGradient * solarScattering;
-          }
-          
-          vec3 AkariSkyColor(vec3 dir)
-          {
-            const vec3 sunDir = normalize(vec3(0.4, 0.8, 0.5));
-            const float T = 2.2;
-            const float T2 = T * T;
-
-            float theta = 1.57079632679 - atan(dir.y, length(dir.xz));
-            float phi = atan(dir.x, dir.z);
-
-            float suntheta = acos(clamp(sunDir.y, -1.0, 1.0));
-            float sunphi = atan(sunDir.x, sunDir.z);
-
-            float cospsi = sin(theta) * sin(suntheta) * cos(phi - sunphi) +
-                           cos(theta) * cos(suntheta);
-            float gamma = acos(clamp(cospsi, -1.0, 1.0));
-
-            float ts = suntheta;
-            float ts2 = ts * ts;
-            float ts3 = ts2 * ts;
-            float chi = (4.0 / 9.0 - T / 120.0) * (PI - 2.0 * ts);
-            
-            // 2012 Kol analytical sky simulation (https://timothykol.com/pub/sky.pdf)
-            // section (3.2) the Preetham model, functions of turbidity and solar elevation
-            // for absolute zenith values.
-            vec3 radiance;
-            radiance.x = ((4.0453 * T - 4.9710) * tan(chi) - 0.2155 * T + 2.4192) * 0.06;
-            radiance.y = (0.00166 * ts3 - 0.00375 * ts2 + 0.00209 * ts) * T2 +
-                         (-0.02903 * ts3 + 0.06377 * ts2 - 0.03202 * ts + 0.00394) * T +
-                         (0.11693 * ts3 - 0.21196 * ts2 + 0.06052 * ts + 0.25886);
-            radiance.z = (0.00275 * ts3 - 0.00610 * ts2 + 0.00317 * ts) * T2 +
-                         (-0.04214 * ts3 + 0.08970 * ts2 - 0.04153 * ts + 0.00516) * T +
-                         (0.15346 * ts3 - 0.26756 * ts2 + 0.06670 * ts + 0.26688);
-
-            // 2012 Kol analytical sky simulation (https://timothykol.com/pub/sky.pdf)
-            // section (3.2) the Preetham model, functions of turbidity resulted from
-            // the fitting process (for the chromaticity values x and y, part of the
-            // CIE xyY color space).
-
-            AkariSkyPerezParameters cfgY = { 
-              0.1787 * T - 1.4630,  // horizonDarkening
-              -0.3554 * T + 0.4275, // horizonScattering
-              -0.0227 * T + 5.3251, // solarIntensity
-              0.1206 * T - 2.5771,  // solarWidth
-              -0.0670 * T + 0.3703  // backscattering
-            };
-
-            AkariSkyPerezParameters cfgx = {
-              -0.0193 * T - 0.2592, // horizonDarkening
-              -0.0665 * T + 0.0008, // horizonScattering
-              -0.0004 * T + 0.2125, // solarIntensity
-              -0.0641 * T - 0.8989, // solarWidth
-              -0.0033 * T + 0.0452  // backscattering
-            };
-
-            AkariSkyPerezParameters cfgy = {
-              -0.0167 * T - 0.2608, // horizonDarkening
-              -0.0950 * T + 0.0092, // horizonScattering
-              -0.0079 * T + 0.2102, // solarIntensity
-              -0.0441 * T - 1.6537, // solarWidth
-              -0.0109 * T + 0.0529  // backscattering
-            };
-
-            radiance.x /= AkariSkyPerez(cfgY, 0.0, ts);
-            radiance.y /= AkariSkyPerez(cfgx, 0.0, ts);
-            radiance.z /= AkariSkyPerez(cfgy, 0.0, ts);
-
-            theta = min(theta, 1.57079632679 - 0.001);
-
-            float Y = radiance.x * AkariSkyPerez(cfgY, theta, gamma);
-            float x = radiance.y * AkariSkyPerez(cfgx, theta, gamma);
-            float y = radiance.z * AkariSkyPerez(cfgy, theta, gamma);
-
-            float X = (y != 0.0) ? (x / y) * Y : 0.0;
-            float Z = (y != 0.0 && Y != 0.0) ? ((1.0 - x - y) / y) * Y : 0.0;
-            
-            // IEC 61966-2-1:1999 / Lindbloom conversion from CIE XYZ to sRGB
-            // (http://www.brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html)
-            mat3 color = mat3(
-              vec3(3.2404542, -0.9692660, 0.0556434),
-              vec3(-1.5371385, 1.8760108, -0.2040259),
-              vec3(-0.4985314, 0.0415560, 1.0572252)
-            ) * vec3(X, Y, Z);
-                                    
-            return max(color, vec3(0.0));
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(float3( 1.0, -v, -u));
+            if (face == 1) return normalize(float3(-1.0, -v,  u));
+            if (face == 2) return normalize(float3( u,  1.0,  v));
+            if (face == 3) return normalize(float3( u, -1.0, -v));
+            if (face == 4) return normalize(float3( u, -v,  1.0));
+            return normalize(float3(-u, -v, -1.0));
           }
 
-          void main()
+          float hosekWilkieSkyRadiance(float3x3 config, float cosTheta, float gamma)
           {
-            vec2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            vec3 dir = vec3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
-            o_env_texture = vec4(AkariSkyColor(dir), 1.0);
-          }
-          ```
-
-          source msl:
-          ```msl
-          constexpr constant float PI = 3.1415926536;
-
-          struct AkariSkyPerezParameters {
-            float horizonDarkening;
-            float horizonScattering;
-            float solarIntensity;
-            float solarWidth;
-            float backscattering;
-          };
-          
-          // Preetham 1999 analytic sky (https://dl.acm.org/doi/pdf/10.1145/311535.311545)
-          float AkariSkyPerez(AkariSkyPerezParameters params, float theta, float gamma)
-          {
-            float cosTheta = cos(theta);
-            float cosGamma = cos(gamma);
-            
-            float horizonGradient = 1.0 + params.horizonDarkening * exp(params.horizonScattering / max(cosTheta, 1e-5));
-            float solarScattering = 1.0 + params.solarIntensity * exp(params.solarWidth * gamma) + params.backscattering * cosGamma * cosGamma;
-            
-            return horizonGradient * solarScattering;
-          }
-
-          float3 AkariSkyColor(float3 dir)
-          {
-            const float3 sunDir = normalize(float3(0.4, 0.8, 0.5));
-            const float T = 2.2;
-            const float T2 = T * T;
-
-            float theta = 1.57079632679 - atan2(dir.y, length(float2(dir.x, dir.z)));
-            float phi = atan2(dir.x, dir.z);
-
-            float suntheta = acos(clamp(sunDir.y, -1.0, 1.0));
-            float sunphi = atan2(sunDir.x, sunDir.z);
-
-            float cospsi = sin(theta) * sin(suntheta) * cos(phi - sunphi) +
-                           cos(theta) * cos(suntheta);
-            float gamma = acos(clamp(cospsi, -1.0, 1.0));
-
-            float ts = suntheta;
-            float ts2 = ts * ts;
-            float ts3 = ts2 * ts;
-            float chi = (4.0 / 9.0 - T / 120.0) * (PI - 2.0 * ts);
-
-            // 2012 Kol analytical sky simulation (https://timothykol.com/pub/sky.pdf)
-            // section (3.2) the Preetham model, functions of turbidity and solar elevation
-            // for absolute zenith values.
-            float3 radiance;
-            radiance.x = ((4.0453 * T - 4.9710) * tan(chi) - 0.2155 * T + 2.4192) * 0.06;
-            radiance.y = (0.00166 * ts3 - 0.00375 * ts2 + 0.00209 * ts) * T2 +
-                         (-0.02903 * ts3 + 0.06377 * ts2 - 0.03202 * ts + 0.00394) * T +
-                         (0.11693 * ts3 - 0.21196 * ts2 + 0.06052 * ts + 0.25886);
-            radiance.z = (0.00275 * ts3 - 0.00610 * ts2 + 0.00317 * ts) * T2 +
-                         (-0.04214 * ts3 + 0.08970 * ts2 - 0.04153 * ts + 0.00516) * T +
-                         (0.15346 * ts3 - 0.26756 * ts2 + 0.06670 * ts + 0.26688);
-
-            // 2012 Kol analytical sky simulation (https://timothykol.com/pub/sky.pdf)
-            // section (3.2) the Preetham model, functions of turbidity resulted from
-            // the fitting process (for the chromaticity values x and y, part of the
-            // CIE xyY color space).
-
-            AkariSkyPerezParameters cfgY = { 
-              0.1787 * T - 1.4630,  // horizonDarkening
-              -0.3554 * T + 0.4275, // horizonScattering
-              -0.0227 * T + 5.3251, // solarIntensity
-              0.1206 * T - 2.5771,  // solarWidth
-              -0.0670 * T + 0.3703  // backscattering
-            };
-
-            AkariSkyPerezParameters cfgx = {
-              -0.0193 * T - 0.2592, // horizonDarkening
-              -0.0665 * T + 0.0008, // horizonScattering
-              -0.0004 * T + 0.2125, // solarIntensity
-              -0.0641 * T - 0.8989, // solarWidth
-              -0.0033 * T + 0.0452  // backscattering
-            };
-
-            AkariSkyPerezParameters cfgy = {
-              -0.0167 * T - 0.2608, // horizonDarkening
-              -0.0950 * T + 0.0092, // horizonScattering
-              -0.0079 * T + 0.2102, // solarIntensity
-              -0.0441 * T - 1.6537, // solarWidth
-              -0.0109 * T + 0.0529  // backscattering
-            };
-
-            radiance.x /= AkariSkyPerez(cfgY, 0.0, ts);
-            radiance.y /= AkariSkyPerez(cfgx, 0.0, ts);
-            radiance.z /= AkariSkyPerez(cfgy, 0.0, ts);
-
-            theta = min(theta, 1.57079632679 - 0.001);
-
-            float Y = radiance.x * AkariSkyPerez(cfgY, theta, gamma);
-            float x = radiance.y * AkariSkyPerez(cfgx, theta, gamma);
-            float y = radiance.z * AkariSkyPerez(cfgy, theta, gamma);
-
-            float X = (y != 0.0) ? (x / y) * Y : 0.0;
-            float Z = (y != 0.0 && Y != 0.0) ? ((1.0 - x - y) / y) * Y : 0.0;
-
-            // IEC 61966-2-1:1999 / Lindbloom conversion from CIE XYZ to sRGB
-            // (http://www.brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html)
-            float3 color = float3x3(
-              float3(3.2404542, -0.9692660, 0.0556434),
-              float3(-1.5371385, 1.8760108, -0.2040259),
-              float3(-0.4985314, 0.0415560, 1.0572252)
-            ) * float3(X, Y, Z);
-                                    
-            return max(color, float3(0.0));
+            cosTheta = max(cosTheta, 0.0);
+            float expM = exp(config[1][1] * gamma);
+            float rayM = cos(gamma) * cos(gamma);
+            float mieM = (1.0 + rayM) / pow(1.0 + config[2][2] * config[2][2]
+                         - 2.0 * config[2][2] * cos(gamma), 1.5);
+            float zenith = sqrt(cosTheta);
+            return (1.0 + config[0][0] * exp(config[0][1] / (cosTheta + 0.01)))
+                 * (config[0][2] + config[1][0] * expM
+                    + config[1][2] * rayM + config[2][0] * mieM
+                    + config[2][1] * zenith);
           }
 
           //@main
           {
-            float2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            float3 dir = float3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
-            o_env_texture = float4(AkariSkyColor(dir), 1.0);
+            uint2 texel = gid.xy;
+            uint face = gid.z;
+            uint2 size = uint2(out_envCube.get_width(), out_envCube.get_height());
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            float3 dir = cubeFaceDir(float2(u, v), int(face));
+
+            float sunElevAngle = clamp(sunHeight, 0.0, 1.0) * 75.0 * PI / 180.0;
+            float3 sunDir = normalize(float3(0.4 * cos(sunElevAngle),
+                                             sin(sunElevAngle),
+                                             -0.5 * cos(sunElevAngle)));
+
+            // --- HORIZON SMOOTHING PREPARATION ---
+            float skyCosTheta = max(dir.y, 0.001);
+            float3 horizonDir = normalize(float3(dir.x, 0.0, dir.z));
+            float horizonCosTheta = 0.0;
+
+            float cospsiSky = dot(dir, sunDir);
+            float gammaSky = acos(clamp(cospsiSky, -1.0, 1.0));
+
+            float cospsiHorizon = dot(horizonDir, sunDir);
+            float gammaHorizon = acos(clamp(cospsiHorizon, -1.0, 1.0));
+            // -------------------------------------
+
+            float se = pow(clamp(sunHeight, 0.0, 1.0), 1.0 / 3.0);
+            float remE = 1.0 - se;
+            float e0 = remE*remE*remE*remE*remE;
+            float e1 = 5.0*remE*remE*remE*remE*se;
+            float e2 = 10.0*remE*remE*remE*se*se;
+            float e3 = 10.0*remE*remE*se*se*se;
+            float e4 = 5.0*remE*se*se*se*se;
+            float e5 = se*se*se*se*se;
+
+            float r = 0.0, g = 0.0, b = 0.0;
+            float r_hor = 0.0, g_hor = 0.0, b_hor = 0.0;
+
+            for (int ch = 0; ch < 3; ch++) {
+              int chOff = ch * 1080;
+              int radOff = 3240 + ch * 120;
+              float3 c0 = float3(0.0), c1 = float3(0.0), c2 = float3(0.0);
+
+              for (int i = 0; i < 3; i++) {
+                int b = chOff + 54 + i;
+                float lo = e0*data[b] + e1*data[b+9] + e2*data[b+18]
+                         + e3*data[b+27] + e4*data[b+36] + e5*data[b+45];
+                int b2 = chOff + 108 + i;
+                float hi = e0*data[b2] + e1*data[b2+9] + e2*data[b2+18]
+                         + e3*data[b2+27] + e4*data[b2+36] + e5*data[b2+45];
+                c0[i] = 0.8 * lo + 0.2 * hi;
+              }
+              for (int i = 0; i < 3; i++) {
+                int b = chOff + 54 + (i+3);
+                float lo = e0*data[b] + e1*data[b+9] + e2*data[b+18]
+                         + e3*data[b+27] + e4*data[b+36] + e5*data[b+45];
+                int b2 = chOff + 108 + (i+3);
+                float hi = e0*data[b2] + e1*data[b2+9] + e2*data[b2+18]
+                         + e3*data[b2+27] + e4*data[b2+36] + e5*data[b2+45];
+                c1[i] = 0.8 * lo + 0.2 * hi;
+              }
+              for (int i = 0; i < 3; i++) {
+                int b = chOff + 54 + (i+6);
+                float lo = e0*data[b] + e1*data[b+9] + e2*data[b+18]
+                         + e3*data[b+27] + e4*data[b+36] + e5*data[b+45];
+                int b2 = chOff + 108 + (i+6);
+                float hi = e0*data[b2] + e1*data[b2+9] + e2*data[b2+18]
+                         + e3*data[b2+27] + e4*data[b2+36] + e5*data[b2+45];
+                c2[i] = 0.8 * lo + 0.2 * hi;
+              }
+
+              float3x3 cfg = float3x3(c0, c1, c2);
+
+              int rb = radOff + 6;
+              float radLo = e0*data[rb] + e1*data[rb+1] + e2*data[rb+2]
+                          + e3*data[rb+3] + e4*data[rb+4] + e5*data[rb+5];
+              rb = radOff + 12;
+              float radHi = e0*data[rb] + e1*data[rb+1] + e2*data[rb+2]
+                          + e3*data[rb+3] + e4*data[rb+4] + e5*data[rb+5];
+              float rad = 0.8 * radLo + 0.2 * radHi;
+
+              float sky = hosekWilkieSkyRadiance(cfg, skyCosTheta, gammaSky) * rad;
+
+              if (ch == 0) r = sky;
+              else if (ch == 1) g = sky;
+              else b = sky;
+
+              float hor = hosekWilkieSkyRadiance(cfg, horizonCosTheta, gammaHorizon) * rad;
+              if (ch == 0) r_hor = hor;
+              else if (ch == 1) g_hor = hor;
+              else b_hor = hor;
+            }
+
+            // --- GAUSSIAN BLEND EXECUTION ---
+            float3 skyColor = float3(r, g, b);
+            float3 horizonColor = float3(r_hor, g_hor, b_hor);
+            float sigma = 0.12;
+            float gaussianFactor = exp(-(dir.y * dir.y) / (2.0 * sigma * sigma));
+            float3 blendedColor = mix(skyColor, horizonColor, gaussianFactor * 0.5);
+            // ---------------------------------
+
+            float nightFade = smoothstep(-0.3, 0.05, sunHeight);
+
+            out_envCube.write(half4(half3(max(blendedColor * SKY_SCALE * nightFade, float3(0.0))), 1.0h),
+                              ushort2(texel), ushort(face));
           }
           ```
 
       shader: prefilter-lvl0
-        uniforms: [ u_env_texture: sampler2d ]
+        uniforms: [ u_envCube_texture: samplerCube ]
         varying:  [ texCoord: vec2 ]
 
         vsh:
@@ -921,7 +986,7 @@ public extension Akari
               vec3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                vec3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                vec3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -985,7 +1050,7 @@ public extension Akari
               float3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                float3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                float3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -995,7 +1060,7 @@ public extension Akari
           ```
 
       shader: prefilter-lvl1
-        uniforms: [ u_env_texture: sampler2d ]
+        uniforms: [ u_envCube_texture: samplerCube ]
         varying:  [ texCoord: vec2 ]
 
         vsh:
@@ -1075,7 +1140,7 @@ public extension Akari
               vec3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                vec3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                vec3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -1140,7 +1205,7 @@ public extension Akari
               float3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                float3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                float3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -1150,7 +1215,7 @@ public extension Akari
           ```
 
       shader: prefilter-lvl2
-        uniforms: [ u_env_texture: sampler2d ]
+        uniforms: [ u_envCube_texture: samplerCube ]
         varying:  [ texCoord: vec2 ]
 
         vsh:
@@ -1230,7 +1295,7 @@ public extension Akari
               vec3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                vec3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                vec3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -1295,7 +1360,7 @@ public extension Akari
               float3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                float3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                float3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -1305,7 +1370,7 @@ public extension Akari
           ```
 
       shader: prefilter-lvl3
-        uniforms: [ u_env_texture: sampler2d ]
+        uniforms: [ u_envCube_texture: samplerCube ]
         varying:  [ texCoord: vec2 ]
 
         vsh:
@@ -1385,7 +1450,7 @@ public extension Akari
               vec3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                vec3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                vec3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -1450,7 +1515,7 @@ public extension Akari
               float3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                float3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                float3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -1460,7 +1525,7 @@ public extension Akari
           ```
 
       shader: prefilter-lvl4
-        uniforms: [ u_env_texture: sampler2d ]
+        uniforms: [ u_envCube_texture: samplerCube ]
         varying:  [ texCoord: vec2 ]
 
         vsh:
@@ -1540,7 +1605,7 @@ public extension Akari
               vec3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                vec3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                vec3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -1608,7 +1673,7 @@ public extension Akari
               float3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                float3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                float3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -1618,7 +1683,7 @@ public extension Akari
           ```
 
       shader: prefilter-lvl5
-        uniforms: [ u_env_texture: sampler2d ]
+        uniforms: [ u_envCube_texture: samplerCube ]
         varying:  [ texCoord: vec2 ]
 
         vsh:
@@ -1698,7 +1763,7 @@ public extension Akari
               vec3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                vec3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                vec3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -1763,7 +1828,7 @@ public extension Akari
               float3 L = 2.0 * dot(R, H) * H - R;
               float dotNL = clamp(dot(R, L), 0.0, 1.0);
               if (dotNL > 0.0) {
-                float3 value = texture(u_env_texture, dirToUV(L)).rgb;
+                float3 value = texture(u_envCube_texture, L).rgb;
                 color += value * dotNL;
                 totalWeight += dotNL;
               }
@@ -1773,7 +1838,7 @@ public extension Akari
           ```
 
       shader: irradiance-gen
-        uniforms: [ u_env_texture: sampler2d ]
+        uniforms: [ u_envCube_texture: samplerCube ]
         varying:  [ texCoord: vec2 ]
 
         vsh:
@@ -1833,7 +1898,7 @@ public extension Akari
               for (float t = 0.0; t < HALF_PI; t += AkariDeltaTheta) {
                 vec3 tempVec = cos(p) * right + sin(p) * up;
                 vec3 sampleVector = cos(t) * N + sin(t) * tempVec;
-                color += texture(u_env_texture, dirToUV(sampleVector)).rgb *
+                color += texture(u_envCube_texture, sampleVector).rgb *
                          cos(t) * sin(t);
                 sampleCount++;
               }
@@ -1878,7 +1943,7 @@ public extension Akari
               for (float t = 0.0; t < HALF_PI; t += AkariDeltaTheta) {
                 float3 tempVec = cos(p) * right + sin(p) * up;
                 float3 sampleVector = cos(t) * N + sin(t) * tempVec;
-                color += texture(u_env_texture, dirToUV(sampleVector)).rgb *
+                color += texture(u_envCube_texture, sampleVector).rgb *
                          cos(t) * sin(t);
                 sampleCount++;
               }
@@ -2064,7 +2129,7 @@ public extension Akari
         uniforms: [ u_normal_texture: sampler2d,
                     u_position_texture: sampler2d,
                     u_diffuse_texture: sampler2d,
-                    u_env_texture: sampler2d,
+                    u_envCube_texture: samplerCube,
                     u_pref0_texture: sampler2d,
                     u_pref1_texture: sampler2d,
                     u_pref2_texture: sampler2d,
@@ -2075,7 +2140,8 @@ public extension Akari
                     u_dfg_texture: sampler2d,
                     u_view: mat4 <- auto-view-matrix,
                     u_iblEnabled: float,
-                    u_invProj: mat4 ]
+                    u_invProj: mat4,
+                    sunHeight: float ]
         varying:  [ texCoord: vec2 ]
 
         vsh:
@@ -2102,7 +2168,7 @@ public extension Akari
           source:
           ```glsl
           const float PI = 3.14159265358979;
-          const float LIGHT_INTENSITY = 3.0;
+          const float LIGHT_INTENSITY = 2.0;
 
           vec2 dirToUV(vec3 dir)
           {
@@ -2145,7 +2211,7 @@ public extension Akari
               if (u_iblEnabled > 0.5) {
                 vec4 e = u_invProj * vec4(var.texCoord * 2.0 - 1.0, 1.0, 1.0);
                 vec3 worldDir = normalize(invView * (e.xyz / e.w));
-                vec3 sky = texture(u_env_texture, dirToUV(worldDir)).rgb;
+                vec3 sky = texture(u_envCube_texture, worldDir).rgb;
                 o_final_texture = vec4(sky, 1.0);
               } else {
                 o_final_texture = vec4(diffuse, 1.0);
@@ -2165,18 +2231,31 @@ public extension Akari
             vec3 diffuseColor = baseColor * (1.0 - 0.0);
 
             vec3 color = vec3(0.0);
-            vec3 L = normalize(vec3(0.4, 0.8, 0.5));
-            float NoL = max(dot(N, L), 0.0);
-            if (NoL > 0.0) {
+            float sunElevAngle = clamp(sunHeight, 0.0, 1.0) * 75.0 * PI / 180.0;
+            vec3 L = normalize(vec3(0.4 * cos(sunElevAngle),
+                                    sin(sunElevAngle),
+                                    -0.5 * cos(sunElevAngle)));
+            float NoL_raw = dot(N, L);
+            if (NoL_raw > -0.4) {
+              // --- SMOOTH LIGHTING FALLOFF ---
+              float terminatorSmooth = smoothstep(-0.4, 0.2, NoL_raw);
+              float NoL = max(NoL_raw, 1e-4);
+              // -------------------------------
+      
               vec3 H = normalize(V + L);
               float NoH = max(dot(N, H), 0.0);
               float LoH = max(dot(L, H), 0.0);
               float D = D_GGX(roughness, NoH);
               float Vis = V_SmithGGXCorrelatedFast(roughness, NoV, NoL);
               vec3 F = F_Schlick(f0, LoH);
+      
+              vec3 kS = F;
+              vec3 kD = vec3(1.0) - kS; 
               vec3 Fr = D * Vis * F;
-              vec3 Fd = diffuseColor / PI;
-              color += (Fd + Fr) * NoL * vec3(1.0, 0.97, 0.92) * LIGHT_INTENSITY;
+              vec3 Fd = (kD * diffuseColor) / PI;
+      
+              float nightFade = smoothstep(-0.3, 0.05, sunHeight);
+              color += (Fd + Fr) * NoL * terminatorSmooth * vec3(1.0, 0.97, 0.92) * LIGHT_INTENSITY * nightFade;
             }
 
             vec3 dfg = texture(u_dfg_texture, vec2(NoV, perceptualRoughness)).rgb;
@@ -2219,7 +2298,7 @@ public extension Akari
           source msl:
           ```msl
           constexpr constant float PI = 3.14159265358979;
-          constexpr constant float LIGHT_INTENSITY = 3.0;
+          constexpr constant float LIGHT_INTENSITY = 2.0;
 
           float2 dirToUV(float3 dir)
           {
@@ -2266,7 +2345,7 @@ public extension Akari
               if (u_iblEnabled > 0.5) {
                 float4 e = u_invProj * float4(var.texCoord * 2.0 - 1.0, 1.0, 1.0);
                 float3 worldDir = normalize(invView * (e.xyz / e.w));
-                float3 sky = texture(u_env_texture, dirToUV(worldDir)).rgb;
+                float3 sky = texture(u_envCube_texture, worldDir).rgb;
                 o_final_texture = float4(sky, 1.0);
               } else {
                 o_final_texture = float4(diffuse, 1.0);
@@ -2284,18 +2363,31 @@ public extension Akari
 
               float3 color = float3(0.0);
 
-              float3 L = normalize(float3(0.4, 0.8, 0.5));
-              float NoL = max(dot(N, L), 0.0);
-              if (NoL > 0.0) {
+              float sunElevAngle = clamp(sunHeight, 0.0, 1.0) * 75.0 * PI / 180.0;
+              float3 L = normalize(float3(0.4 * cos(sunElevAngle),
+                                          sin(sunElevAngle),
+                                          -0.5 * cos(sunElevAngle)));
+              float NoL_raw = dot(N, L);
+              if (NoL_raw > -0.4) {
+                // --- SMOOTH LIGHTING FALLOFF ---
+                float terminatorSmooth = smoothstep(-0.4, 0.2, NoL_raw);
+                float NoL = max(NoL_raw, 1e-4);
+                // -------------------------------
+      
                 float3 H = normalize(V + L);
                 float NoH = max(dot(N, H), 0.0);
                 float LoH = max(dot(L, H), 0.0);
                 float D = D_GGX(roughness, NoH);
                 float Vis = V_SmithGGXCorrelatedFast(roughness, NoV, NoL);
                 float3 F = F_Schlick(f0, LoH);
+      
+                float3 kS = F;
+                float3 kD = float3(1.0) - kS; 
                 float3 Fr = D * Vis * F;
-                float3 Fd = diffuseColor / PI;
-                color += (Fd + Fr) * NoL * float3(1.0, 0.97, 0.92) * LIGHT_INTENSITY;
+                float3 Fd = (kD * diffuseColor) / PI;
+
+                float nightFade = smoothstep(-0.3, 0.05, sunHeight);
+                color += (Fd + Fr) * NoL * terminatorSmooth * float3(1.0, 0.97, 0.92) * LIGHT_INTENSITY * nightFade;
               }
 
               float3 dfg = texture(u_dfg_texture, float2(NoV, perceptualRoughness)).rgb;
