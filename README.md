@@ -13,7 +13,7 @@
 
 <p><b>灯り • "Light"</b></p>
 
-###### <samp>♫ [<b>Starborn</b>](https://open.spotify.com/track/5bXC8lSYDw2uNoH8PHjBRs?si=cfee0d2767fe4eea).</samp>
+###### <samp>♫ [<b>∆</b>](https://youtu.be/1XwU8H6e8Ts?si=-eokO_nbdRnAtCp9).</samp>
 
 </div>
 
