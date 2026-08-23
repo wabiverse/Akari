@@ -2168,12 +2168,13 @@ public extension Akari
           source:
           ```glsl
           const float PI = 3.14159265358979;
-          const float LIGHT_INTENSITY = 2.0;
+          const float LIGHT_INTENSITY = 3.0;
+          const float MOON_INTENSITY = 0.12;
 
           vec2 dirToUV(vec3 dir)
           {
             float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
+            float u = (horiz2 > 1e-6)
                 ? atan(dir.x, dir.z) * (0.5 / PI) + 0.5
                 : 0.5;
             float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
@@ -2230,32 +2231,37 @@ public extension Akari
             vec3 f0 = mix(vec3(0.04), baseColor, 0.0);
             vec3 diffuseColor = baseColor * (1.0 - 0.0);
 
+            float celestialAngle = clamp(abs(sunHeight) + 0.01, 0.0, 1.0) * 75.0 * PI / 180.0;
+            vec3 sunL = normalize(vec3(0.4 * cos(celestialAngle),
+                                        sin(celestialAngle),
+                                        -0.5 * cos(celestialAngle)));
+            vec3 moonL = vec3(-sunL.x, sunL.y, -sunL.z);
+
+            float nightFade = smoothstep(-0.3, 0.05, sunHeight);
+            vec3 L = normalize(mix(moonL, sunL, nightFade));
+
             vec3 color = vec3(0.0);
-            float sunElevAngle = clamp(sunHeight, 0.0, 1.0) * 75.0 * PI / 180.0;
-            vec3 L = normalize(vec3(0.4 * cos(sunElevAngle),
-                                    sin(sunElevAngle),
-                                    -0.5 * cos(sunElevAngle)));
-            float NoL_raw = dot(N, L);
-            if (NoL_raw > -0.4) {
-              // --- SMOOTH LIGHTING FALLOFF ---
-              float terminatorSmooth = smoothstep(-0.4, 0.2, NoL_raw);
-              float NoL = max(NoL_raw, 1e-4);
-              // -------------------------------
-      
+            float NoL = max(dot(N, L), 1e-4);
+            if (NoL > 0.0) {
               vec3 H = normalize(V + L);
               float NoH = max(dot(N, H), 0.0);
               float LoH = max(dot(L, H), 0.0);
               float D = D_GGX(roughness, NoH);
+
               float Vis = V_SmithGGXCorrelatedFast(roughness, NoV, NoL);
               vec3 F = F_Schlick(f0, LoH);
-      
-              vec3 kS = F;
-              vec3 kD = vec3(1.0) - kS; 
-              vec3 Fr = D * Vis * F;
-              vec3 Fd = (kD * diffuseColor) / PI;
-      
-              float nightFade = smoothstep(-0.3, 0.05, sunHeight);
-              color += (Fd + Fr) * NoL * terminatorSmooth * vec3(1.0, 0.97, 0.92) * LIGHT_INTENSITY * nightFade;
+
+              vec3 kD = vec3(1.0) - F;
+              vec3 Fr = D * Vis * F * NoL;
+              vec3 Fd = (kD * diffuseColor / PI) * NoL;
+
+              float terminatorSmooth = pow(smoothstep(-0.40, 0.40, NoL), 3.0);
+
+              vec3 dayColor = mix(texture(u_envCube_texture, L).rgb, vec3(1.0), clamp(sunHeight, 0.0, 1.0));
+              vec3 nightColor = mix(texture(u_envCube_texture, L).rgb, vec3(0.95, 0.95, 1.00), clamp(-sunHeight, 0.0, 1.0));
+              vec3 dynamicSky = mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade);
+
+              color += (Fd + Fr) * terminatorSmooth * dynamicSky;
             }
 
             vec3 dfg = texture(u_dfg_texture, vec2(NoV, perceptualRoughness)).rgb;
@@ -2265,24 +2271,23 @@ public extension Akari
 
             vec3 r = reflect(-V, N);
             r = mix(r, N, roughness * roughness);
+
             float lod = 5.0 * perceptualRoughness * (2.0 - perceptualRoughness);
             lod = clamp(lod, 0.0, 5.0);
             float l0 = floor(lod);
+            float l1 = min(l0 + 1.0, 5.0);
             float fracLod = lod - l0;
+
             vec2 ruv = dirToUV(r);
-            vec3 pr0;
-            if (l0 < 0.5) pr0 = texture(u_pref0_texture, ruv).rgb;
-            else if (l0 < 1.5) pr0 = texture(u_pref1_texture, ruv).rgb;
-            else if (l0 < 2.5) pr0 = texture(u_pref2_texture, ruv).rgb;
-            else if (l0 < 3.5) pr0 = texture(u_pref3_texture, ruv).rgb;
-            else if (l0 < 4.5) pr0 = texture(u_pref4_texture, ruv).rgb;
-            else pr0 = texture(u_pref5_texture, ruv).rgb;
-            vec3 pr1;
-            if (l0 < 0.5) pr1 = texture(u_pref1_texture, ruv).rgb;
-            else if (l0 < 1.5) pr1 = texture(u_pref2_texture, ruv).rgb;
-            else if (l0 < 2.5) pr1 = texture(u_pref3_texture, ruv).rgb;
-            else if (l0 < 3.5) pr1 = texture(u_pref4_texture, ruv).rgb;
-            else pr1 = texture(u_pref5_texture, ruv).rgb;
+
+            sampler2D prefTextures[6] = sampler2D[6](
+              u_pref0_texture, u_pref1_texture, u_pref2_texture,
+              u_pref3_texture, u_pref4_texture, u_pref5_texture
+            );
+
+            vec3 pr0 = texture(prefTextures[int(l0)], ruv).rgb;
+            vec3 pr1 = texture(prefTextures[int(l1)], ruv).rgb;
+
             vec3 prefilteredRadiance = mix(pr0, pr1, fracLod);
             vec3 Fr = E * prefilteredRadiance * energyCompensation;
 
@@ -2298,12 +2303,13 @@ public extension Akari
           source msl:
           ```msl
           constexpr constant float PI = 3.14159265358979;
-          constexpr constant float LIGHT_INTENSITY = 2.0;
+          constexpr constant float LIGHT_INTENSITY = 3.0;
+          constexpr constant float MOON_INTENSITY = 0.12;
 
           float2 dirToUV(float3 dir)
           {
             float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
+            float u = (horiz2 > 1e-6)
                 ? atan2(dir.x, dir.z) * (0.5 / PI) + 0.5
                 : 0.5;
             float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
@@ -2361,33 +2367,37 @@ public extension Akari
               float3 f0 = mix(float3(0.04), baseColor, 0.0);
               float3 diffuseColor = baseColor * (1.0 - 0.0);
 
-              float3 color = float3(0.0);
+              float celestialAngle = saturate(abs(sunHeight) + 0.01) * 75.0 * PI / 180.0;
+              float3 sunL = normalize(float3(0.4 * cos(celestialAngle),
+                                             sin(celestialAngle),
+                                             -0.5 * cos(celestialAngle)));
+              float3 moonL = float3(-sunL.x, sunL.y, -sunL.z);
 
-              float sunElevAngle = clamp(sunHeight, 0.0, 1.0) * 75.0 * PI / 180.0;
-              float3 L = normalize(float3(0.4 * cos(sunElevAngle),
-                                          sin(sunElevAngle),
-                                          -0.5 * cos(sunElevAngle)));
-              float NoL_raw = dot(N, L);
-              if (NoL_raw > -0.4) {
-                // --- SMOOTH LIGHTING FALLOFF ---
-                float terminatorSmooth = smoothstep(-0.4, 0.2, NoL_raw);
-                float NoL = max(NoL_raw, 1e-4);
-                // -------------------------------
-      
+              float nightFade = smoothstep(-0.3, 0.05, sunHeight);
+              float3 L = normalize(mix(moonL, sunL, nightFade));
+
+              float3 color = float3(0.0);
+              float NoL = max(dot(N, L), 1e-4);
+              if (NoL > 0.0) {
                 float3 H = normalize(V + L);
                 float NoH = max(dot(N, H), 0.0);
                 float LoH = max(dot(L, H), 0.0);
                 float D = D_GGX(roughness, NoH);
+
                 float Vis = V_SmithGGXCorrelatedFast(roughness, NoV, NoL);
                 float3 F = F_Schlick(f0, LoH);
-      
-                float3 kS = F;
-                float3 kD = float3(1.0) - kS; 
-                float3 Fr = D * Vis * F;
-                float3 Fd = (kD * diffuseColor) / PI;
 
-                float nightFade = smoothstep(-0.3, 0.05, sunHeight);
-                color += (Fd + Fr) * NoL * terminatorSmooth * float3(1.0, 0.97, 0.92) * LIGHT_INTENSITY * nightFade;
+                float3 kD = float3(1.0) - F;
+                float3 Fr = D * Vis * F * NoL;
+                float3 Fd = (kD * diffuseColor / PI) * NoL;
+
+                float terminatorSmooth = pow(smoothstep(-0.40, 0.40, NoL), 3.0);
+
+                float3 dayColor = mix(texture(u_envCube_texture, L).rgb, float3(1.0), saturate(sunHeight));
+                float3 nightColor = mix(texture(u_envCube_texture, L).rgb, float3(0.95, 0.95, 1.00), saturate(-sunHeight));
+                float3 dynamicSky = mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade);
+      
+                color += (Fd + Fr) * terminatorSmooth * dynamicSky;
               }
 
               float3 dfg = texture(u_dfg_texture, float2(NoV, perceptualRoughness)).rgb;
@@ -2397,24 +2407,23 @@ public extension Akari
 
               float3 r = reflect(-V, N);
               r = mix(r, N, roughness * roughness);
+
               float lod = 5.0 * perceptualRoughness * (2.0 - perceptualRoughness);
               lod = clamp(lod, 0.0, 5.0);
               float l0 = floor(lod);
+              float l1 = min(l0 + 1.0, 5.0);
               float fracLod = lod - l0;
+
               float2 ruv = dirToUV(r);
-              float3 pr0;
-              if (l0 < 0.5) pr0 = texture(u_pref0_texture, ruv).rgb;
-              else if (l0 < 1.5) pr0 = texture(u_pref1_texture, ruv).rgb;
-              else if (l0 < 2.5) pr0 = texture(u_pref2_texture, ruv).rgb;
-              else if (l0 < 3.5) pr0 = texture(u_pref3_texture, ruv).rgb;
-              else if (l0 < 4.5) pr0 = texture(u_pref4_texture, ruv).rgb;
-              else pr0 = texture(u_pref5_texture, ruv).rgb;
-              float3 pr1;
-              if (l0 < 0.5) pr1 = texture(u_pref1_texture, ruv).rgb;
-              else if (l0 < 1.5) pr1 = texture(u_pref2_texture, ruv).rgb;
-              else if (l0 < 2.5) pr1 = texture(u_pref3_texture, ruv).rgb;
-              else if (l0 < 3.5) pr1 = texture(u_pref4_texture, ruv).rgb;
-              else pr1 = texture(u_pref5_texture, ruv).rgb;
+      
+              array<texture2d<float>, 6> prefTextures = {
+                u_pref0_texture, u_pref1_texture, u_pref2_texture, 
+                u_pref3_texture, u_pref4_texture, u_pref5_texture
+              };
+      
+              float3 pr0 = prefTextures[int(l0)].sample(u_pref0_texture_smp, ruv).rgb;
+              float3 pr1 = prefTextures[int(l1)].sample(u_pref0_texture_smp, ruv).rgb;
+
               float3 prefilteredRadiance = mix(pr0, pr1, fracLod);
               float3 Fr = E * prefilteredRadiance * energyCompensation;
 
