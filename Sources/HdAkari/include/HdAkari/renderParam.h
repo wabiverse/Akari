@@ -41,6 +41,8 @@
 #define HDAKARI_RENDER_PARAM_H
 
 #include <pxr/pxrns.h>
+#include <Arch/swiftInterop.h>
+#include <Tf/sharedPtrRetainReleaseHelper.h>
 #include <Hd/renderDelegate.h>
 #include <Hgi/hgiImpl.h>
 
@@ -56,10 +58,11 @@ class HdAkariScene;
 /// Hgi Hydra handed us via drivers, and the scene registry the
 /// mesh Rprims publish into.
 ///
-class HdAkariRenderParam final : public HdRenderParam
+class SWIFT_SHARED_REFERENCE(HdAkariRenderParamRetain, HdAkariRenderParamRelease)
+HdAkariRenderParam final : public HdRenderParam
 {
 public:
-  HdAkariRenderParam(void *renderEngine, Hgi *hgi, HdAkariScene *scene)
+  HdAkariRenderParam(void *renderEngine, Hgi *hgi, std::shared_ptr<HdAkariScene> scene)
     : _renderEngine(renderEngine),
       _hgi(hgi),
       _scene(scene)
@@ -68,18 +71,40 @@ public:
   /// The Swift `Akari.RenderEngine` (an `Unmanaged` opaque pointer).
   void *GetRenderEngine() const { return _renderEngine; }
 
-  /// The Hgi shared with Hydra (same device, so AOV textures are shared).
-  Hgi *GetHgi() const { return _hgi; }
-
   /// The delegate's mesh registry (owned by the delegate, not this param).
-  HdAkariScene *GetScene() const { return _scene; }
+  HdAkariScene SWIFT_RETURNS_UNRETAINED *GetScene() const { return _scene.get(); }
+  
+  /// The Hgi shared with Hydra (same device, so AOV textures are shared).
+  Hgi *GetHgi() const
+  {
+    std::lock_guard<std::mutex> lock(_hgiMutex);
+    return _hgi;
+  }
+  
+  void SetHgi(Hgi *hgi)
+  {
+    std::lock_guard<std::mutex> lock(_hgiMutex);
+    _hgi = hgi;
+  }
 
 private:
   void *_renderEngine;
   Hgi *_hgi;
-  HdAkariScene *_scene;
+  std::shared_ptr<HdAkariScene> _scene;
+
+  mutable std::mutex _hgiMutex;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE
+
+inline void HdAkariRenderParamRetain(PXR_INTERNAL_NS::HdAkariRenderParam *param)
+{
+  PXR_INTERNAL_NS::Tf_SharedPtrRetainReleaseHelper<PXR_INTERNAL_NS::HdAkariRenderParam>::Retain(param);
+}
+
+inline void HdAkariRenderParamRelease(PXR_INTERNAL_NS::HdAkariRenderParam *param)
+{
+  PXR_INTERNAL_NS::Tf_SharedPtrRetainReleaseHelper<PXR_INTERNAL_NS::HdAkariRenderParam>::Release(param);
+}
 
 #endif // HDAKARI_RENDER_PARAM_H

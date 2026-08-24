@@ -180,18 +180,65 @@ public extension Akari
     ///   - renderParam: opaque `HdAkariRenderParam`.
     ///   - view: 16 row-major floats, world->view.
     ///   - projection: 16 row-major floats, view->clip.
-    public func recordGeometry(renderParam: UnsafeMutableRawPointer?,
+    public func recordGeometry(renderParam: Pixar.HdAkariRenderParam,
                                view: Matrix4,
                                projection: Matrix4)
     {
-      // rerecord the synced meshes into the capture buffer.
-      if let renderParam, let captureBuffer
-      {
-        AkariSceneRecordCapture(renderParam, UnsafeMutableRawPointer(captureBuffer), view.m, projection.m)
-      }
-
       // set the per frame view matrix.
-      runtime.setViewMatrix(view.m)
+      defer { runtime.setViewMatrix(view.m) }
+      
+      guard
+        let captureBuffer,
+        let scene = renderParam.GetScene()
+      else { return }
+   
+      let meshes = scene.Snapshot()
+   
+      labgl_captureClear(captureBuffer)
+      labgl_captureStart(captureBuffer)
+   
+      LABGLDISPATCH_glEnable(GLenum(GL_DEPTH_TEST))
+      LABGLDISPATCH_glDepthFunc(GLenum(GL_LESS))
+   
+      LABGLDISPATCH_glMatrixMode(GLenum(GL_PROJECTION))
+      LABGLDISPATCH_glLoadMatrixf(projection.m)
+   
+      let viewM = Pixar.ToMatrix4d(view.m)
+   
+      var verts: AkariGeoVertexVec = []
+      var indices: AkariGeoIndexVec = []
+      for mesh in meshes
+      {
+        if mesh.points.empty() || mesh.triangleIndices.empty()
+        {
+          continue
+        }
+ 
+        verts.clear()
+        indices.clear()
+        Pixar.BuildMeshGeometry(mesh.points, mesh.triangleIndices, &verts, &indices)
+ 
+        if verts.isEmpty || indices.isEmpty
+        {
+          continue
+        }
+ 
+        LABGLDISPATCH_glMatrixMode(GLenum(GL_MODELVIEW))
+        let mv = Pixar.GfMatrix4f(mesh.transform * viewM)
+        LABGLDISPATCH_glLoadMatrixf(mv.GetArray())
+ 
+        LABGLDISPATCH_glColor3f(mesh.displayColor[0], mesh.displayColor[1], mesh.displayColor[2])
+        gl.begin(mode: GLenum(GL_TRIANGLES))
+        for idx in indices
+        {
+          let base = Int(idx) * 6
+          LABGLDISPATCH_glNormal3f(verts[base + 3], verts[base + 4], verts[base + 5])
+          LABGLDISPATCH_glVertex3f(verts[base], verts[base + 1], verts[base + 2])
+        }
+        LABGLDISPATCH_glEnd()
+      }
+   
+      labgl_captureStop()
     }
 
     /// Sets the deferred lighting stage state: the split sum IBL toggle,

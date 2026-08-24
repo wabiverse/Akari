@@ -117,7 +117,7 @@ HdAkariCube::Sync(HdSceneDelegate *sceneDelegate,
 {
   const SdfPath &id = GetId();
   auto *param = static_cast<HdAkariRenderParam *>(renderParam);
-  HdAkariScene *scene = param ? param->GetScene() : nullptr;
+  auto scene = param ? param->GetScene() : nullptr;
   if (!scene) {
     *dirtyBits = HdChangeTracker::Clean;
     return;
@@ -172,7 +172,7 @@ void
 HdAkariCube::Finalize(HdRenderParam *renderParam)
 {
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
-    if (HdAkariScene *scene = param->GetScene()) {
+    if (auto scene = param->GetScene()) {
       scene->RemoveMesh(GetId());
     }
   }

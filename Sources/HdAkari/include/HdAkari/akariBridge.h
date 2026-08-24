@@ -40,9 +40,11 @@
 #ifndef HDAKARI_AKARI_BRIDGE_H
 #define HDAKARI_AKARI_BRIDGE_H
 
-/* this is the only header Swift imports. */
+/* (todo): move the C++ implementation for these into native Swift. */
 
 #include <stdint.h>
+
+#include <HdAkari/scene.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -104,23 +106,6 @@ void AkariHdEnsureLinked(void);
 
 /** Number of meshes the delegate has synced (-1 if renderParam is null). */
 long AkariSceneMeshCount(void *renderParam);
-
-/**
- * Records the synced mesh scene into a LabGL capture buffer for the
- * LabFX runtime's opaque geometry pass.
- *
- * Clears the buffer, then captures the projection + per-mesh modelview
- * (view * transform) and the indexed triangle stream as immediate mode
- * LabGL calls. Replayed each frame by the runtime through the injected
- * `mesh` shader. All pointers opaque.
- *
- * @param renderParam    `HdAkariRenderParam` (owns the mesh registry).
- * @param captureBuffer  Opaque `LabGLCaptureBuffer` from `labgl_captureCreate`.
- * @param view           16 floats, world->view (row-major).
- * @param proj           16 floats, view->clip (row-major).
- */
-void AkariSceneRecordCapture(void *renderParam, void *captureBuffer,
-                             const float *view, const float *proj);
 
 /** Total triangles across all synced meshes (-1 if renderParam is null). */
 long AkariSceneTriangleCount(void *renderParam);

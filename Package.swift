@@ -23,7 +23,7 @@ let package = Package(
     .target(
       name: "AkariCore",
       dependencies: [
-        .product(name: "LabGL", package: "SwiftLabGL")
+        .product(name: "LabGL", package: "SwiftLabGL"),
       ],
       swiftSettings: [
         .interoperabilityMode(.Cxx)

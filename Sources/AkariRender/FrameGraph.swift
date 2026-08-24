@@ -39,6 +39,7 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
+import HdAkari
 
 public extension Akari
 {
@@ -107,7 +108,7 @@ public extension Akari
     /// True when rendering for output (still) rather than interaction.
     public let isFinalRender: Bool
     /// Opaque `HdAkariRenderParam`.
-    public let renderParam: UnsafeMutableRawPointer?
+    public let renderParam: Pixar.HdAkariRenderParam
   }
 
   /// Mutable per frame state.

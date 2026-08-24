@@ -1,4 +1,7 @@
 module HdAkari {
   header "HdAkari/akariBridge.h"
+  header "HdAkari/scene.h"
+  header "HdAkari/renderParam.h"
+  header "HdAkari/geometry.h"
   export *
 }

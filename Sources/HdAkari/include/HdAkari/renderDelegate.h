@@ -117,8 +117,12 @@ private:
   Hgi *_hgi = nullptr;                       // shared with Hydra, not owned
   void *_renderEngine = nullptr;             // retained Swift Akari.RenderEngine
   void *_swiftDelegate = nullptr;            // retained Swift Akari.RenderDelegate
-  std::unique_ptr<HdAkariScene> _scene;      // mesh registry the Rprims fill
-  std::unique_ptr<HdAkariRenderParam> _renderParam;
+  
+  // ---- shared with swift. ----
+  std::shared_ptr<HdAkariScene> _scene;      // mesh registry the Rprims fill
+  std::shared_ptr<HdAkariRenderParam> _renderParam;
+  // ----------------------------
+
   HdResourceRegistrySharedPtr _resourceRegistry;
 
   /// Cached vectors of supported prim types,

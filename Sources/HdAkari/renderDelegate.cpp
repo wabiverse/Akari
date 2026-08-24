@@ -59,6 +59,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -111,8 +112,12 @@ HdAkariRenderDelegate::_Initialize()
   _renderEngine = AkariHydraGetRenderEngine();
   _swiftDelegate = AkariHydraGetRenderDelegate();
   _resourceRegistry = std::make_shared<HdResourceRegistry>();
-  _scene = std::make_unique<HdAkariScene>();
-  _renderParam = std::make_unique<HdAkariRenderParam>(_renderEngine, _hgi, _scene.get());
+  _scene = std::make_shared<HdAkariScene>();
+  _renderParam = std::make_shared<HdAkariRenderParam>(_renderEngine, _hgi, _scene);
+  
+  // references shared with swift.
+  Tf_SharedPtrRetainReleaseHelper<HdAkariScene>::Register(_scene);
+  Tf_SharedPtrRetainReleaseHelper<HdAkariRenderParam>::Register(_renderParam);
 }
 
 HdAkariRenderDelegate::~HdAkariRenderDelegate()
@@ -133,7 +138,9 @@ HdAkariRenderDelegate::SetDrivers(HdDriverVector const &drivers)
     }
   }
   // rebuild the shared param now that Hgi is known.
-  _renderParam = std::make_unique<HdAkariRenderParam>(_renderEngine, _hgi, _scene.get());
+  if (_renderParam) {
+    _renderParam->SetHgi(_hgi);
+  }
 }
 
 const TfTokenVector &

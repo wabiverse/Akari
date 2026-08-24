@@ -93,7 +93,7 @@ public extension Akari
     ///   - height: target height dimension in pixels.
     ///   - isFinalRender: if rendering for output (still).
     public func renderFrame(hgi: UnsafeMutableRawPointer?,
-                            renderParam: UnsafeMutableRawPointer?,
+                            renderParam: Pixar.HdAkariRenderParam,
                             color: UnsafeMutableRawPointer?,
                             depth: UnsafeMutableRawPointer?,
                             view: [Float],
@@ -152,12 +152,12 @@ public extension Akari
     }
 
     /// Debug output that geometry sync is feeding the engine.
-    private func logSceneStats(_ renderParam: UnsafeMutableRawPointer?)
+    private func logSceneStats(_ renderParam: Pixar.HdAkariRenderParam)
     {
-      let meshes = Int(AkariSceneMeshCount(renderParam))
+      let meshes = renderParam.GetScene()?.MeshCount() ?? 0
       guard meshes != lastLoggedMeshCount else { return }
       lastLoggedMeshCount = meshes
-      let tris = Int(AkariSceneTriangleCount(renderParam))
+      let tris = renderParam.GetScene()?.TriangleCount() ?? 0
       print("[akari] scene: \(meshes) mesh(es), \(tris) triangle(s)")
     }
 

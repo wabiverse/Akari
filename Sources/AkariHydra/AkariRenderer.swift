@@ -71,7 +71,7 @@ public func unregisterAkariRenderer()
 @_cdecl("AkariEngineRenderFrame")
 public func AkariEngineRenderFrame(_ engine: UnsafeMutableRawPointer?,
                                    _ hgi: UnsafeMutableRawPointer?,
-                                   _ renderParam: UnsafeMutableRawPointer?,
+                                   _ renderParam: Pixar.HdAkariRenderParam,
                                    _ colorBuffer: UnsafeMutableRawPointer?,
                                    _ depthBuffer: UnsafeMutableRawPointer?,
                                    _ viewMatrix: UnsafePointer<Double>?,

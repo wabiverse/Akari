@@ -50,6 +50,9 @@
 
 /* Geometry helpers. */
 
+typedef std::vector<float> AkariGeoVertexVec;
+typedef std::vector<int> AkariGeoIndexVec;
+
 PXR_NAMESPACE_OPEN_SCOPE
 
 /// Builds the indexed triangle stream with auto smooth normals by

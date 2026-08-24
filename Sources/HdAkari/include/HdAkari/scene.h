@@ -48,6 +48,9 @@
 #include <Vt/array.h>
 #include <Vt/types.h>
 
+#include <Arch/swiftInterop.h>
+#include <Tf/sharedPtrRetainReleaseHelper.h>
+
 #include <mutex>
 #include <unordered_map>
 
@@ -84,7 +87,8 @@ struct HdAkariMeshData
 /// the render pass reads a snapshot to draw. One per render
 /// delegate from the render param.
 ///
-class HdAkariScene
+class SWIFT_SHARED_REFERENCE(HdAkariSceneRetain, HdAkariSceneRelease)
+HdAkariScene
 {
 public:
   void UpdateMesh(HdAkariMeshData data)
@@ -137,5 +141,15 @@ private:
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE
+
+inline void HdAkariSceneRetain(PXR_INTERNAL_NS::HdAkariScene *scene)
+{
+  PXR_INTERNAL_NS::Tf_SharedPtrRetainReleaseHelper<PXR_INTERNAL_NS::HdAkariScene>::Retain(scene);
+}
+
+inline void HdAkariSceneRelease(PXR_INTERNAL_NS::HdAkariScene *scene)
+{
+  PXR_INTERNAL_NS::Tf_SharedPtrRetainReleaseHelper<PXR_INTERNAL_NS::HdAkariScene>::Release(scene);
+}
 
 #endif // HDAKARI_SCENE_H
