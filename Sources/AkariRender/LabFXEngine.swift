@@ -203,10 +203,10 @@ public extension Akari
       LABGLDISPATCH_glMatrixMode(GLenum(GL_PROJECTION))
       LABGLDISPATCH_glLoadMatrixf(projection.m)
    
-      let viewM = Pixar.ToMatrix4d(view.m)
+      let viewM = view.m.toMatrix4d
    
-      var verts: AkariGeoVertexVec = []
-      var indices: AkariGeoIndexVec = []
+      var verts: [Float] = []
+      var indices: [Int32] = []
       for mesh in meshes
       {
         if mesh.points.empty() || mesh.triangleIndices.empty()
@@ -214,10 +214,12 @@ public extension Akari
           continue
         }
  
-        verts.clear()
-        indices.clear()
-        Pixar.BuildMeshGeometry(mesh.points, mesh.triangleIndices, &verts, &indices)
- 
+        verts.removeAll(keepingCapacity: true)
+        indices.removeAll(keepingCapacity: true)
+        Akari.Geom.buildMesh(points: mesh.points,
+                             tris: mesh.triangleIndices,
+                             verts: &verts, indices: &indices)
+
         if verts.isEmpty || indices.isEmpty
         {
           continue
