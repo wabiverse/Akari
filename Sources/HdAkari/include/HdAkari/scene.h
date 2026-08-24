@@ -52,6 +52,7 @@
 #include <Tf/sharedPtrRetainReleaseHelper.h>
 
 #include <mutex>
+#include <atomic>
 #include <unordered_map>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -94,13 +95,49 @@ public:
   void UpdateMesh(HdAkariMeshData data)
   {
     std::lock_guard<std::mutex> lock(_mutex);
+    auto it = _meshes.find(data.id);
+    bool geometryChanged = (it == _meshes.end())
+                        || (data.dataRevision != it->second.dataRevision);
     _meshes[data.id] = std::move(data);
+    if (geometryChanged) {
+      _revision.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  /// Update only display properties (transform, color, visibility) on an
+  /// existing mesh without touching geometry or bumping the scene revision,
+  /// avoids copying points/indices entirely.
+  void UpdateMeshDisplay(SdfPath const &id,
+                         GfMatrix4d const &xf,
+                         GfVec3f const &color,
+                         bool visible)
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    auto it = _meshes.find(id);
+    if (it == _meshes.end()) return;
+    auto &m = it->second;
+    m.transform = xf;
+    m.displayColor = color;
+    m.visible = visible;
+  }
+
+  /// Copy only the geometry (points + indices) from a previously stored
+  /// mesh, used by Sync when only transform/color/visibility changed.
+  bool CopyMeshGeometry(SdfPath const &id, HdAkariMeshData &dst) const
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    auto it = _meshes.find(id);
+    if (it == _meshes.end()) return false;
+    dst.points = it->second.points;
+    dst.triangleIndices = it->second.triangleIndices;
+    return true;
   }
 
   void RemoveMesh(SdfPath const &id)
   {
     std::lock_guard<std::mutex> lock(_mutex);
     _meshes.erase(id);
+    _revision.fetch_add(1, std::memory_order_relaxed);
   }
 
   size_t MeshCount() const
@@ -135,9 +172,19 @@ public:
     return out;
   }
 
+  /// Monotonically increasing counter, bumped on
+  /// every UpdateMesh/RemoveMesh. The render side
+  /// caches this value to skip capture rerecording
+  /// when the scene geometry has not changed.
+  uint64_t Revision() const
+  {
+    return _revision.load(std::memory_order_relaxed);
+  }
+
 private:
   mutable std::mutex _mutex;
   std::unordered_map<SdfPath, HdAkariMeshData, SdfPath::Hash> _meshes;
+  std::atomic<uint64_t> _revision{0};
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

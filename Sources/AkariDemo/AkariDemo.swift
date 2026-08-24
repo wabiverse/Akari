@@ -65,7 +65,7 @@ struct AkariDemo: App
     engine = Akari.RenderEngine(settings: RenderSettings(quality: .high))
     registerAkariRenderer(engine: engine)
 
-    let stage = AppUtils.buildStage()
+    let stage = AppUtils.openOrCreateStage()
 
     hydra = Hydra.RenderEngine(stage: stage, rendererPluginId: Tf.Token(Akari.rendererPluginId))
 

@@ -59,7 +59,7 @@ public extension Akari
     private var graph: [any RenderPassNode]
     private var gpu: GpuContext?
     private var frameIndex: UInt64 = 0
-    private var lastLoggedMeshCount: Int = -2
+    private var lastStatsRevision: UInt64 = 0
     private var lastCamera: (view: [Float], projection: [Float])?
 
     public init(settings: RenderSettings = RenderSettings())
@@ -154,10 +154,14 @@ public extension Akari
     /// Debug output that geometry sync is feeding the engine.
     private func logSceneStats(_ renderParam: Pixar.HdAkariRenderParam)
     {
-      let meshes = renderParam.GetScene()?.MeshCount() ?? 0
-      guard meshes != lastLoggedMeshCount else { return }
-      lastLoggedMeshCount = meshes
-      let tris = renderParam.GetScene()?.TriangleCount() ?? 0
+      guard let scene = renderParam.GetScene() else { return }
+
+      let rev = scene.Revision()
+      guard rev != lastStatsRevision else { return }
+      lastStatsRevision = rev
+
+      let meshes = scene.MeshCount()
+      let tris = scene.TriangleCount()
       print("[akari] scene: \(meshes) mesh(es), \(tris) triangle(s)")
     }
 

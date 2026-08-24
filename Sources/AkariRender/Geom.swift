@@ -55,10 +55,16 @@ public extension Akari
     {
       let kHardEdgeCos: Float = 0.8660254 // cos(30°)
 
+      let triCount = tris.size()
+      let ptCount = points.size()
+
+      verts.reserveCapacity(verts.count + triCount * 18)
+      indices.reserveCapacity(indices.count + triCount * 3)
+
       // smooth per point normals.
-      var smooth = [GfVec3f](repeating: GfVec3f(0.0, 0.0, 0.0), count: points.size())
-      var faceNormals = [GfVec3f](repeating: GfVec3f(0.0, 0.0, 0.0), count: tris.size())
-      var faceValid = [Bool](repeating: false, count: tris.size())
+      var smooth = [GfVec3f](repeating: GfVec3f(0.0, 0.0, 0.0), count: ptCount)
+      var faceNormals = [GfVec3f](repeating: GfVec3f(0.0, 0.0, 0.0), count: triCount)
+      var faceValid = [Bool](repeating: false, count: triCount)
 
       for idx in 0 ..< tris.size()
       {

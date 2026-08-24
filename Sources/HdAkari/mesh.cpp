@@ -94,6 +94,24 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
     return;
   }
 
+  bool geoChanged = (*dirtyBits & (HdChangeTracker::DirtyTopology | HdChangeTracker::DirtyPoints)) != 0;
+
+  if (!geoChanged) {
+    // only display properties changed, mutate in place, zero copy.
+    auto xf = sceneDelegate->GetTransform(id);
+    bool vis = sceneDelegate->GetVisible(id);
+    GfVec3f color(0.8f, 0.8f, 0.8f);
+    const VtValue colorVal = sceneDelegate->Get(id, HdTokens->displayColor);
+    if (colorVal.IsHolding<VtVec3fArray>()) {
+      const VtVec3fArray colors = colorVal.UncheckedGet<VtVec3fArray>();
+      if (!colors.empty()) color = colors[0];
+    }
+    scene->UpdateMeshDisplay(id, xf, color, vis);
+    *dirtyBits = HdChangeTracker::Clean;
+    return;
+  }
+
+  // geometry changed -> full rebuild.
   HdAkariMeshData data;
   data.id = id;
 

@@ -119,4 +119,30 @@ public enum AppUtils
 
     return UsdStage.open(url.path)
   }
+  
+  public static func usdScenePathFromArguments() -> String?
+  {
+    let arguments = CommandLine.arguments
+    if let index = arguments.firstIndex(of: "--usd"), index + 1 < arguments.count
+    {
+      return arguments[index + 1]
+    }
+    if let path = ProcessInfo.processInfo.environment["LATTICE_USD_SCENE"], !path.isEmpty
+    {
+      return path
+    }
+    return nil
+  }
+  
+  public static func openOrCreateStage() -> UsdStage
+  {
+    if let path = AppUtils.usdScenePathFromArguments()
+    {
+      return UsdStage.open(path)
+    }
+    else
+    {
+      return AppUtils.buildStage()
+    }
+  }
 }

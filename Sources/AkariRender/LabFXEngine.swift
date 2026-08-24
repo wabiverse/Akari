@@ -61,6 +61,9 @@ public extension Akari
     private var runtime = lab.fx.Runtime()
     private var lastWidth = 0
     private var lastHeight = 0
+    
+    /// Cached scene revision, skips capture when geometry is unchanged.
+    private var lastGeometryRevision: UInt64 = 0
 
     /// The last GL_TONEMAP_* operator applied to the tonemap pass.
     private var lastTonemap = GLenum(0)
@@ -95,6 +98,34 @@ public extension Akari
 
     private init()
     {}
+
+    /// Inverse transpose of the 3x3 upper-left of a row-major 4x4,
+    /// returned as a column-major 3x3 (9 floats). Used to bake per
+    /// mesh model normals into world space during geometry recording.
+    static func normalMatrix3x3(_ m: UnsafePointer<Float>) -> [Float]
+    {
+      // extract 3x3 into column-major.
+      let a0 = m[0];  let a1 = m[4];  let a2 = m[8]   // column 0
+      let a3 = m[1];  let a4 = m[5];  let a5 = m[9]   // column 1
+      let a6 = m[2];  let a7 = m[6];  let a8 = m[10]  // column 2
+
+      let det = Double(a0*(a4*a8-a5*a7) - a3*(a1*a8-a2*a7) + a6*(a1*a5-a2*a4))
+      guard abs(det) > 1e-8 else { return [1,0,0, 0,1,0, 0,0,1] }
+      let inv = 1.0 / det
+
+      // inverse transpose, column-major layout.
+      return [
+        Float(inv * Double( a4*a8 - a5*a7)),
+        Float(inv * Double( a6*a5 - a3*a8)),
+        Float(inv * Double( a3*a7 - a6*a4)),
+        Float(inv * Double( a2*a7 - a8*a1)),
+        Float(inv * Double( a0*a8 - a2*a6)),
+        Float(inv * Double( a6*a1 - a0*a7)),
+        Float(inv * Double( a1*a5 - a4*a2)),
+        Float(inv * Double( a3*a2 - a0*a5)),
+        Float(inv * Double( a0*a4 - a1*a3))
+      ]
+    }
 
     /// Inverse of a row-major 4x4 (16 floats) via Gauss-Jordan.
     static func mat4Inverse(_ m: [Float]) -> [Float]
@@ -184,62 +215,130 @@ public extension Akari
                                view: Matrix4,
                                projection: Matrix4)
     {
-      // set the per frame view matrix.
-      defer { runtime.setViewMatrix(view.m) }
-      
       guard
         let captureBuffer,
         let scene = renderParam.GetScene()
       else { return }
-   
-      let meshes = scene.Snapshot()
-   
-      labgl_captureClear(captureBuffer)
-      labgl_captureStart(captureBuffer)
-   
-      LABGLDISPATCH_glEnable(GLenum(GL_DEPTH_TEST))
-      LABGLDISPATCH_glDepthFunc(GLenum(GL_LESS))
-   
+
       LABGLDISPATCH_glMatrixMode(GLenum(GL_PROJECTION))
       LABGLDISPATCH_glLoadMatrixf(projection.m)
-   
-      let viewM = view.m.toMatrix4d
-   
+      LABGLDISPATCH_glMatrixMode(GLenum(GL_MODELVIEW))
+      LABGLDISPATCH_glLoadMatrixf(view.m)
+
+      runtime.setViewMatrix(view.m)
+
+      // only capture when geometry has changed.
+      let rev = scene.Revision()
+      guard rev != lastGeometryRevision else { return }
+      lastGeometryRevision = rev
+
+      let meshes = scene.Snapshot()
+
+      labgl_captureClear(captureBuffer)
+      labgl_captureStart(captureBuffer)
+
+      LABGLDISPATCH_glEnable(GLenum(GL_DEPTH_TEST))
+      LABGLDISPATCH_glDepthFunc(GLenum(GL_LESS))
+
+      var mergedVerts: [Float] = []
+      var mergedIndices: [Int32] = []
       var verts: [Float] = []
       var indices: [Int32] = []
+
       for mesh in meshes
       {
-        if mesh.points.empty() || mesh.triangleIndices.empty()
-        {
-          continue
-        }
- 
+        if mesh.points.empty() || mesh.triangleIndices.empty() { continue }
+
         verts.removeAll(keepingCapacity: true)
         indices.removeAll(keepingCapacity: true)
         Akari.Geom.buildMesh(points: mesh.points,
                              tris: mesh.triangleIndices,
                              verts: &verts, indices: &indices)
+        if verts.isEmpty || indices.isEmpty { continue }
 
-        if verts.isEmpty || indices.isEmpty
+        let vertCount = verts.count / 6
+        let baseVertex = Int32(mergedVerts.count / 14)
+
+        guard let m = Pixar.GfMatrix4f(mesh.transform).GetArray() else { continue }
+        let normMtx = Self.normalMatrix3x3(m)
+
+        let r = mesh.displayColor[0]
+        let g = mesh.displayColor[1]
+        let b = mesh.displayColor[2]
+
+        for v in 0 ..< vertCount
         {
-          continue
+          let s = v * 6
+          let px = verts[s];   let py = verts[s+1]; let pz = verts[s+2]
+          let nx = verts[s+3]; let ny = verts[s+4]; let nz = verts[s+5]
+
+          // bake model transform into world-space position.
+          let wx = m[0]*px + m[4]*py + m[8]*pz  + m[12]
+          let wy = m[1]*px + m[5]*py + m[9]*pz  + m[13]
+          let wz = m[2]*px + m[6]*py + m[10]*pz + m[14]
+
+          // bake inverse transpose model into world-space normal.
+          let rnx = normMtx[0]*nx + normMtx[3]*ny + normMtx[6]*nz
+          let rny = normMtx[1]*nx + normMtx[4]*ny + normMtx[7]*nz
+          let rnz = normMtx[2]*nx + normMtx[5]*ny + normMtx[8]*nz
+
+          mergedVerts.append(contentsOf: [wx, wy, wz, 1.0,
+                                          r,  g,  b,  1.0,
+                                          0, 0,
+                                          rnx, rny, rnz,
+                                          0])
         }
- 
-        LABGLDISPATCH_glMatrixMode(GLenum(GL_MODELVIEW))
-        let mv = Pixar.GfMatrix4f(mesh.transform * viewM)
-        LABGLDISPATCH_glLoadMatrixf(mv.GetArray())
- 
-        LABGLDISPATCH_glColor3f(mesh.displayColor[0], mesh.displayColor[1], mesh.displayColor[2])
-        gl.begin(mode: GLenum(GL_TRIANGLES))
-        for idx in indices
-        {
-          let base = Int(idx) * 6
-          LABGLDISPATCH_glNormal3f(verts[base + 3], verts[base + 4], verts[base + 5])
-          LABGLDISPATCH_glVertex3f(verts[base], verts[base + 1], verts[base + 2])
-        }
-        LABGLDISPATCH_glEnd()
+
+        for idx in indices { mergedIndices.append(idx + baseVertex) }
       }
-   
+
+      if !mergedVerts.isEmpty && !mergedIndices.isEmpty
+      {
+        let vbSize = GLsizei(mergedVerts.count * MemoryLayout<Float>.size)
+        let ibSize = GLsizei(mergedIndices.count * MemoryLayout<Int32>.size)
+        let vb = LABGLDISPATCH_lglCreateBuffer(GLuint(LGL_BUFFER_VERTEX | LGL_BUFFER_MAP_WRITE), vbSize)
+        let ib = LABGLDISPATCH_lglCreateBuffer(GLuint(LGL_BUFFER_INDEX | LGL_BUFFER_MAP_WRITE), ibSize)
+
+        if let vPtr = LABGLDISPATCH_lglMapBuffer(vb)
+        {
+          memcpy(vPtr, mergedVerts, Int(vbSize))
+          LABGLDISPATCH_lglUnmapBuffer(vb)
+        }
+        if let iPtr = LABGLDISPATCH_lglMapBuffer(ib)
+        {
+          memcpy(iPtr, mergedIndices, Int(ibSize))
+          LABGLDISPATCH_lglUnmapBuffer(ib)
+        }
+
+        LABGLDISPATCH_glBindBuffer(GLenum(GL_ARRAY_BUFFER), vb)
+        LABGLDISPATCH_glBindBuffer(GLenum(GL_ELEMENT_ARRAY_BUFFER), ib)
+        LABGLDISPATCH_glEnableClientState(GLenum(GL_VERTEX_ARRAY))
+        LABGLDISPATCH_glEnableClientState(GLenum(GL_COLOR_ARRAY))
+        LABGLDISPATCH_glEnableClientState(GLenum(GL_TEXTURE_COORD_ARRAY))
+        LABGLDISPATCH_glEnableClientState(GLenum(GL_NORMAL_ARRAY))
+        LABGLDISPATCH_glVertexPointer(4, GLenum(GL_FLOAT), GLsizei(56),
+                                      UnsafeRawPointer(bitPattern: 0))
+        LABGLDISPATCH_glColorPointer(4, GLenum(GL_FLOAT), GLsizei(56),
+                                     UnsafeRawPointer(bitPattern: 16))
+        LABGLDISPATCH_glTexCoordPointer(2, GLenum(GL_FLOAT), GLsizei(56),
+                                        UnsafeRawPointer(bitPattern: 32))
+        LABGLDISPATCH_glNormalPointer(GLenum(GL_FLOAT), GLsizei(56),
+                                      UnsafeRawPointer(bitPattern: 40))
+
+        // single draw call for ALL geometry.
+        LABGLDISPATCH_glDrawElements(GLenum(GL_TRIANGLES),
+                                     Int32(mergedIndices.count),
+                                     GLenum(GL_UNSIGNED_INT),
+                                     UnsafeRawPointer(bitPattern: 0))
+
+        LABGLDISPATCH_glDisableClientState(GLenum(GL_NORMAL_ARRAY))
+        LABGLDISPATCH_glDisableClientState(GLenum(GL_TEXTURE_COORD_ARRAY))
+        LABGLDISPATCH_glDisableClientState(GLenum(GL_COLOR_ARRAY))
+        LABGLDISPATCH_glDisableClientState(GLenum(GL_VERTEX_ARRAY))
+        LABGLDISPATCH_lglDeleteBuffer(vb)
+        LABGLDISPATCH_lglDeleteBuffer(ib)
+      }
+
       labgl_captureStop()
     }
 
