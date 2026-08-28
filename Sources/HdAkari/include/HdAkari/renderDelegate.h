@@ -54,6 +54,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 class HdAkariRenderParam;
 class HdAkariScene;
+class HdAkariTextureAtlas;
 
 /// @class HdAkariRenderDelegate
 ///
@@ -120,6 +121,7 @@ private:
   
   // ---- shared with swift. ----
   std::shared_ptr<HdAkariScene> _scene;      // mesh registry the Rprims fill
+  std::shared_ptr<HdAkariTextureAtlas> _textureAtlas; // shared roughness/metallic/opacity atlas
   std::shared_ptr<HdAkariRenderParam> _renderParam;
   // ----------------------------
 

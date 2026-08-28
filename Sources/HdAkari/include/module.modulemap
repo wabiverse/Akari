@@ -2,5 +2,6 @@ module HdAkari {
   header "HdAkari/akariBridge.h"
   header "HdAkari/scene.h"
   header "HdAkari/renderParam.h"
+  header "HdAkari/textureAtlas.h"
   export *
 }

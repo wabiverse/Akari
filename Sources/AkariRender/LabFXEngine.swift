@@ -43,6 +43,7 @@ import Foundation
 import HdAkari
 import LabFX
 import LabGL
+import simd
 
 public extension Akari
 {
@@ -61,9 +62,153 @@ public extension Akari
     private var runtime = lab.fx.Runtime()
     private var lastWidth = 0
     private var lastHeight = 0
-    
+
     /// Cached scene revision, skips capture when geometry is unchanged.
     private var lastGeometryRevision: UInt64 = 0
+
+    /// One mesh's triangulated, winding repaired,
+    /// object-space vertex/index buffers.
+    private struct CachedMeshGeometry
+    {
+      var dataRevision: UInt64
+      var flipWinding: Bool
+      var verts: [Float]
+      var indices: [Int32]
+    }
+    private var meshGeometryCache: [String: CachedMeshGeometry] = [:]
+
+    /// Everything needed to build one mesh.
+    private struct MeshBuildInput: Sendable
+    {
+      var id: String
+      var dataRevision: UInt64
+      var flipWinding: Bool
+      var pointsFlat: [Float]
+      var trisFlat: [Int32]
+      var uvsFlat: [Float]
+      var worldMatrix: [Float]
+      var normalMatrix: [Float]
+    }
+
+    /// One mesh ready to be written into the batch.
+    private struct MeshDrawItem: Sendable
+    {
+      var id: String
+      var dataRevision: UInt64
+      var flipWinding: Bool
+      var verts: [Float]
+      var indices: [Int32]
+      var worldMatrix: [Float]
+      var normalMatrix: [Float]
+    }
+
+    /// Reference box used only to shuttle a task group's
+    /// result back out to the synchronous caller.
+    private final class ResultBox: @unchecked Sendable
+    {
+      var value: [MeshDrawItem] = []
+    }
+
+    /// Triangulates + winding-repairs every input mesh in parallel.
+    private static func buildMeshesConcurrently(_ inputs: [MeshBuildInput]) -> [MeshDrawItem]
+    {
+      guard !inputs.isEmpty else { return [] }
+
+      let semaphore = DispatchSemaphore(value: 0)
+      let box = ResultBox()
+
+      Task.detached(priority: .userInitiated)
+      {
+        box.value = await withTaskGroup(of: MeshDrawItem.self)
+        { group in
+          for input in inputs
+          {
+            group.addTask
+            {
+              var verts: [Float] = []
+              var indices: [Int32] = []
+              Akari.Geom.buildMesh(pointsFlat: input.pointsFlat, trisFlat: input.trisFlat,
+                                   uvsFlat: input.uvsFlat,
+                                   verts: &verts, indices: &indices,
+                                   flipWinding: input.flipWinding)
+              return MeshDrawItem(id: input.id, dataRevision: input.dataRevision,
+                                  flipWinding: input.flipWinding, verts: verts, indices: indices,
+                                  worldMatrix: input.worldMatrix, normalMatrix: input.normalMatrix)
+            }
+          }
+          var collected: [MeshDrawItem] = []
+          collected.reserveCapacity(inputs.count)
+          for await item in group { collected.append(item) }
+          return collected
+        }
+        semaphore.signal()
+      }
+
+      semaphore.wait()
+      return box.value
+    }
+
+    /// GPU texture name for the shared roughness/metallic/opacity atlas.
+    private var materialAtlasTexture: GLuint = 0
+
+    /// GPU texture name for the shared diffuseColor atlas.
+    private var colorAtlasTexture: GLuint = 0
+
+    /// Uploads a texture atlas's pixels to `texture`.
+    private func uploadAtlasTexture(_ texture: inout GLuint, pixels: UnsafePointer<UInt8>,
+                                    width: Int32, height: Int32)
+    {
+      if texture == 0
+      {
+        var tex: GLuint = 0
+        LABGLDISPATCH_glGenTextures(1, &tex)
+        texture = tex
+        LABGLDISPATCH_glBindTexture(GLenum(GL_TEXTURE_2D), texture)
+        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MIN_FILTER), GLint(GL_NEAREST))
+        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MAG_FILTER), GLint(GL_NEAREST))
+        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_WRAP_S), GLint(GL_CLAMP_TO_EDGE))
+        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_WRAP_T), GLint(GL_CLAMP_TO_EDGE))
+      }
+      else
+      {
+        LABGLDISPATCH_glBindTexture(GLenum(GL_TEXTURE_2D), texture)
+      }
+
+      LABGLDISPATCH_glTexImage2D(GLenum(GL_TEXTURE_2D), 0, GL_RGBA,
+                                 width, height, 0,
+                                 GLenum(GL_RGBA), GLenum(GL_UNSIGNED_BYTE),
+                                 pixels)
+    }
+
+    /// Uploads both atlas textures to the GPU whenever the atlas has grown.
+    private func uploadMaterialAtlasIfNeeded(_ atlas: Pixar.HdAkariTextureAtlas)
+    {
+      let dirty = atlas.ConsumeDirty()
+      if dirty
+      {
+        let width = GLsizei(atlas.Width())
+        let height = GLsizei(atlas.Height())
+        if let pixels = atlas.PixelData()
+        {
+          uploadAtlasTexture(&materialAtlasTexture, pixels: pixels, width: width, height: height)
+        }
+        if let colorPixels = atlas.ColorPixelData()
+        {
+          uploadAtlasTexture(&colorAtlasTexture, pixels: colorPixels, width: width, height: height)
+        }
+      }
+
+      if materialAtlasTexture != 0
+      {
+        var tex = materialAtlasTexture
+        runtime.setUniform("u_material_atlas", GLenum(GL_SAMPLER_2D), &tex)
+      }
+      if colorAtlasTexture != 0
+      {
+        var tex = colorAtlasTexture
+        runtime.setUniform("u_color_atlas", GLenum(GL_SAMPLER_2D), &tex)
+      }
+    }
 
     /// The last GL_TONEMAP_* operator applied to the tonemap pass.
     private var lastTonemap = GLenum(0)
@@ -77,13 +222,14 @@ public extension Akari
       {
         // prevent redundant state changes.
         guard oldValue != lastSunHeight else { return }
-        
+
         // when sunHeight changes the sky cubemap changes,
         // so the prefiltered IBL maps must be regenerated.
         setIblPasses(active: true)
         iblNeedsBake = true
       }
     }
+
     private static let kIblPassNames = [
       "sky cook",
       "prefilter 0",
@@ -105,25 +251,25 @@ public extension Akari
     static func normalMatrix3x3(_ m: UnsafePointer<Float>) -> [Float]
     {
       // extract 3x3 into column-major.
-      let a0 = m[0];  let a1 = m[4];  let a2 = m[8]   // column 0
-      let a3 = m[1];  let a4 = m[5];  let a5 = m[9]   // column 1
-      let a6 = m[2];  let a7 = m[6];  let a8 = m[10]  // column 2
+      let a0 = m[0]; let a1 = m[4]; let a2 = m[8] // column 0
+      let a3 = m[1]; let a4 = m[5]; let a5 = m[9] // column 1
+      let a6 = m[2]; let a7 = m[6]; let a8 = m[10] // column 2
 
-      let det = Double(a0*(a4*a8-a5*a7) - a3*(a1*a8-a2*a7) + a6*(a1*a5-a2*a4))
-      guard abs(det) > 1e-8 else { return [1,0,0, 0,1,0, 0,0,1] }
+      let det = Double(a0 * (a4 * a8 - a5 * a7) - a3 * (a1 * a8 - a2 * a7) + a6 * (a1 * a5 - a2 * a4))
+      guard abs(det) > 1e-8 else { return [1, 0, 0, 0, 1, 0, 0, 0, 1] }
       let inv = 1.0 / det
 
       // inverse transpose, column-major layout.
       return [
-        Float(inv * Double( a4*a8 - a5*a7)),
-        Float(inv * Double( a6*a5 - a3*a8)),
-        Float(inv * Double( a3*a7 - a6*a4)),
-        Float(inv * Double( a2*a7 - a8*a1)),
-        Float(inv * Double( a0*a8 - a2*a6)),
-        Float(inv * Double( a6*a1 - a0*a7)),
-        Float(inv * Double( a1*a5 - a4*a2)),
-        Float(inv * Double( a3*a2 - a0*a5)),
-        Float(inv * Double( a0*a4 - a1*a3))
+        Float(inv * Double(a4 * a8 - a5 * a7)),
+        Float(inv * Double(a6 * a5 - a3 * a8)),
+        Float(inv * Double(a3 * a7 - a6 * a4)),
+        Float(inv * Double(a2 * a7 - a8 * a1)),
+        Float(inv * Double(a0 * a8 - a2 * a6)),
+        Float(inv * Double(a6 * a1 - a0 * a7)),
+        Float(inv * Double(a1 * a5 - a4 * a2)),
+        Float(inv * Double(a3 * a2 - a0 * a5)),
+        Float(inv * Double(a0 * a4 - a1 * a3))
       ]
     }
 
@@ -179,11 +325,6 @@ public extension Akari
     public func beginFrame(width: Int, height: Int)
     {
       guard width > 0, height > 0 else { return }
-      if ProcessInfo.processInfo.environment["AKARI_DUMP_IRRADIANCE"] != nil
-      {
-        print("[akari/ibl] beginFrame w=\(width) h=\(height) bake=\(iblNeedsBake)")
-        fflush(stdout)
-      }
       ensureEngine(width: width, height: height)
       guard let windowHandle else { return }
 
@@ -227,6 +368,12 @@ public extension Akari
 
       runtime.setViewMatrix(view.m)
 
+      // the shared roughness/metallic/opacity texture atlas.
+      if let atlas = renderParam.GetTextureAtlas()
+      {
+        uploadMaterialAtlasIfNeeded(atlas)
+      }
+
       // only capture when geometry has changed.
       let rev = scene.Revision()
       guard rev != lastGeometryRevision else { return }
@@ -239,106 +386,85 @@ public extension Akari
 
       LABGLDISPATCH_glEnable(GLenum(GL_DEPTH_TEST))
       LABGLDISPATCH_glDepthFunc(GLenum(GL_LESS))
+      
+      LABGLDISPATCH_glEnable(GLenum(GL_CULL_FACE))
+      LABGLDISPATCH_glCullFace(GLenum(GL_BACK))
+      LABGLDISPATCH_glFrontFace(GLenum(GL_CCW))
 
-      var mergedVerts: [Float] = []
-      var mergedIndices: [Int32] = []
-      var verts: [Float] = []
-      var indices: [Int32] = []
+      // serial phase.
+      var readyItems: [MeshDrawItem] = []
+      readyItems.reserveCapacity(meshes.count)
+      var pendingInputs: [MeshBuildInput] = []
+      pendingInputs.reserveCapacity(meshes.count)
+
+      var triangleEstimate = 0
 
       for mesh in meshes
       {
         if mesh.points.empty() || mesh.triangleIndices.empty() { continue }
 
-        verts.removeAll(keepingCapacity: true)
-        indices.removeAll(keepingCapacity: true)
-        Akari.Geom.buildMesh(points: mesh.points,
-                             tris: mesh.triangleIndices,
-                             verts: &verts, indices: &indices)
-        if verts.isEmpty || indices.isEmpty { continue }
+        triangleEstimate += mesh.triangleIndices.size() / 3
 
-        let vertCount = verts.count / 6
-        let baseVertex = Int32(mergedVerts.count / 14)
+        let mat = Pixar.GfMatrix4f(mesh.transform)
+        guard let mPtr = mat.GetArray() else { continue }
+        let worldMatrix = Array(UnsafeBufferPointer(start: mPtr, count: 16))
+        let normalMatrix = Self.normalMatrix3x3(mPtr)
 
-        guard let m = Pixar.GfMatrix4f(mesh.transform).GetArray() else { continue }
-        let normMtx = Self.normalMatrix3x3(m)
+        let det = worldMatrix[0] * (worldMatrix[5] * worldMatrix[10] - worldMatrix[6] * worldMatrix[9])
+                + worldMatrix[1] * (worldMatrix[6] * worldMatrix[8]  - worldMatrix[4] * worldMatrix[10])
+                + worldMatrix[2] * (worldMatrix[4] * worldMatrix[9]  - worldMatrix[5] * worldMatrix[8])
+        let flipWinding = det < 0
 
-        let r = mesh.displayColor[0]
-        let g = mesh.displayColor[1]
-        let b = mesh.displayColor[2]
+        let idText = mesh.id.string
 
-        for v in 0 ..< vertCount
+        // cached for reuse across captures unless this
+        // mesh's own geometry (dataRevision) or flip
+        // state actually changed.
+        if let cached = meshGeometryCache[idText],
+           cached.dataRevision == mesh.dataRevision,
+           cached.flipWinding == flipWinding
         {
-          let s = v * 6
-          let px = verts[s];   let py = verts[s+1]; let pz = verts[s+2]
-          let nx = verts[s+3]; let ny = verts[s+4]; let nz = verts[s+5]
-
-          // bake model transform into world-space position.
-          let wx = m[0]*px + m[4]*py + m[8]*pz  + m[12]
-          let wy = m[1]*px + m[5]*py + m[9]*pz  + m[13]
-          let wz = m[2]*px + m[6]*py + m[10]*pz + m[14]
-
-          // bake inverse transpose model into world-space normal.
-          let rnx = normMtx[0]*nx + normMtx[3]*ny + normMtx[6]*nz
-          let rny = normMtx[1]*nx + normMtx[4]*ny + normMtx[7]*nz
-          let rnz = normMtx[2]*nx + normMtx[5]*ny + normMtx[8]*nz
-
-          mergedVerts.append(contentsOf: [wx, wy, wz, 1.0,
-                                          r,  g,  b,  1.0,
-                                          0, 0,
-                                          rnx, rny, rnz,
-                                          0])
+          if cached.verts.isEmpty || cached.indices.isEmpty { continue }
+          readyItems.append(MeshDrawItem(id: idText, dataRevision: cached.dataRevision,
+                                         flipWinding: flipWinding, verts: cached.verts,
+                                         indices: cached.indices, worldMatrix: worldMatrix,
+                                         normalMatrix: normalMatrix))
+          continue
         }
 
-        for idx in indices { mergedIndices.append(idx + baseVertex) }
+        let (pointsFlat, trisFlat, uvsFlat) = Akari.Geom.flatten(points: mesh.points,
+                                                                 tris: mesh.triangleIndices,
+                                                                 uvs: mesh.uvs)
+        pendingInputs.append(MeshBuildInput(id: idText, dataRevision: mesh.dataRevision,
+                                            flipWinding: flipWinding, pointsFlat: pointsFlat,
+                                            trisFlat: trisFlat, uvsFlat: uvsFlat, worldMatrix: worldMatrix,
+                                            normalMatrix: normalMatrix))
       }
 
-      if !mergedVerts.isEmpty && !mergedIndices.isEmpty
+      // concurrent phase.
+      let builtItems = Self.buildMeshesConcurrently(pendingInputs)
+
+      // serial phase.
+      var newCache: [String: CachedMeshGeometry] = [:]
+      newCache.reserveCapacity(readyItems.count + builtItems.count)
+
+      let batch = Akari.Geom.Batch(estimatedTriangles: triangleEstimate)
+
+      for item in readyItems + builtItems
       {
-        let vbSize = GLsizei(mergedVerts.count * MemoryLayout<Float>.size)
-        let ibSize = GLsizei(mergedIndices.count * MemoryLayout<Int32>.size)
-        let vb = LABGLDISPATCH_lglCreateBuffer(GLuint(LGL_BUFFER_VERTEX | LGL_BUFFER_MAP_WRITE), vbSize)
-        let ib = LABGLDISPATCH_lglCreateBuffer(GLuint(LGL_BUFFER_INDEX | LGL_BUFFER_MAP_WRITE), ibSize)
-
-        if let vPtr = LABGLDISPATCH_lglMapBuffer(vb)
-        {
-          memcpy(vPtr, mergedVerts, Int(vbSize))
-          LABGLDISPATCH_lglUnmapBuffer(vb)
+        if item.verts.isEmpty || item.indices.isEmpty { continue }
+        newCache[item.id] = CachedMeshGeometry(dataRevision: item.dataRevision,
+                                               flipWinding: item.flipWinding,
+                                               verts: item.verts,
+                                               indices: item.indices)
+        item.worldMatrix.withUnsafeBufferPointer
+        { buf in
+          batch.append(localVerts: item.verts, localIndices: item.indices,
+                       worldMatrix: buf.baseAddress!, normalMatrix: item.normalMatrix)
         }
-        if let iPtr = LABGLDISPATCH_lglMapBuffer(ib)
-        {
-          memcpy(iPtr, mergedIndices, Int(ibSize))
-          LABGLDISPATCH_lglUnmapBuffer(ib)
-        }
-
-        LABGLDISPATCH_glBindBuffer(GLenum(GL_ARRAY_BUFFER), vb)
-        LABGLDISPATCH_glBindBuffer(GLenum(GL_ELEMENT_ARRAY_BUFFER), ib)
-        LABGLDISPATCH_glEnableClientState(GLenum(GL_VERTEX_ARRAY))
-        LABGLDISPATCH_glEnableClientState(GLenum(GL_COLOR_ARRAY))
-        LABGLDISPATCH_glEnableClientState(GLenum(GL_TEXTURE_COORD_ARRAY))
-        LABGLDISPATCH_glEnableClientState(GLenum(GL_NORMAL_ARRAY))
-        LABGLDISPATCH_glVertexPointer(4, GLenum(GL_FLOAT), GLsizei(56),
-                                      UnsafeRawPointer(bitPattern: 0))
-        LABGLDISPATCH_glColorPointer(4, GLenum(GL_FLOAT), GLsizei(56),
-                                     UnsafeRawPointer(bitPattern: 16))
-        LABGLDISPATCH_glTexCoordPointer(2, GLenum(GL_FLOAT), GLsizei(56),
-                                        UnsafeRawPointer(bitPattern: 32))
-        LABGLDISPATCH_glNormalPointer(GLenum(GL_FLOAT), GLsizei(56),
-                                      UnsafeRawPointer(bitPattern: 40))
-
-        // single draw call for ALL geometry.
-        LABGLDISPATCH_glDrawElements(GLenum(GL_TRIANGLES),
-                                     Int32(mergedIndices.count),
-                                     GLenum(GL_UNSIGNED_INT),
-                                     UnsafeRawPointer(bitPattern: 0))
-
-        LABGLDISPATCH_glDisableClientState(GLenum(GL_NORMAL_ARRAY))
-        LABGLDISPATCH_glDisableClientState(GLenum(GL_TEXTURE_COORD_ARRAY))
-        LABGLDISPATCH_glDisableClientState(GLenum(GL_COLOR_ARRAY))
-        LABGLDISPATCH_glDisableClientState(GLenum(GL_VERTEX_ARRAY))
-        LABGLDISPATCH_lglDeleteBuffer(vb)
-        LABGLDISPATCH_lglDeleteBuffer(ib)
       }
-
+      meshGeometryCache = newCache
+      batch.draw()
       labgl_captureStop()
     }
 
@@ -348,7 +474,7 @@ public extension Akari
     /// - Parameters:
     ///   - iblEnabled: gates the split sum IBL lobes.
     ///   - projection: 16 row-major floats, view->clip.
-     ///  - sunHeight: height of the sun [-1, 1] for day/night.
+    ///   - sunHeight: height of the sun [-1, 1] for day/night.
     public func setLighting(iblEnabled: Bool, projection: Matrix4, sunHeight: Float)
     {
       var iblOn: Float = iblEnabled ? 1 : 0
@@ -390,7 +516,7 @@ public extension Akari
       if GLenum(viewTransform.uniform) != lastTonemap
       {
         lastTonemap = GLenum(viewTransform.uniform)
-        
+
         runtime.setPassTonemap("tonemap", GLenum(viewTransform.uniform))
       }
     }
@@ -448,7 +574,7 @@ public extension Akari
         return
       }
       graph = parsed
-      
+
       // set hosek wilkie sky compute buffer.
       let data = HosekWilkieSkyData.flattenedFloats()
       data.withUnsafeBufferPointer
@@ -457,7 +583,7 @@ public extension Akari
                                  buf.baseAddress,
                                  buf.count * MemoryLayout<Float>.stride)
       }
-      
+
       // set other shader buffer sizes.
       for level in 0 ..< 6
       {
@@ -533,7 +659,8 @@ public extension Akari
         textures:
           [ diffuse, f16x4, scale: 1.0
             position, f16x4, scale: 1.0
-            normal, f16x4, scale: 1.0 ]
+            normal, f16x4, scale: 1.0
+            material, f16x4, scale: 1.0 ]
 
       buffer: envCube
         textures:
@@ -597,7 +724,7 @@ public extension Akari
         draw: no
         clear depth: yes
         clear outputs: yes
-        outputs: gbuffer [diffuse, position, normal]
+        outputs: gbuffer [diffuse, position, normal, material]
 
       pass: sky cook
         draw: compute
@@ -676,14 +803,14 @@ public extension Akari
         depth test: less
         write depth: yes
         use shader: mesh
-        outputs: gbuffer [diffuse, position, normal]
+        outputs: gbuffer [diffuse, position, normal, material]
 
       pass: resolve
         draw: quad
         depth test: never
         write depth: no
         use shader: deferred-shade
-        inputs: [gbuffer.diffuse, gbuffer.position, gbuffer.normal,
+        inputs: [gbuffer.diffuse, gbuffer.position, gbuffer.normal, gbuffer.material,
                  envCube.envCube, pref0.pref0, pref1.pref1,
                  pref2.pref2, pref3.pref3, pref4.pref4,
                  pref5.pref5, irradiance.irradiance, dfg.dfg]
@@ -703,33 +830,33 @@ public extension Akari
         outputs: visible
 
       shader: mesh
-        uniforms: []
-        varying:  [ color: vec4, posEye: vec3, normalEye: vec3 ]
+        uniforms: [ u_material_atlas: sampler2d, u_color_atlas: sampler2d ]
+        varying:  [ posEye: vec3, normalEye: vec3, uv: vec2 ]
 
         vsh:
           attributes:
           [ a_position: vec3 <- position,
-            a_color: vec4 <- color,
-            a_normal: vec3 <- normal ]
+            a_normal: vec3 <- normal,
+            a_uv: vec2 <- texcoord ]
 
           source:
           ```glsl
           void main()
           {
-            var.color = a_color;
             vec4 ep = u_modelview * vec4(a_position, 1.0);
             var.posEye = ep.xyz;
             var.normalEye = normalize(u_normalMatrix * a_normal);
+            var.uv = a_uv;
             gl_Position = u_modelviewProjection * vec4(a_position, 1.0);
           }
           ```
 
           source msl:
           ```msl
-          var.color = a_color;
           float4 ep = u_modelview * float4(a_position, 1.0);
           var.posEye = ep.xyz;
           var.normalEye = normalize(u_normalMatrix * a_normal);
+          var.uv = a_uv;
           gl_Position = u_modelviewProjection * float4(a_position, 1.0);
           ```
 
@@ -738,17 +865,25 @@ public extension Akari
           ```glsl
           void main()
           {
-            o_diffuse_texture = var.color;
+            vec4 mat = texture(u_material_atlas, var.uv);
+            if (mat.a > 0.0 && mat.b < mat.a) discard;
+            vec3 albedo = texture(u_color_atlas, var.uv).rgb;
+            o_diffuse_texture = vec4(albedo, mat.b);
             o_position_texture = vec4(var.posEye, 1.0);
             o_normal_texture = vec4(var.normalEye, 1.0);
+            o_material_texture = vec4(mat.r, mat.g, 0.0, 1.0);
           }
           ```
 
           source msl:
           ```msl
-          o_diffuse_texture = var.color;
+          float4 mat = texture(u_material_atlas, var.uv);
+          if (mat.a > 0.0 && mat.b < mat.a) discard_fragment();
+          float3 albedo = texture(u_color_atlas, var.uv).rgb;
+          o_diffuse_texture = float4(albedo, mat.b);
           o_position_texture = float4(var.posEye, 1.0);
           o_normal_texture = float4(var.normalEye, 1.0);
+          o_material_texture = float4(mat.r, mat.g, 0.0, 1.0);
           ```
 
       shader: hosek-wilkie
@@ -2277,6 +2412,7 @@ public extension Akari
         uniforms: [ u_normal_texture: sampler2d,
                     u_position_texture: sampler2d,
                     u_diffuse_texture: sampler2d,
+                    u_material_texture: sampler2d,
                     u_envCube_texture: samplerCube,
                     u_pref0_texture: sampler2d,
                     u_pref1_texture: sampler2d,
@@ -2353,6 +2489,7 @@ public extension Akari
             vec3 normalEye = normalSample.xyz;
             vec3 posEye = texture(u_position_texture, var.texCoord).xyz;
             vec3 diffuse = texture(u_diffuse_texture, var.texCoord).xyz;
+            vec2 materialSample = texture(u_material_texture, var.texCoord).rg;
 
             mat3 invView = mat3(inverse(u_view));
 
@@ -2372,12 +2509,12 @@ public extension Akari
             vec3 V = normalize(invView * (-posEye));
             float NoV = max(dot(N, V), 1e-4);
 
-            // (todo): get the proper roughness from the material.
-            float perceptualRoughness = 0.5;
+            float perceptualRoughness = clamp(materialSample.r, 0.045, 1.0);
             float roughness = perceptualRoughness * perceptualRoughness;
+            float metallic = clamp(materialSample.g, 0.0, 1.0);
             vec3 baseColor = diffuse;
-            vec3 f0 = mix(vec3(0.04), baseColor, 0.0);
-            vec3 diffuseColor = baseColor * (1.0 - 0.0);
+            vec3 f0 = mix(vec3(0.04), baseColor, metallic);
+            vec3 diffuseColor = baseColor * (1.0 - metallic);
 
             float celestialAngle = clamp(abs(sunHeight) + 0.01, 0.0, 1.0) * 75.0 * PI / 180.0;
             vec3 sunL = normalize(vec3(0.4 * cos(celestialAngle),
@@ -2488,6 +2625,7 @@ public extension Akari
             float3 normalEye = normalSample.xyz;
             float3 posEye = texture(u_position_texture, var.texCoord).xyz;
             float3 diffuse = texture(u_diffuse_texture, var.texCoord).xyz;
+            float2 materialSample = texture(u_material_texture, var.texCoord).rg;
 
             float3x3 invView = float3x3(
               float3(u_view[0][0], u_view[1][0], u_view[2][0]),
@@ -2509,11 +2647,12 @@ public extension Akari
               float3 V = normalize(invView * (-posEye));
               float NoV = max(dot(N, V), 1e-4);
 
-              float perceptualRoughness = 0.5;
+              float perceptualRoughness = saturate(max(materialSample.r, 0.045));
               float roughness = perceptualRoughness * perceptualRoughness;
+              float metallic = saturate(materialSample.g);
               float3 baseColor = diffuse;
-              float3 f0 = mix(float3(0.04), baseColor, 0.0);
-              float3 diffuseColor = baseColor * (1.0 - 0.0);
+              float3 f0 = mix(float3(0.04), baseColor, metallic);
+              float3 diffuseColor = baseColor * (1.0 - metallic);
 
               float celestialAngle = saturate(abs(sunHeight) + 0.01) * 75.0 * PI / 180.0;
               float3 sunL = normalize(float3(0.4 * cos(celestialAngle),
@@ -2544,7 +2683,7 @@ public extension Akari
                 float3 dayColor = mix(texture(u_envCube_texture, L).rgb, float3(1.0), saturate(sunHeight));
                 float3 nightColor = mix(texture(u_envCube_texture, L).rgb, float3(0.95, 0.95, 1.00), saturate(-sunHeight));
                 float3 dynamicSky = mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade);
-      
+
                 color += (Fd + Fr) * terminatorSmooth * dynamicSky;
               }
 
@@ -2563,12 +2702,12 @@ public extension Akari
               float fracLod = lod - l0;
 
               float2 ruv = dirToUV(r);
-      
+
               array<texture2d<float>, 6> prefTextures = {
                 u_pref0_texture, u_pref1_texture, u_pref2_texture, 
                 u_pref3_texture, u_pref4_texture, u_pref5_texture
               };
-      
+
               float3 pr0 = prefTextures[int(l0)].sample(u_pref0_texture_smp, ruv).rgb;
               float3 pr1 = prefTextures[int(l1)].sample(u_pref0_texture_smp, ruv).rgb;
 

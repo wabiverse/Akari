@@ -43,6 +43,7 @@
 #include <pxr/pxrns.h>
 #include <Sdf/path.h>
 #include <Gf/matrix4d.h>
+#include <Gf/vec2f.h>
 #include <Gf/vec3f.h>
 #include <Gf/vec3i.h>
 #include <Vt/array.h>
@@ -71,8 +72,12 @@ struct HdAkariMeshData
   SdfPath id;
   VtVec3fArray points;          // object space
   VtVec3iArray triangleIndices; // into points
+  VtVec2fArray uvs;             // atlas space UV, one per triangleIndices corner (see mesh.cpp)
   GfMatrix4d transform = GfMatrix4d(1.0);
   GfVec3f displayColor = GfVec3f(0.8f, 0.8f, 0.8f);
+  float opacity = 1.0f;   // from the bound material's UsdPreviewSurface.
+  float roughness = 0.5f; // UsdPreviewSurface's own default.
+  float metallic = 0.0f;  // UsdPreviewSurface's own default.
   bool visible = true;
   uint64_t dataRevision = 0; // incremented each Sync, GPU cache keys off this.
 
@@ -104,12 +109,15 @@ public:
     }
   }
 
-  /// Update only display properties (transform, color, visibility) on an
-  /// existing mesh without touching geometry or bumping the scene revision,
-  /// avoids copying points/indices entirely.
+  /// Update only display properties (transform, color, opacity, roughness,
+  /// metallic, visibility) on an existing mesh without touching geometry or
+  /// bumping the scene revision, avoids copying points/indices entirely.
   void UpdateMeshDisplay(SdfPath const &id,
                          GfMatrix4d const &xf,
                          GfVec3f const &color,
+                         float opacity,
+                         float roughness,
+                         float metallic,
                          bool visible)
   {
     std::lock_guard<std::mutex> lock(_mutex);
@@ -118,6 +126,9 @@ public:
     auto &m = it->second;
     m.transform = xf;
     m.displayColor = color;
+    m.opacity = opacity;
+    m.roughness = roughness;
+    m.metallic = metallic;
     m.visible = visible;
   }
 
@@ -130,6 +141,7 @@ public:
     if (it == _meshes.end()) return false;
     dst.points = it->second.points;
     dst.triangleIndices = it->second.triangleIndices;
+    dst.uvs = it->second.uvs;
     return true;
   }
 

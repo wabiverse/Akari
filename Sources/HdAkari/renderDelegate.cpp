@@ -45,6 +45,7 @@
 #include "HdAkari/sphere.h"
 #include "HdAkari/cube.h"
 #include "HdAkari/scene.h"
+#include "HdAkari/textureAtlas.h"
 #include "HdAkari/akariBridge.h"
 #include "HdAkari/akariBridgeDelegateCalls.h"
 
@@ -113,18 +114,21 @@ HdAkariRenderDelegate::_Initialize()
   _swiftDelegate = AkariHydraGetRenderDelegate();
   _resourceRegistry = std::make_shared<HdResourceRegistry>();
   _scene = std::make_shared<HdAkariScene>();
-  _renderParam = std::make_shared<HdAkariRenderParam>(_renderEngine, _hgi, _scene);
-  
+  _textureAtlas = std::make_shared<HdAkariTextureAtlas>();
+  _renderParam = std::make_shared<HdAkariRenderParam>(_renderEngine, _hgi, _scene, _textureAtlas);
+
   // references shared with swift.
   Tf_SharedPtrRetainReleaseHelper<HdAkariScene>::Register(_scene);
+  Tf_SharedPtrRetainReleaseHelper<HdAkariTextureAtlas>::Register(_textureAtlas);
   Tf_SharedPtrRetainReleaseHelper<HdAkariRenderParam>::Register(_renderParam);
 }
 
 HdAkariRenderDelegate::~HdAkariRenderDelegate()
 {
   _resourceRegistry.reset();
-  _renderParam.reset(); // references _scene, so tear down before it
+  _renderParam.reset(); // references _scene/_textureAtlas, so tear down before them
   _scene.reset();
+  _textureAtlas.reset();
 }
 
 void
@@ -184,11 +188,11 @@ HdAkariRenderDelegate::CreateRenderPass(HdRenderIndex *index,
 }
 
 HdInstancer *
-HdAkariRenderDelegate::CreateInstancer(HdSceneDelegate * /*delegate*/,
-                                       SdfPath const & /*id*/)
+HdAkariRenderDelegate::CreateInstancer(HdSceneDelegate *delegate,
+                                       SdfPath const &id)
 {
   // todo: support instancing.
-  return nullptr;
+  return new HdInstancer(delegate, id);
 }
 
 void HdAkariRenderDelegate::DestroyInstancer(HdInstancer *instancer) { delete instancer; }
@@ -234,7 +238,7 @@ HdAkariRenderDelegate::CreateSprim(TfToken const &typeId, SdfPath const &sprimId
     return new HdCamera(sprimId);
   }
   // materials are accepted (so binding works) but not yet consumed.
-  return nullptr;
+  return new HdCamera(sprimId);
 }
 
 HdSprim *
@@ -247,7 +251,7 @@ HdAkariRenderDelegate::CreateFallbackSprim(TfToken const &typeId)
   if (className && strcmp(className, "camera") == 0) {
     return new HdCamera(SdfPath::EmptyPath());
   }
-  return nullptr;
+  return new HdCamera(SdfPath::EmptyPath());
 }
 
 void HdAkariRenderDelegate::DestroySprim(HdSprim *sPrim) { delete sPrim; }

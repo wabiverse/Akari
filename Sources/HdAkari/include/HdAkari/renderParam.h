@@ -49,6 +49,7 @@
 PXR_NAMESPACE_OPEN_SCOPE
 
 class HdAkariScene;
+class HdAkariTextureAtlas;
 
 /// @class HdAkariRenderParam
 ///
@@ -62,10 +63,12 @@ class SWIFT_SHARED_REFERENCE(HdAkariRenderParamRetain, HdAkariRenderParamRelease
 HdAkariRenderParam final : public HdRenderParam
 {
 public:
-  HdAkariRenderParam(void *renderEngine, Hgi *hgi, std::shared_ptr<HdAkariScene> scene)
+  HdAkariRenderParam(void *renderEngine, Hgi *hgi, std::shared_ptr<HdAkariScene> scene,
+                     std::shared_ptr<HdAkariTextureAtlas> textureAtlas)
     : _renderEngine(renderEngine),
       _hgi(hgi),
-      _scene(scene)
+      _scene(scene),
+      _textureAtlas(textureAtlas)
   {}
 
   /// The Swift `Akari.RenderEngine` (an `Unmanaged` opaque pointer).
@@ -73,7 +76,10 @@ public:
 
   /// The delegate's mesh registry (owned by the delegate, not this param).
   HdAkariScene SWIFT_RETURNS_UNRETAINED *GetScene() const { return _scene.get(); }
-  
+
+  /// The delegate's shared roughness/metallic/opacity texture atlas.
+  HdAkariTextureAtlas SWIFT_RETURNS_UNRETAINED *GetTextureAtlas() const { return _textureAtlas.get(); }
+
   /// The Hgi shared with Hydra (same device, so AOV textures are shared).
   Hgi *GetHgi() const
   {
@@ -91,6 +97,7 @@ private:
   void *_renderEngine;
   Hgi *_hgi;
   std::shared_ptr<HdAkariScene> _scene;
+  std::shared_ptr<HdAkariTextureAtlas> _textureAtlas;
 
   mutable std::mutex _hgiMutex;
 };
