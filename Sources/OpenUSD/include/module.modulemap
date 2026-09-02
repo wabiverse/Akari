@@ -1,0 +1,5 @@
+module OpenUSD {
+    umbrella header "pxr/pxr.h"
+    requires cplusplus
+    export *
+}

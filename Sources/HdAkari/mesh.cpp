@@ -373,6 +373,19 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
     data.points = pointsVal.UncheckedGet<VtVec3fArray>();
   }
 
+  // object-space bounds, for frustum culling.
+  if (!data.points.empty()) {
+    GfVec3f lo = data.points[0], hi = data.points[0];
+    for (GfVec3f const &p : data.points) {
+      for (int i = 0; i < 3; ++i) {
+        lo[i] = std::min(lo[i], p[i]);
+        hi[i] = std::max(hi[i], p[i]);
+      }
+    }
+    data.extentMin = lo;
+    data.extentMax = hi;
+  }
+
   data.transform = sceneDelegate->GetTransform(id);
   data.visible = sceneDelegate->GetVisible(id);
 

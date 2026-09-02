@@ -81,6 +81,13 @@ public:
   static constexpr int kCellPixels = 256;     // resolution per cell.
   static constexpr int kDefaultGridSize = 24; // fallback if never sized.
 
+  // A material with no bound texture at all bakes to a flat fill sampled at
+  // a single point (see mesh.cpp's ComputeAtlasUvs), so it only needs a
+  // tiny slot rather than a full cell, many of these share one big cell.
+  static constexpr int kConstCellPixels = 4;
+  static constexpr int kConstCellsPerAxis = kCellPixels / kConstCellPixels;
+  static constexpr int kConstSlotsPerBigCell = kConstCellsPerAxis * kConstCellsPerAxis;
+
   /// Sizes the grid to fit the scene's actual unique material count.
   void EnsureGridSized(HdSceneDelegate *sceneDelegate);
 
@@ -112,11 +119,11 @@ public:
   }
 
 private:
-  void BakeChannel(int cellX, int cellY, int channelIndex,
+  void BakeChannel(int px0, int py0, int regionSize, int channelIndex,
                     std::string const &texPath, float fallbackConst,
                     int tileMinU, int tileMinV, int tileMaxU, int tileMaxV,
                     float *outAverage);
-  void BakeColorChannel(int cellX, int cellY,
+  void BakeColorChannel(int px0, int py0, int regionSize,
                          std::string const &texPath, GfVec3f const &fallbackConst,
                          int tileMinU, int tileMinV, int tileMaxU, int tileMaxV);
 
@@ -125,6 +132,9 @@ private:
   // Materials currently being baked by some other thread.
   std::unordered_map<std::string, std::shared_future<HdAkariAtlasCell>> _pending;
   int _nextCell = 0;
+  int _nextConstBigCell = -1;        // big cell currently reserved for const-only slots, -1 = none yet.
+  int _nextConstSlot = 0;            // next free mini-slot within that cell.
+  bool _warnedOverflow = false;      // guards a one-time stderr warning if cells wrap.
   std::vector<uint8_t> _pixels;      // lazily sized to Width()*Height()*4 on first bake.
   std::vector<uint8_t> _colorPixels; // same thing, for diffuseColor.
   std::atomic<bool> _dirty{false};

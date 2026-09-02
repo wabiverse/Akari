@@ -575,20 +575,7 @@ public extension Akari
       }
       graph = parsed
 
-      // set hosek wilkie sky compute buffer.
-      let data = HosekWilkieSkyData.flattenedFloats()
-      data.withUnsafeBufferPointer
-      { buf in
-        runtime.setComputeBuffer("hosekData",
-                                 buf.baseAddress,
-                                 buf.count * MemoryLayout<Float>.stride)
-      }
-
       // set other shader buffer sizes.
-      for level in 0 ..< 6
-      {
-        runtime.setBufferSize("pref\(level)", 128, 64)
-      }
       runtime.setBufferSize("irradiance", 32, 16)
       runtime.setBufferSize("dfg", 128, 128)
 
@@ -670,35 +657,13 @@ public extension Akari
           cube: yes
           [ envCube, f16x4, scale: 1.0 ]
 
-      buffer: pref0
+      buffer: prefiltered
         has depth: no
         textures:
-          [ pref0, f16x4, scale: 0.25 ]
-
-      buffer: pref1
-        has depth: no
-        textures:
-          [ pref1, f16x4, scale: 0.25 ]
-
-      buffer: pref2
-        has depth: no
-        textures:
-          [ pref2, f16x4, scale: 0.25 ]
-
-      buffer: pref3
-        has depth: no
-        textures:
-          [ pref3, f16x4, scale: 0.25 ]
-
-      buffer: pref4
-        has depth: no
-        textures:
-          [ pref4, f16x4, scale: 0.25 ]
-
-      buffer: pref5
-        has depth: no
-        textures:
-          [ pref5, f16x4, scale: 0.25 ]
+          cube: yes
+          size: [ 128 128 ]
+          mip levels: 6
+          [ prefiltered, f16x4 ]
 
       buffer: irradiance
         has depth: no
@@ -731,56 +696,61 @@ public extension Akari
         use shader: hosek-wilkie
         dispatch: [ 64, 64, 6 ]
         threadgroup: [ 16, 16, 1 ]
-        inputs: [hosekData.data]
         outputs: envCube [ envCube ]
 
       pass: prefilter 0
-        draw: quad
-        depth test: never
-        write depth: no
+        draw: compute
         use shader: prefilter-lvl0
         inputs: [envCube.envCube]
-        outputs: pref0 [ pref0 ]
+        dispatch: [ 8, 8, 6 ]
+        threadgroup: [ 16, 16, 1 ]
+        mip: 0
+        outputs: prefiltered [ prefiltered ]
 
       pass: prefilter 1
-        draw: quad
-        depth test: never
-        write depth: no
+        draw: compute
         use shader: prefilter-lvl1
         inputs: [envCube.envCube]
-        outputs: pref1 [ pref1 ]
+        dispatch: [ 4, 4, 6 ]
+        threadgroup: [ 16, 16, 1 ]
+        mip: 1
+        outputs: prefiltered [ prefiltered ]
 
       pass: prefilter 2
-        draw: quad
-        depth test: never
-        write depth: no
+        draw: compute
         use shader: prefilter-lvl2
         inputs: [envCube.envCube]
-        outputs: pref2 [ pref2 ]
+        dispatch: [ 2, 2, 6 ]
+        threadgroup: [ 16, 16, 1 ]
+        mip: 2
+        outputs: prefiltered [ prefiltered ]
 
       pass: prefilter 3
-        draw: quad
-        depth test: never
-        write depth: no
+        draw: compute
         use shader: prefilter-lvl3
         inputs: [envCube.envCube]
-        outputs: pref3 [ pref3 ]
+        dispatch: [ 1, 1, 6 ]
+        threadgroup: [ 16, 16, 1 ]
+        mip: 3
+        outputs: prefiltered [ prefiltered ]
 
       pass: prefilter 4
-        draw: quad
-        depth test: never
-        write depth: no
+        draw: compute
         use shader: prefilter-lvl4
         inputs: [envCube.envCube]
-        outputs: pref4 [ pref4 ]
+        dispatch: [ 1, 1, 6 ]
+        threadgroup: [ 16, 16, 1 ]
+        mip: 4
+        outputs: prefiltered [ prefiltered ]
 
       pass: prefilter 5
-        draw: quad
-        depth test: never
-        write depth: no
+        draw: compute
         use shader: prefilter-lvl5
         inputs: [envCube.envCube]
-        outputs: pref5 [ pref5 ]
+        dispatch: [ 1, 1, 6 ]
+        threadgroup: [ 16, 16, 1 ]
+        mip: 5
+        outputs: prefiltered [ prefiltered ]
 
       pass: irradiance gen
         draw: quad
@@ -811,9 +781,8 @@ public extension Akari
         write depth: no
         use shader: deferred-shade
         inputs: [gbuffer.diffuse, gbuffer.position, gbuffer.normal, gbuffer.material,
-                 envCube.envCube, pref0.pref0, pref1.pref1,
-                 pref2.pref2, pref3.pref3, pref4.pref4,
-                 pref5.pref5, irradiance.irradiance, dfg.dfg]
+                 envCube.envCube, prefiltered.prefiltered,
+                 irradiance.irradiance, dfg.dfg]
         outputs: color [ final ]
 
       pass: tonemap
@@ -886,333 +855,10 @@ public extension Akari
           o_material_texture = float4(mat.r, mat.g, 0.0, 1.0);
           ```
 
-      shader: hosek-wilkie
-        uniforms: [ sunHeight: float ]
-        csh:
-          source:
-          ```glsl
-          layout(std430, binding=0) readonly buffer HosekData {
-            float values[3600];
-          } hosekData;
-
-          const float PI = 3.14159265358979323846;
-          const float SKY_SCALE = 0.02;
-
-          vec3 cubeFaceDir(vec2 uv, int face)
-          {
-            float u = uv.x * 2.0 - 1.0;
-            float v = uv.y * 2.0 - 1.0;
-            if (face == 0) return normalize(vec3( 1.0, -v, -u));
-            if (face == 1) return normalize(vec3(-1.0, -v,  u));
-            if (face == 2) return normalize(vec3( u,  1.0, -v));
-            if (face == 3) return normalize(vec3( u, -1.0,  v));
-            if (face == 4) return normalize(vec3( u, -v,  1.0));
-            return normalize(vec3(-u, -v, -1.0));
-          }
-
-          float hosekWilkieSkyRadiance(mat3 config, float cosTheta, float gamma)
-          {
-            cosTheta = max(cosTheta, 0.0);
-            float expM = exp(config[1][1] * gamma);
-            float rayM = cos(gamma) * cos(gamma);
-            float mieM = (1.0 + rayM) / pow(1.0 + config[2][2] * config[2][2]
-                         - 2.0 * config[2][2] * cos(gamma), 1.5);
-            float zenith = sqrt(cosTheta);
-            return (1.0 + config[0][0] * exp(config[0][1] / (cosTheta + 0.01)))
-                 * (config[0][2] + config[1][0] * expM
-                    + config[1][2] * rayM + config[2][0] * mieM
-                    + config[2][1] * zenith);
-          }
-
-          void main()
-          {
-            ivec3 gid = ivec3(gl_GlobalInvocationID);
-            ivec2 texel = gid.xy;
-            int face = gid.z;
-            ivec2 size = imageSize(out_envCube);
-            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
-
-            float u = (float(texel.x) + 0.5) / float(size.x);
-            float v = (float(texel.y) + 0.5) / float(size.y);
-            vec3 dir = cubeFaceDir(vec2(u, v), face);
-
-            // Map sunHeight [0=horizon, 1=zenith] to a proper elevation angle.
-            // At 0 the sun sits on the horizon, at 1 it is directly overhead.
-            float sunElevAngle = clamp(sunHeight, 0.0, 1.0) * 75.0 * PI / 180.0;
-            vec3 sunDir = normalize(vec3(0.4 * cos(sunElevAngle),
-                                         sin(sunElevAngle),
-                                         -0.5 * cos(sunElevAngle)));
-
-            // --- HORIZON SMOOTHING PREPARATION ---
-            float skyCosTheta = max(dir.y, 0.001);
-            vec3 horizonDir = normalize(vec3(dir.x, 0.0, dir.z));
-            float horizonCosTheta = 0.0;
-
-            float cospsiSky = dot(dir, sunDir);
-            float gammaSky = acos(clamp(cospsiSky, -1.0, 1.0));
-
-            float cospsiHorizon = dot(horizonDir, sunDir);
-            float gammaHorizon = acos(clamp(cospsiHorizon, -1.0, 1.0));
-            // -------------------------------------
-
-            // Hosek-Wilkie cooking
-            float se = pow(clamp(sunHeight, 0.0, 1.0), 1.0 / 3.0);
-            float remE = 1.0 - se;
-            float e0 = remE*remE*remE*remE*remE;
-            float e1 = 5.0*remE*remE*remE*remE*se;
-            float e2 = 10.0*remE*remE*remE*se*se;
-            float e3 = 10.0*remE*remE*se*se*se;
-            float e4 = 5.0*remE*se*se*se*se;
-            float e5 = se*se*se*se*se;
-
-            float r = 0.0, g = 0.0, b = 0.0;
-            float r_hor = 0.0, g_hor = 0.0, b_hor = 0.0;
-
-            for (int ch = 0; ch < 3; ch++) {
-              int chOff = ch * 1080;
-              int radOff = 3240 + ch * 120;
-              vec3 c0 = vec3(0.0), c1 = vec3(0.0), c2 = vec3(0.0);
-
-              for (int i = 0; i < 3; i++) {
-                int b = chOff + 54 + i;
-                float lo = e0*hosekData.values[b] + e1*hosekData.values[b+9]
-                         + e2*hosekData.values[b+18] + e3*hosekData.values[b+27]
-                         + e4*hosekData.values[b+36] + e5*hosekData.values[b+45];
-                int b2 = chOff + 108 + i;
-                float hi = e0*hosekData.values[b2] + e1*hosekData.values[b2+9]
-                         + e2*hosekData.values[b2+18] + e3*hosekData.values[b2+27]
-                         + e4*hosekData.values[b2+36] + e5*hosekData.values[b2+45];
-                c0[i] = 0.8 * lo + 0.2 * hi;
-              }
-              for (int i = 0; i < 3; i++) {
-                int b = chOff + 54 + (i+3);
-                float lo = e0*hosekData.values[b] + e1*hosekData.values[b+9]
-                         + e2*hosekData.values[b+18] + e3*hosekData.values[b+27]
-                         + e4*hosekData.values[b+36] + e5*hosekData.values[b+45];
-                int b2 = chOff + 108 + (i+3);
-                float hi = e0*hosekData.values[b2] + e1*hosekData.values[b2+9]
-                         + e2*hosekData.values[b2+18] + e3*hosekData.values[b2+27]
-                         + e4*hosekData.values[b2+36] + e5*hosekData.values[b2+45];
-                c1[i] = 0.8 * lo + 0.2 * hi;
-              }
-              for (int i = 0; i < 3; i++) {
-                int b = chOff + 54 + (i+6);
-                float lo = e0*hosekData.values[b] + e1*hosekData.values[b+9]
-                         + e2*hosekData.values[b+18] + e3*hosekData.values[b+27]
-                         + e4*hosekData.values[b+36] + e5*hosekData.values[b+45];
-                int b2 = chOff + 108 + (i+6);
-                float hi = e0*hosekData.values[b2] + e1*hosekData.values[b2+9]
-                         + e2*hosekData.values[b2+18] + e3*hosekData.values[b2+27]
-                         + e4*hosekData.values[b2+36] + e5*hosekData.values[b2+45];
-                c2[i] = 0.8 * lo + 0.2 * hi;
-              }
-
-              mat3 cfg = mat3(c0, c1, c2);
-
-              int rb = radOff + 6;
-              float radLo = e0*hosekData.values[rb] + e1*hosekData.values[rb+1]
-                          + e2*hosekData.values[rb+2] + e3*hosekData.values[rb+3]
-                          + e4*hosekData.values[rb+4] + e5*hosekData.values[rb+5];
-              rb = radOff + 12;
-              float radHi = e0*hosekData.values[rb] + e1*hosekData.values[rb+1]
-                          + e2*hosekData.values[rb+2] + e3*hosekData.values[rb+3]
-                          + e4*hosekData.values[rb+4] + e5*hosekData.values[rb+5];
-              float rad = 0.8 * radLo + 0.2 * radHi;
-
-              float sky = hosekWilkieSkyRadiance(cfg, skyCosTheta, gammaSky) * rad;
-
-              if (ch == 0) r = sky;
-              else if (ch == 1) g = sky;
-              else b = sky;
-
-              float hor = hosekWilkieSkyRadiance(cfg, horizonCosTheta, gammaHorizon) * rad;
-              if (ch == 0) r_hor = hor;
-              else if (ch == 1) g_hor = hor;
-              else b_hor = hor;
-            }
-
-            // --- GAUSSIAN BLEND EXECUTION ---
-            vec3 skyColor = vec3(r, g, b);
-            vec3 horizonColor = vec3(r_hor, g_hor, b_hor);
-            float sigma = 0.12;
-            float gaussianFactor = exp(-(dir.y * dir.y) / (2.0 * sigma * sigma));
-            vec3 blendedColor = mix(skyColor, horizonColor, gaussianFactor * 0.5);
-            // ---------------------------------
-
-            // Night fade: smoothly darken below horizon.
-            float nightFade = smoothstep(-0.3, 0.05, sunHeight);
-
-            imageStore(out_envCube, ivec3(texel, face),
-                       vec4(max(blendedColor * SKY_SCALE * nightFade, vec3(0.0)), 1.0));
-          }
-          ```
-
-          source msl:
-          ```msl
-          constexpr constant float PI = 3.14159265358979323846;
-          constexpr constant float SKY_SCALE = 0.02;
-
-          float3 cubeFaceDir(float2 uv, int face)
-          {
-            float u = uv.x * 2.0 - 1.0;
-            float v = uv.y * 2.0 - 1.0;
-            if (face == 0) return normalize(float3( 1.0, -v, -u));
-            if (face == 1) return normalize(float3(-1.0, -v,  u));
-            if (face == 2) return normalize(float3( u,  1.0,  v));
-            if (face == 3) return normalize(float3( u, -1.0, -v));
-            if (face == 4) return normalize(float3( u, -v,  1.0));
-            return normalize(float3(-u, -v, -1.0));
-          }
-
-          float hosekWilkieSkyRadiance(float3x3 config, float cosTheta, float gamma)
-          {
-            cosTheta = max(cosTheta, 0.0);
-            float expM = exp(config[1][1] * gamma);
-            float rayM = cos(gamma) * cos(gamma);
-            float mieM = (1.0 + rayM) / pow(1.0 + config[2][2] * config[2][2]
-                         - 2.0 * config[2][2] * cos(gamma), 1.5);
-            float zenith = sqrt(cosTheta);
-            return (1.0 + config[0][0] * exp(config[0][1] / (cosTheta + 0.01)))
-                 * (config[0][2] + config[1][0] * expM
-                    + config[1][2] * rayM + config[2][0] * mieM
-                    + config[2][1] * zenith);
-          }
-
-          //@main
-          {
-            uint2 texel = gid.xy;
-            uint face = gid.z;
-            uint2 size = uint2(out_envCube.get_width(), out_envCube.get_height());
-            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
-
-            float u = (float(texel.x) + 0.5) / float(size.x);
-            float v = (float(texel.y) + 0.5) / float(size.y);
-            float3 dir = cubeFaceDir(float2(u, v), int(face));
-
-            float sunElevAngle = clamp(sunHeight, 0.0, 1.0) * 75.0 * PI / 180.0;
-            float3 sunDir = normalize(float3(0.4 * cos(sunElevAngle),
-                                             sin(sunElevAngle),
-                                             -0.5 * cos(sunElevAngle)));
-
-            // --- HORIZON SMOOTHING PREPARATION ---
-            float skyCosTheta = max(dir.y, 0.001);
-            float3 horizonDir = normalize(float3(dir.x, 0.0, dir.z));
-            float horizonCosTheta = 0.0;
-
-            float cospsiSky = dot(dir, sunDir);
-            float gammaSky = acos(clamp(cospsiSky, -1.0, 1.0));
-
-            float cospsiHorizon = dot(horizonDir, sunDir);
-            float gammaHorizon = acos(clamp(cospsiHorizon, -1.0, 1.0));
-            // -------------------------------------
-
-            float se = pow(clamp(sunHeight, 0.0, 1.0), 1.0 / 3.0);
-            float remE = 1.0 - se;
-            float e0 = remE*remE*remE*remE*remE;
-            float e1 = 5.0*remE*remE*remE*remE*se;
-            float e2 = 10.0*remE*remE*remE*se*se;
-            float e3 = 10.0*remE*remE*se*se*se;
-            float e4 = 5.0*remE*se*se*se*se;
-            float e5 = se*se*se*se*se;
-
-            float r = 0.0, g = 0.0, b = 0.0;
-            float r_hor = 0.0, g_hor = 0.0, b_hor = 0.0;
-
-            for (int ch = 0; ch < 3; ch++) {
-              int chOff = ch * 1080;
-              int radOff = 3240 + ch * 120;
-              float3 c0 = float3(0.0), c1 = float3(0.0), c2 = float3(0.0);
-
-              for (int i = 0; i < 3; i++) {
-                int b = chOff + 54 + i;
-                float lo = e0*data[b] + e1*data[b+9] + e2*data[b+18]
-                         + e3*data[b+27] + e4*data[b+36] + e5*data[b+45];
-                int b2 = chOff + 108 + i;
-                float hi = e0*data[b2] + e1*data[b2+9] + e2*data[b2+18]
-                         + e3*data[b2+27] + e4*data[b2+36] + e5*data[b2+45];
-                c0[i] = 0.8 * lo + 0.2 * hi;
-              }
-              for (int i = 0; i < 3; i++) {
-                int b = chOff + 54 + (i+3);
-                float lo = e0*data[b] + e1*data[b+9] + e2*data[b+18]
-                         + e3*data[b+27] + e4*data[b+36] + e5*data[b+45];
-                int b2 = chOff + 108 + (i+3);
-                float hi = e0*data[b2] + e1*data[b2+9] + e2*data[b2+18]
-                         + e3*data[b2+27] + e4*data[b2+36] + e5*data[b2+45];
-                c1[i] = 0.8 * lo + 0.2 * hi;
-              }
-              for (int i = 0; i < 3; i++) {
-                int b = chOff + 54 + (i+6);
-                float lo = e0*data[b] + e1*data[b+9] + e2*data[b+18]
-                         + e3*data[b+27] + e4*data[b+36] + e5*data[b+45];
-                int b2 = chOff + 108 + (i+6);
-                float hi = e0*data[b2] + e1*data[b2+9] + e2*data[b2+18]
-                         + e3*data[b2+27] + e4*data[b2+36] + e5*data[b2+45];
-                c2[i] = 0.8 * lo + 0.2 * hi;
-              }
-
-              float3x3 cfg = float3x3(c0, c1, c2);
-
-              int rb = radOff + 6;
-              float radLo = e0*data[rb] + e1*data[rb+1] + e2*data[rb+2]
-                          + e3*data[rb+3] + e4*data[rb+4] + e5*data[rb+5];
-              rb = radOff + 12;
-              float radHi = e0*data[rb] + e1*data[rb+1] + e2*data[rb+2]
-                          + e3*data[rb+3] + e4*data[rb+4] + e5*data[rb+5];
-              float rad = 0.8 * radLo + 0.2 * radHi;
-
-              float sky = hosekWilkieSkyRadiance(cfg, skyCosTheta, gammaSky) * rad;
-
-              if (ch == 0) r = sky;
-              else if (ch == 1) g = sky;
-              else b = sky;
-
-              float hor = hosekWilkieSkyRadiance(cfg, horizonCosTheta, gammaHorizon) * rad;
-              if (ch == 0) r_hor = hor;
-              else if (ch == 1) g_hor = hor;
-              else b_hor = hor;
-            }
-
-            // --- GAUSSIAN BLEND EXECUTION ---
-            float3 skyColor = float3(r, g, b);
-            float3 horizonColor = float3(r_hor, g_hor, b_hor);
-            float sigma = 0.12;
-            float gaussianFactor = exp(-(dir.y * dir.y) / (2.0 * sigma * sigma));
-            float3 blendedColor = mix(skyColor, horizonColor, gaussianFactor * 0.5);
-            // ---------------------------------
-
-            float nightFade = smoothstep(-0.3, 0.05, sunHeight);
-
-            out_envCube.write(half4(half3(max(blendedColor * SKY_SCALE * nightFade, float3(0.0))), 1.0h),
-                              ushort2(texel), ushort(face));
-          }
-          ```
-
       shader: prefilter-lvl0
         uniforms: [ u_envCube_texture: samplerCube ]
-        varying:  [ texCoord: vec2 ]
 
-        vsh:
-          attributes:
-          [ a_position: vec3 <- position,
-            a_uv: vec2 <- texcoord ]
-
-          source:
-          ```glsl
-          void main()
-          {
-            var.texCoord = a_uv;
-            gl_Position = vec4(a_position, 1.0);
-          }
-          ```
-
-          source msl:
-          ```msl
-          var.texCoord = a_uv;
-          gl_Position = float4(a_position, 1.0);
-          ```
-
-        fsh:
+        csh:
           source:
           ```glsl
           const float PI = 3.1415926536;
@@ -1243,22 +889,29 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          vec2 dirToUV(vec3 dir)
+          vec3 cubeFaceDir(vec2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return vec2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(vec3( 1.0, -v, -u));
+            if (face == 1) return normalize(vec3(-1.0, -v,  u));
+            if (face == 2) return normalize(vec3( u,  1.0, -v));
+            if (face == 3) return normalize(vec3( u, -1.0,  v));
+            if (face == 4) return normalize(vec3( u, -v,  1.0));
+            return normalize(vec3(-u, -v, -1.0));
           }
 
           void main()
           {
-            vec2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            vec3 R = vec3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            ivec3 gid = ivec3(gl_GlobalInvocationID);
+            ivec2 texel = gid.xy;
+            int face = gid.z;
+            ivec2 size = imageSize(o_prefiltered_texture);
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            vec3 R = cubeFaceDir(vec2(u, v), face);
 
             vec3 color = vec3(0.0);
             float totalWeight = 0.0;
@@ -1274,13 +927,14 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref0_texture = vec4(color / max(totalWeight, 1e-4), 1.0);
+            imageStore(o_prefiltered_texture, ivec3(texel, face),
+                       vec4(color / max(totalWeight, 1e-4), 1.0));
           }
           ```
 
           source msl:
           ```msl
-          constexpr constant float PI = 3.1415926536;
+          constexpr constant float PI = 3.14159265358979323846;
           constexpr constant float kRoughness = 0.0;
 
           float AkariRadicalInverse(uint a)
@@ -1307,22 +961,28 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          float2 dirToUV(float3 dir)
+          float3 cubeFaceDir(float2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan2(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return float2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(float3( 1.0, -v, -u));
+            if (face == 1) return normalize(float3(-1.0, -v,  u));
+            if (face == 2) return normalize(float3( u,  1.0,  v));
+            if (face == 3) return normalize(float3( u, -1.0, -v));
+            if (face == 4) return normalize(float3( u, -v,  1.0));
+            return normalize(float3(-u, -v, -1.0));
           }
 
           //@main
           {
-            float2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            float3 R = float3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            uint2 texel = gid.xy;
+            uint face = gid.z;
+            uint2 size = uint2(o_prefiltered_texture.get_width(), o_prefiltered_texture.get_height());
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            float3 R = cubeFaceDir(float2(u, v), int(face));
 
             float3 color = float3(0.0);
             float totalWeight = 0.0;
@@ -1338,35 +998,16 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref0_texture = float4(color / max(totalWeight, 1e-4), 1.0);
+            o_prefiltered_texture.write(
+                half4(half3(color / max(totalWeight, 1e-4)), 1.0h),
+                ushort2(texel), ushort(face));
           }
           ```
 
       shader: prefilter-lvl1
         uniforms: [ u_envCube_texture: samplerCube ]
-        varying:  [ texCoord: vec2 ]
 
-        vsh:
-          attributes:
-          [ a_position: vec3 <- position,
-            a_uv: vec2 <- texcoord ]
-
-          source:
-          ```glsl
-          void main()
-          {
-            var.texCoord = a_uv;
-            gl_Position = vec4(a_position, 1.0);
-          }
-          ```
-
-          source msl:
-          ```msl
-          var.texCoord = a_uv;
-          gl_Position = float4(a_position, 1.0);
-          ```
-
-        fsh:
+        csh:
           source:
           ```glsl
           const float PI = 3.1415926536;
@@ -1397,22 +1038,29 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          vec2 dirToUV(vec3 dir)
+          vec3 cubeFaceDir(vec2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return vec2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(vec3( 1.0, -v, -u));
+            if (face == 1) return normalize(vec3(-1.0, -v,  u));
+            if (face == 2) return normalize(vec3( u,  1.0, -v));
+            if (face == 3) return normalize(vec3( u, -1.0,  v));
+            if (face == 4) return normalize(vec3( u, -v,  1.0));
+            return normalize(vec3(-u, -v, -1.0));
           }
 
           void main()
           {
-            vec2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            vec3 R = vec3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            ivec3 gid = ivec3(gl_GlobalInvocationID);
+            ivec2 texel = gid.xy;
+            int face = gid.z;
+            ivec2 size = imageSize(o_prefiltered_texture);
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            vec3 R = cubeFaceDir(vec2(u, v), face);
 
             vec3 color = vec3(0.0);
             float totalWeight = 0.0;
@@ -1428,13 +1076,14 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref1_texture = vec4(color / max(totalWeight, 1e-4), 1.0);
+            imageStore(o_prefiltered_texture, ivec3(texel, face),
+                       vec4(color / max(totalWeight, 1e-4), 1.0));
           }
           ```
 
           source msl:
           ```msl
-          constexpr constant float PI = 3.1415926536;
+          constexpr constant float PI = 3.14159265358979323846;
           constexpr constant float kRoughness = 0.2;
 
           float AkariRadicalInverse(uint a)
@@ -1462,22 +1111,28 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          float2 dirToUV(float3 dir)
+          float3 cubeFaceDir(float2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan2(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return float2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(float3( 1.0, -v, -u));
+            if (face == 1) return normalize(float3(-1.0, -v,  u));
+            if (face == 2) return normalize(float3( u,  1.0,  v));
+            if (face == 3) return normalize(float3( u, -1.0, -v));
+            if (face == 4) return normalize(float3( u, -v,  1.0));
+            return normalize(float3(-u, -v, -1.0));
           }
 
           //@main
           {
-            float2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            float3 R = float3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            uint2 texel = gid.xy;
+            uint face = gid.z;
+            uint2 size = uint2(o_prefiltered_texture.get_width(), o_prefiltered_texture.get_height());
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            float3 R = cubeFaceDir(float2(u, v), int(face));
 
             float3 color = float3(0.0);
             float totalWeight = 0.0;
@@ -1493,35 +1148,16 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref1_texture = float4(color / max(totalWeight, 1e-4), 1.0);
+            o_prefiltered_texture.write(
+                half4(half3(color / max(totalWeight, 1e-4)), 1.0h),
+                ushort2(texel), ushort(face));
           }
           ```
 
       shader: prefilter-lvl2
         uniforms: [ u_envCube_texture: samplerCube ]
-        varying:  [ texCoord: vec2 ]
 
-        vsh:
-          attributes:
-          [ a_position: vec3 <- position,
-            a_uv: vec2 <- texcoord ]
-
-          source:
-          ```glsl
-          void main()
-          {
-            var.texCoord = a_uv;
-            gl_Position = vec4(a_position, 1.0);
-          }
-          ```
-
-          source msl:
-          ```msl
-          var.texCoord = a_uv;
-          gl_Position = float4(a_position, 1.0);
-          ```
-
-        fsh:
+        csh:
           source:
           ```glsl
           const float PI = 3.1415926536;
@@ -1552,22 +1188,29 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          vec2 dirToUV(vec3 dir)
+          vec3 cubeFaceDir(vec2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return vec2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(vec3( 1.0, -v, -u));
+            if (face == 1) return normalize(vec3(-1.0, -v,  u));
+            if (face == 2) return normalize(vec3( u,  1.0, -v));
+            if (face == 3) return normalize(vec3( u, -1.0,  v));
+            if (face == 4) return normalize(vec3( u, -v,  1.0));
+            return normalize(vec3(-u, -v, -1.0));
           }
 
           void main()
           {
-            vec2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            vec3 R = vec3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            ivec3 gid = ivec3(gl_GlobalInvocationID);
+            ivec2 texel = gid.xy;
+            int face = gid.z;
+            ivec2 size = imageSize(o_prefiltered_texture);
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            vec3 R = cubeFaceDir(vec2(u, v), face);
 
             vec3 color = vec3(0.0);
             float totalWeight = 0.0;
@@ -1583,13 +1226,14 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref2_texture = vec4(color / max(totalWeight, 1e-4), 1.0);
+            imageStore(o_prefiltered_texture, ivec3(texel, face),
+                       vec4(color / max(totalWeight, 1e-4), 1.0));
           }
           ```
 
           source msl:
           ```msl
-          constexpr constant float PI = 3.1415926536;
+          constexpr constant float PI = 3.14159265358979323846;
           constexpr constant float kRoughness = 0.4;
 
           float AkariRadicalInverse(uint a)
@@ -1617,22 +1261,28 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          float2 dirToUV(float3 dir)
+          float3 cubeFaceDir(float2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan2(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return float2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(float3( 1.0, -v, -u));
+            if (face == 1) return normalize(float3(-1.0, -v,  u));
+            if (face == 2) return normalize(float3( u,  1.0,  v));
+            if (face == 3) return normalize(float3( u, -1.0, -v));
+            if (face == 4) return normalize(float3( u, -v,  1.0));
+            return normalize(float3(-u, -v, -1.0));
           }
 
           //@main
           {
-            float2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            float3 R = float3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            uint2 texel = gid.xy;
+            uint face = gid.z;
+            uint2 size = uint2(o_prefiltered_texture.get_width(), o_prefiltered_texture.get_height());
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            float3 R = cubeFaceDir(float2(u, v), int(face));
 
             float3 color = float3(0.0);
             float totalWeight = 0.0;
@@ -1648,35 +1298,16 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref2_texture = float4(color / max(totalWeight, 1e-4), 1.0);
+            o_prefiltered_texture.write(
+                half4(half3(color / max(totalWeight, 1e-4)), 1.0h),
+                ushort2(texel), ushort(face));
           }
           ```
 
       shader: prefilter-lvl3
         uniforms: [ u_envCube_texture: samplerCube ]
-        varying:  [ texCoord: vec2 ]
 
-        vsh:
-          attributes:
-          [ a_position: vec3 <- position,
-            a_uv: vec2 <- texcoord ]
-
-          source:
-          ```glsl
-          void main()
-          {
-            var.texCoord = a_uv;
-            gl_Position = vec4(a_position, 1.0);
-          }
-          ```
-
-          source msl:
-          ```msl
-          var.texCoord = a_uv;
-          gl_Position = float4(a_position, 1.0);
-          ```
-
-        fsh:
+        csh:
           source:
           ```glsl
           const float PI = 3.1415926536;
@@ -1707,22 +1338,29 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          vec2 dirToUV(vec3 dir)
+          vec3 cubeFaceDir(vec2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return vec2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(vec3( 1.0, -v, -u));
+            if (face == 1) return normalize(vec3(-1.0, -v,  u));
+            if (face == 2) return normalize(vec3( u,  1.0, -v));
+            if (face == 3) return normalize(vec3( u, -1.0,  v));
+            if (face == 4) return normalize(vec3( u, -v,  1.0));
+            return normalize(vec3(-u, -v, -1.0));
           }
 
           void main()
           {
-            vec2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            vec3 R = vec3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            ivec3 gid = ivec3(gl_GlobalInvocationID);
+            ivec2 texel = gid.xy;
+            int face = gid.z;
+            ivec2 size = imageSize(o_prefiltered_texture);
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            vec3 R = cubeFaceDir(vec2(u, v), face);
 
             vec3 color = vec3(0.0);
             float totalWeight = 0.0;
@@ -1738,13 +1376,14 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref3_texture = vec4(color / max(totalWeight, 1e-4), 1.0);
+            imageStore(o_prefiltered_texture, ivec3(texel, face),
+                       vec4(color / max(totalWeight, 1e-4), 1.0));
           }
           ```
 
           source msl:
           ```msl
-          constexpr constant float PI = 3.1415926536;
+          constexpr constant float PI = 3.14159265358979323846;
           constexpr constant float kRoughness = 0.6;
 
           float AkariRadicalInverse(uint a)
@@ -1772,22 +1411,28 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          float2 dirToUV(float3 dir)
+          float3 cubeFaceDir(float2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan2(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return float2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(float3( 1.0, -v, -u));
+            if (face == 1) return normalize(float3(-1.0, -v,  u));
+            if (face == 2) return normalize(float3( u,  1.0,  v));
+            if (face == 3) return normalize(float3( u, -1.0, -v));
+            if (face == 4) return normalize(float3( u, -v,  1.0));
+            return normalize(float3(-u, -v, -1.0));
           }
 
           //@main
           {
-            float2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            float3 R = float3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            uint2 texel = gid.xy;
+            uint face = gid.z;
+            uint2 size = uint2(o_prefiltered_texture.get_width(), o_prefiltered_texture.get_height());
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            float3 R = cubeFaceDir(float2(u, v), int(face));
 
             float3 color = float3(0.0);
             float totalWeight = 0.0;
@@ -1803,35 +1448,16 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref3_texture = float4(color / max(totalWeight, 1e-4), 1.0);
+            o_prefiltered_texture.write(
+                half4(half3(color / max(totalWeight, 1e-4)), 1.0h),
+                ushort2(texel), ushort(face));
           }
           ```
 
       shader: prefilter-lvl4
         uniforms: [ u_envCube_texture: samplerCube ]
-        varying:  [ texCoord: vec2 ]
 
-        vsh:
-          attributes:
-          [ a_position: vec3 <- position,
-            a_uv: vec2 <- texcoord ]
-
-          source:
-          ```glsl
-          void main()
-          {
-            var.texCoord = a_uv;
-            gl_Position = vec4(a_position, 1.0);
-          }
-          ```
-
-          source msl:
-          ```msl
-          var.texCoord = a_uv;
-          gl_Position = float4(a_position, 1.0);
-          ```
-
-        fsh:
+        csh:
           source:
           ```glsl
           const float PI = 3.1415926536;
@@ -1862,22 +1488,29 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          vec2 dirToUV(vec3 dir)
+          vec3 cubeFaceDir(vec2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return vec2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(vec3( 1.0, -v, -u));
+            if (face == 1) return normalize(vec3(-1.0, -v,  u));
+            if (face == 2) return normalize(vec3( u,  1.0, -v));
+            if (face == 3) return normalize(vec3( u, -1.0,  v));
+            if (face == 4) return normalize(vec3( u, -v,  1.0));
+            return normalize(vec3(-u, -v, -1.0));
           }
 
           void main()
           {
-            vec2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            vec3 R = vec3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            ivec3 gid = ivec3(gl_GlobalInvocationID);
+            ivec2 texel = gid.xy;
+            int face = gid.z;
+            ivec2 size = imageSize(o_prefiltered_texture);
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            vec3 R = cubeFaceDir(vec2(u, v), face);
 
             vec3 color = vec3(0.0);
             float totalWeight = 0.0;
@@ -1893,13 +1526,14 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref4_texture = vec4(color / max(totalWeight, 1e-4), 1.0);
+            imageStore(o_prefiltered_texture, ivec3(texel, face),
+                       vec4(color / max(totalWeight, 1e-4), 1.0));
           }
           ```
 
           source msl:
           ```msl
-          constexpr constant float PI = 3.1415926536;
+          constexpr constant float PI = 3.14159265358979323846;
           constexpr constant float kRoughness = 0.8;
 
           float AkariRadicalInverse(uint a)
@@ -1927,25 +1561,28 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          float2 dirToUV(float3 dir)
+          float3 cubeFaceDir(float2 uv, int face)
           {
-            // Guard the pole singularity: atan2(x, z) is undefined/NaN exactly at
-            // x == z == 0, and extremely sensitive to floating-point noise near
-            // it. See the GLSL variant for the full explanation.
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan2(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return float2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(float3( 1.0, -v, -u));
+            if (face == 1) return normalize(float3(-1.0, -v,  u));
+            if (face == 2) return normalize(float3( u,  1.0,  v));
+            if (face == 3) return normalize(float3( u, -1.0, -v));
+            if (face == 4) return normalize(float3( u, -v,  1.0));
+            return normalize(float3(-u, -v, -1.0));
           }
 
           //@main
           {
-            float2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            float3 R = float3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            uint2 texel = gid.xy;
+            uint face = gid.z;
+            uint2 size = uint2(o_prefiltered_texture.get_width(), o_prefiltered_texture.get_height());
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            float3 R = cubeFaceDir(float2(u, v), int(face));
 
             float3 color = float3(0.0);
             float totalWeight = 0.0;
@@ -1961,35 +1598,16 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref4_texture = float4(color / max(totalWeight, 1e-4), 1.0);
+            o_prefiltered_texture.write(
+                half4(half3(color / max(totalWeight, 1e-4)), 1.0h),
+                ushort2(texel), ushort(face));
           }
           ```
 
       shader: prefilter-lvl5
         uniforms: [ u_envCube_texture: samplerCube ]
-        varying:  [ texCoord: vec2 ]
 
-        vsh:
-          attributes:
-          [ a_position: vec3 <- position,
-            a_uv: vec2 <- texcoord ]
-
-          source:
-          ```glsl
-          void main()
-          {
-            var.texCoord = a_uv;
-            gl_Position = vec4(a_position, 1.0);
-          }
-          ```
-
-          source msl:
-          ```msl
-          var.texCoord = a_uv;
-          gl_Position = float4(a_position, 1.0);
-          ```
-
-        fsh:
+        csh:
           source:
           ```glsl
           const float PI = 3.1415926536;
@@ -2020,22 +1638,29 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          vec2 dirToUV(vec3 dir)
+          vec3 cubeFaceDir(vec2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return vec2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(vec3( 1.0, -v, -u));
+            if (face == 1) return normalize(vec3(-1.0, -v,  u));
+            if (face == 2) return normalize(vec3( u,  1.0, -v));
+            if (face == 3) return normalize(vec3( u, -1.0,  v));
+            if (face == 4) return normalize(vec3( u, -v,  1.0));
+            return normalize(vec3(-u, -v, -1.0));
           }
 
           void main()
           {
-            vec2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            vec3 R = vec3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            ivec3 gid = ivec3(gl_GlobalInvocationID);
+            ivec2 texel = gid.xy;
+            int face = gid.z;
+            ivec2 size = imageSize(o_prefiltered_texture);
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            vec3 R = cubeFaceDir(vec2(u, v), face);
 
             vec3 color = vec3(0.0);
             float totalWeight = 0.0;
@@ -2051,13 +1676,14 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref5_texture = vec4(color / max(totalWeight, 1e-4), 1.0);
+            imageStore(o_prefiltered_texture, ivec3(texel, face),
+                       vec4(color / max(totalWeight, 1e-4), 1.0));
           }
           ```
 
           source msl:
           ```msl
-          constexpr constant float PI = 3.1415926536;
+          constexpr constant float PI = 3.14159265358979323846;
           constexpr constant float kRoughness = 1.0;
 
           float AkariRadicalInverse(uint a)
@@ -2085,22 +1711,28 @@ public extension Akari
             return normalize(tangentX * H.x + tangentY * H.y + normal * H.z);
           }
 
-          float2 dirToUV(float3 dir)
+          float3 cubeFaceDir(float2 uv, int face)
           {
-            float horiz2 = dir.x * dir.x + dir.z * dir.z;
-            float u = (horiz2 > 1e-12)
-                ? atan2(dir.x, dir.z) * (0.5 / PI) + 0.5
-                : 0.5;
-            float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-            return float2(u, v);
+            float u = uv.x * 2.0 - 1.0;
+            float v = uv.y * 2.0 - 1.0;
+            if (face == 0) return normalize(float3( 1.0, -v, -u));
+            if (face == 1) return normalize(float3(-1.0, -v,  u));
+            if (face == 2) return normalize(float3( u,  1.0,  v));
+            if (face == 3) return normalize(float3( u, -1.0, -v));
+            if (face == 4) return normalize(float3( u, -v,  1.0));
+            return normalize(float3(-u, -v, -1.0));
           }
 
           //@main
           {
-            float2 uv = var.texCoord;
-            float theta = uv.y * PI;
-            float phi = (uv.x - 0.5) * 2.0 * PI;
-            float3 R = float3(sin(theta) * sin(phi), cos(theta), sin(theta) * cos(phi));
+            uint2 texel = gid.xy;
+            uint face = gid.z;
+            uint2 size = uint2(o_prefiltered_texture.get_width(), o_prefiltered_texture.get_height());
+            if (texel.x >= size.x || texel.y >= size.y || face >= 6) return;
+
+            float u = (float(texel.x) + 0.5) / float(size.x);
+            float v = (float(texel.y) + 0.5) / float(size.y);
+            float3 R = cubeFaceDir(float2(u, v), int(face));
 
             float3 color = float3(0.0);
             float totalWeight = 0.0;
@@ -2116,7 +1748,9 @@ public extension Akari
                 totalWeight += dotNL;
               }
             }
-            o_pref5_texture = float4(color / max(totalWeight, 1e-4), 1.0);
+            o_prefiltered_texture.write(
+                half4(half3(color / max(totalWeight, 1e-4)), 1.0h),
+                ushort2(texel), ushort(face));
           }
           ```
 
@@ -2414,12 +2048,7 @@ public extension Akari
                     u_diffuse_texture: sampler2d,
                     u_material_texture: sampler2d,
                     u_envCube_texture: samplerCube,
-                    u_pref0_texture: sampler2d,
-                    u_pref1_texture: sampler2d,
-                    u_pref2_texture: sampler2d,
-                    u_pref3_texture: sampler2d,
-                    u_pref4_texture: sampler2d,
-                    u_pref5_texture: sampler2d,
+                    u_prefiltered_texture: samplerCube,
                     u_irradiance_texture: sampler2d,
                     u_dfg_texture: sampler2d,
                     u_view: mat4 <- auto-view-matrix,
@@ -2559,21 +2188,8 @@ public extension Akari
 
             float lod = 5.0 * perceptualRoughness * (2.0 - perceptualRoughness);
             lod = clamp(lod, 0.0, 5.0);
-            float l0 = floor(lod);
-            float l1 = min(l0 + 1.0, 5.0);
-            float fracLod = lod - l0;
 
-            vec2 ruv = dirToUV(r);
-
-            sampler2D prefTextures[6] = sampler2D[6](
-              u_pref0_texture, u_pref1_texture, u_pref2_texture,
-              u_pref3_texture, u_pref4_texture, u_pref5_texture
-            );
-
-            vec3 pr0 = texture(prefTextures[int(l0)], ruv).rgb;
-            vec3 pr1 = texture(prefTextures[int(l1)], ruv).rgb;
-
-            vec3 prefilteredRadiance = mix(pr0, pr1, fracLod);
+            vec3 prefilteredRadiance = textureLod(u_prefiltered_texture, r, lod).rgb;
             vec3 Fr = E * prefilteredRadiance * energyCompensation;
 
             vec3 irradiance = texture(u_irradiance_texture, dirToUV(N)).rgb;
@@ -2697,21 +2313,8 @@ public extension Akari
 
               float lod = 5.0 * perceptualRoughness * (2.0 - perceptualRoughness);
               lod = clamp(lod, 0.0, 5.0);
-              float l0 = floor(lod);
-              float l1 = min(l0 + 1.0, 5.0);
-              float fracLod = lod - l0;
 
-              float2 ruv = dirToUV(r);
-
-              array<texture2d<float>, 6> prefTextures = {
-                u_pref0_texture, u_pref1_texture, u_pref2_texture, 
-                u_pref3_texture, u_pref4_texture, u_pref5_texture
-              };
-
-              float3 pr0 = prefTextures[int(l0)].sample(u_pref0_texture_smp, ruv).rgb;
-              float3 pr1 = prefTextures[int(l1)].sample(u_pref0_texture_smp, ruv).rgb;
-
-              float3 prefilteredRadiance = mix(pr0, pr1, fracLod);
+              float3 prefilteredRadiance = textureLod(u_prefiltered_texture, r, lod).rgb;
               float3 Fr = E * prefilteredRadiance * energyCompensation;
 
               float3 irradiance = texture(u_irradiance_texture, dirToUV(N)).rgb;

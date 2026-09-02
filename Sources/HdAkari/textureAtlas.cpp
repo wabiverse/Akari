@@ -283,19 +283,26 @@ HdAkariTextureAtlas::EnsureGridSized(HdSceneDelegate *sceneDelegate)
 
     std::mutex mergeMutex;
     std::unordered_set<SdfPath, SdfPath::Hash> uniqueMaterials;
+    size_t constOnlyCount = 0;
     WorkParallelForN(rprimIds.size(), [&](size_t begin, size_t end) {
       std::unordered_set<SdfPath, SdfPath::Hash> local;
+      size_t localConst = 0;
       for (size_t i = begin; i < end; ++i) {
+        // a material-less mesh gets a mini-slot (GetOrBakeCell's isConstOnly
+        // path), not its own full cell, count it separately.
         SdfPath matId = sceneDelegate->GetMaterialId(rprimIds[i]);
-        if (!matId.IsEmpty()) local.insert(matId);
+        if (matId.IsEmpty()) ++localConst;
+        else local.insert(matId);
       }
-      if (!local.empty()) {
-        std::lock_guard<std::mutex> lock(mergeMutex);
-        uniqueMaterials.insert(local.begin(), local.end());
-      }
+      std::lock_guard<std::mutex> lock(mergeMutex);
+      if (!local.empty()) uniqueMaterials.insert(local.begin(), local.end());
+      constOnlyCount += localConst;
     }, /*grainSize=*/64);
 
-    size_t withHeadroom = uniqueMaterials.size() + uniqueMaterials.size() / 4 + 1;
+    size_t bigCellsForConst =
+        (constOnlyCount + kConstSlotsPerBigCell - 1) / kConstSlotsPerBigCell;
+    size_t totalBigCells = uniqueMaterials.size() + bigCellsForConst;
+    size_t withHeadroom = totalBigCells + totalBigCells / 4 + 1;
     int grid = 1;
     while (size_t(grid) * size_t(grid) < withHeadroom) ++grid;
     grid = std::max(grid, kDefaultGridSize);
@@ -311,12 +318,18 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
                                    float opacityThreshold,
                                    std::string const &colorPath, GfVec3f const &colorConst)
 {
-  int cellX = 0, cellY = 0;
   HdAkariAtlasCell cell;
   int tileMinU = INT_MAX, tileMinV = INT_MAX, tileMaxU = INT_MIN, tileMaxV = INT_MIN;
   std::promise<HdAkariAtlasCell> promise;
   int gridSize = _gridSize.load(std::memory_order_relaxed);
   int width = gridSize * kCellPixels;
+
+  // no texture bound anywhere -> this bakes to a flat fill sampled at a
+  // single point (mesh.cpp's ComputeAtlasUvs), so it only needs a tiny
+  // slot, densely packed into a shared reserved cell.
+  bool isConstOnly = roughnessPath.empty() && metallicPath.empty() &&
+                     opacityPath.empty() && colorPath.empty();
+  int px0 = 0, py0 = 0, regionSize = kCellPixels;
 
   {
     std::unique_lock<std::mutex> lock(_mutex);
@@ -338,11 +351,33 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
       _colorPixels.assign(size_t(width) * size_t(width) * 4, uint8_t(0));
     }
 
-    // share cells using round-robin.
-    int cellIndex = _nextCell % (gridSize * gridSize);
-    ++_nextCell;
-    cellX = cellIndex % gridSize;
-    cellY = cellIndex / gridSize;
+    if (isConstOnly) {
+      if (_nextConstBigCell < 0 || _nextConstSlot >= kConstSlotsPerBigCell) {
+        _nextConstBigCell = _nextCell % (gridSize * gridSize);
+        ++_nextCell;
+        _nextConstSlot = 0;
+      }
+      int slot = _nextConstSlot++;
+      int bigCellX = _nextConstBigCell % gridSize;
+      int bigCellY = _nextConstBigCell / gridSize;
+      px0 = bigCellX * kCellPixels + (slot % kConstCellsPerAxis) * kConstCellPixels;
+      py0 = bigCellY * kCellPixels + (slot / kConstCellsPerAxis) * kConstCellPixels;
+      regionSize = kConstCellPixels;
+    } else {
+      // share cells using round-robin.
+      int cellIndex = _nextCell % (gridSize * gridSize);
+      ++_nextCell;
+      px0 = (cellIndex % gridSize) * kCellPixels;
+      py0 = (cellIndex / gridSize) * kCellPixels;
+      regionSize = kCellPixels;
+    }
+    if (_nextCell > gridSize * gridSize && !_warnedOverflow) {
+      _warnedOverflow = true;
+      std::fprintf(stderr,
+          "HdAkariTextureAtlas: exceeded its %dx%d grid - cells are now "
+          "aliasing, unrelated meshes will share baked textures.\n",
+          gridSize, gridSize);
+    }
 
     // lookup the shared UDIM tile.
     auto scanTiles = [&](std::string const &path) {
@@ -358,11 +393,10 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
     scanTiles(opacityPath);
     scanTiles(colorPath);
 
-    float cellPix = float(kCellPixels);
-    cell.u0 = float(cellX) * cellPix / float(width);
-    cell.v0 = float(cellY) * cellPix / float(width);
-    cell.u1 = cell.u0 + cellPix / float(width);
-    cell.v1 = cell.v0 + cellPix / float(width);
+    cell.u0 = float(px0) / float(width);
+    cell.v0 = float(py0) / float(width);
+    cell.u1 = cell.u0 + float(regionSize) / float(width);
+    cell.v1 = cell.v0 + float(regionSize) / float(width);
 
     if (tileMinU == INT_MAX) {
       cell.tileU0 = 0.0f; cell.tileV0 = 0.0f;
@@ -379,19 +413,19 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
 
   // no locking from here down.
   float avgOpacity = opacityConst;
-  BakeChannel(cellX, cellY, /*R*/ 0, roughnessPath, roughnessConst,
+  BakeChannel(px0, py0, regionSize, /*R*/ 0, roughnessPath, roughnessConst,
               tileMinU, tileMinV, tileMaxU, tileMaxV, nullptr);
-  BakeChannel(cellX, cellY, /*G*/ 1, metallicPath, metallicConst,
+  BakeChannel(px0, py0, regionSize, /*G*/ 1, metallicPath, metallicConst,
               tileMinU, tileMinV, tileMaxU, tileMaxV, nullptr);
-  BakeChannel(cellX, cellY, /*B*/ 2, opacityPath, opacityConst,
+  BakeChannel(px0, py0, regionSize, /*B*/ 2, opacityPath, opacityConst,
               tileMinU, tileMinV, tileMaxU, tileMaxV, &avgOpacity);
   cell.averageOpacity = avgOpacity;
 
-  BakeChannel(cellX, cellY, /*A*/ 3, std::string(), opacityThreshold,
+  BakeChannel(px0, py0, regionSize, /*A*/ 3, std::string(), opacityThreshold,
               tileMinU, tileMinV, tileMaxU, tileMaxV, nullptr);
   cell.opacityThreshold = opacityThreshold;
 
-  BakeColorChannel(cellX, cellY, colorPath, colorConst,
+  BakeColorChannel(px0, py0, regionSize, colorPath, colorConst,
                    tileMinU, tileMinV, tileMaxU, tileMaxV);
 
   {
@@ -405,26 +439,24 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
 }
 
 void
-HdAkariTextureAtlas::BakeChannel(int cellX, int cellY, int channelIndex,
+HdAkariTextureAtlas::BakeChannel(int px0, int py0, int regionSize, int channelIndex,
                                  std::string const &texPath, float fallbackConst,
                                  int tileMinU, int tileMinV, int tileMaxU, int tileMaxV,
                                  float *outAverage)
 {
   int width = _gridSize.load(std::memory_order_relaxed) * kCellPixels;
-  int cellPx0 = cellX * kCellPixels;
-  int cellPy0 = cellY * kCellPixels;
 
   double sum = 0.0;
   uint8_t fallbackByte = Quantize(fallbackConst);
   int physChannel = PhysicalChannel(channelIndex);
-  for (int y = 0; y < kCellPixels; ++y) {
-    for (int x = 0; x < kCellPixels; ++x) {
-      size_t idx = (size_t(cellPy0 + y) * size_t(width) + size_t(cellPx0 + x)) * 4 + physChannel;
+  for (int y = 0; y < regionSize; ++y) {
+    for (int x = 0; x < regionSize; ++x) {
+      size_t idx = (size_t(py0 + y) * size_t(width) + size_t(px0 + x)) * 4 + physChannel;
       _pixels[idx] = fallbackByte;
     }
   }
-  sum = double(fallbackByte) / 255.0 * double(kCellPixels) * double(kCellPixels);
-  size_t count = size_t(kCellPixels) * size_t(kCellPixels);
+  sum = double(fallbackByte) / 255.0 * double(regionSize) * double(regionSize);
+  size_t count = size_t(regionSize) * size_t(regionSize);
 
   if (!texPath.empty() && tileMinU != INT_MAX) {
     int spanU = tileMaxU - tileMinU + 1;
@@ -437,10 +469,10 @@ HdAkariTextureAtlas::BakeChannel(int cellX, int cellY, int channelIndex,
         int srcW = 0, srcH = 0, nComp = 0;
         if (!DecodeTile(tilePath, srcPixels, srcW, srcH, nComp)) continue;
 
-        int subX0 = cellPx0 + ((tu - tileMinU) * kCellPixels) / spanU;
-        int subX1 = cellPx0 + ((tu - tileMinU + 1) * kCellPixels) / spanU;
-        int subY0 = cellPy0 + ((tv - tileMinV) * kCellPixels) / spanV;
-        int subY1 = cellPy0 + ((tv - tileMinV + 1) * kCellPixels) / spanV;
+        int subX0 = px0 + ((tu - tileMinU) * regionSize) / spanU;
+        int subX1 = px0 + ((tu - tileMinU + 1) * regionSize) / spanU;
+        int subY0 = py0 + ((tv - tileMinV) * regionSize) / spanV;
+        int subY1 = py0 + ((tv - tileMinV + 1) * regionSize) / spanV;
         int subW = std::max(1, subX1 - subX0);
         int subH = std::max(1, subY1 - subY0);
 
@@ -463,20 +495,18 @@ HdAkariTextureAtlas::BakeChannel(int cellX, int cellY, int channelIndex,
 }
 
 void
-HdAkariTextureAtlas::BakeColorChannel(int cellX, int cellY,
+HdAkariTextureAtlas::BakeColorChannel(int px0, int py0, int regionSize,
                                       std::string const &texPath, GfVec3f const &fallbackConst,
                                       int tileMinU, int tileMinV, int tileMaxU, int tileMaxV)
 {
   int width = _gridSize.load(std::memory_order_relaxed) * kCellPixels;
-  int cellPx0 = cellX * kCellPixels;
-  int cellPy0 = cellY * kCellPixels;
 
   uint8_t fbR = Quantize(fallbackConst[0]);
   uint8_t fbG = Quantize(fallbackConst[1]);
   uint8_t fbB = Quantize(fallbackConst[2]);
-  for (int y = 0; y < kCellPixels; ++y) {
-    for (int x = 0; x < kCellPixels; ++x) {
-      size_t idx = (size_t(cellPy0 + y) * size_t(width) + size_t(cellPx0 + x)) * 4;
+  for (int y = 0; y < regionSize; ++y) {
+    for (int x = 0; x < regionSize; ++x) {
+      size_t idx = (size_t(py0 + y) * size_t(width) + size_t(px0 + x)) * 4;
       _colorPixels[idx + PhysicalChannel(0)] = fbR;
       _colorPixels[idx + 1] = fbG;
       _colorPixels[idx + PhysicalChannel(2)] = fbB;
@@ -495,10 +525,10 @@ HdAkariTextureAtlas::BakeColorChannel(int cellX, int cellY,
         int srcW = 0, srcH = 0, nComp = 0;
         if (!DecodeTile(tilePath, srcPixels, srcW, srcH, nComp)) continue;
 
-        int subX0 = cellPx0 + ((tu - tileMinU) * kCellPixels) / spanU;
-        int subX1 = cellPx0 + ((tu - tileMinU + 1) * kCellPixels) / spanU;
-        int subY0 = cellPy0 + ((tv - tileMinV) * kCellPixels) / spanV;
-        int subY1 = cellPy0 + ((tv - tileMinV + 1) * kCellPixels) / spanV;
+        int subX0 = px0 + ((tu - tileMinU) * regionSize) / spanU;
+        int subX1 = px0 + ((tu - tileMinU + 1) * regionSize) / spanU;
+        int subY0 = py0 + ((tv - tileMinV) * regionSize) / spanV;
+        int subY1 = py0 + ((tv - tileMinV + 1) * regionSize) / spanV;
         int subW = std::max(1, subX1 - subX0);
         int subH = std::max(1, subY1 - subY0);
 

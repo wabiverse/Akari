@@ -74,6 +74,8 @@ struct HdAkariMeshData
   VtVec3iArray triangleIndices; // into points
   VtVec2fArray uvs;             // atlas space UV, one per triangleIndices corner (see mesh.cpp)
   GfMatrix4d transform = GfMatrix4d(1.0);
+  GfVec3f extentMin = GfVec3f(0.0f); // object-space bounds, for frustum culling.
+  GfVec3f extentMax = GfVec3f(0.0f);
   GfVec3f displayColor = GfVec3f(0.8f, 0.8f, 0.8f);
   float opacity = 1.0f;   // from the bound material's UsdPreviewSurface.
   float roughness = 0.5f; // UsdPreviewSurface's own default.

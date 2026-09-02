@@ -81,6 +81,8 @@ public extension Akari.Geom
       vOff / Self.vertexFloats
     }
 
+    public var indexCount: Int { iOff }
+
     /// Appends one mesh's local-space vertex/index data,
     /// transforming positions/normals into world space
     /// as it writes.
@@ -120,7 +122,8 @@ public extension Akari.Geom
         vertBuf[d + 10] = n[0] * nx + n[1] * ny + n[2] * nz
         vertBuf[d + 11] = n[3] * nx + n[4] * ny + n[5] * nz
         vertBuf[d + 12] = n[6] * nx + n[7] * ny + n[8] * nz
-        vertBuf[d + 13] = 0
+
+        vertBuf[d + 13] = 0.0
       }
       vOff += vertCount * Self.vertexFloats
 

@@ -121,32 +121,32 @@ private func _reportSupportedTypes(_ delegate: UnsafeMutableRawPointer?,
 }
 
 @_cdecl("AKRenderDelegateSupportedRprimTypes")
-func AKRenderDelegateSupportedRprimTypes(_ delegate: UnsafeMutableRawPointer?,
-                                         _ cb: @convention(c) (UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void,
-                                         _ ctx: UnsafeMutableRawPointer?)
+public func AKRenderDelegateSupportedRprimTypes(_ delegate: UnsafeMutableRawPointer?,
+                                                _ cb: @convention(c) (UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void,
+                                                _ ctx: UnsafeMutableRawPointer?)
 {
   _reportSupportedTypes(delegate, cb, ctx) { $0.supportedRprimTypes() }
 }
 
 @_cdecl("AKRenderDelegateSupportedSprimTypes")
-func AKRenderDelegateSupportedSprimTypes(_ delegate: UnsafeMutableRawPointer?,
-                                         _ cb: @convention(c) (UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void,
-                                         _ ctx: UnsafeMutableRawPointer?)
+public func AKRenderDelegateSupportedSprimTypes(_ delegate: UnsafeMutableRawPointer?,
+                                                _ cb: @convention(c) (UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void,
+                                                _ ctx: UnsafeMutableRawPointer?)
 {
   _reportSupportedTypes(delegate, cb, ctx) { $0.supportedSprimTypes() }
 }
 
 @_cdecl("AKRenderDelegateSupportedBprimTypes")
-func AKRenderDelegateSupportedBprimTypes(_ delegate: UnsafeMutableRawPointer?,
-                                         _ cb: @convention(c) (UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void,
-                                         _ ctx: UnsafeMutableRawPointer?)
+public func AKRenderDelegateSupportedBprimTypes(_ delegate: UnsafeMutableRawPointer?,
+                                                _ cb: @convention(c) (UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void,
+                                                _ ctx: UnsafeMutableRawPointer?)
 {
   _reportSupportedTypes(delegate, cb, ctx) { $0.supportedBprimTypes() }
 }
 
 @_cdecl("AKRenderDelegateDefaultAovDescriptor")
-func AKRenderDelegateDefaultAovDescriptor(_ delegate: UnsafeMutableRawPointer?,
-                                          _ name: UnsafePointer<CChar>?) -> Int32
+public func AKRenderDelegateDefaultAovDescriptor(_ delegate: UnsafeMutableRawPointer?,
+                                                 _ name: UnsafePointer<CChar>?) -> Int32
 {
   guard let delegate = _activeDelegate(delegate), let name
   else
@@ -180,22 +180,22 @@ private func _classNameLookup(_ delegate: UnsafeMutableRawPointer?,
 }
 
 @_cdecl("AKRenderDelegateRprimClassName")
-func AKRenderDelegateRprimClassName(_ delegate: UnsafeMutableRawPointer?,
-                                    _ typeId: UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+public func AKRenderDelegateRprimClassName(_ delegate: UnsafeMutableRawPointer?,
+                                           _ typeId: UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
 {
   _classNameLookup(delegate, typeId) { $0.rprimClassName(forType: $1) }
 }
 
 @_cdecl("AKRenderDelegateSprimClassName")
-func AKRenderDelegateSprimClassName(_ delegate: UnsafeMutableRawPointer?,
-                                    _ typeId: UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+public func AKRenderDelegateSprimClassName(_ delegate: UnsafeMutableRawPointer?,
+                                           _ typeId: UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
 {
   _classNameLookup(delegate, typeId) { $0.sprimClassName(forType: $1) }
 }
 
 @_cdecl("AKRenderDelegateBprimClassName")
-func AKRenderDelegateBprimClassName(_ delegate: UnsafeMutableRawPointer?,
-                                    _ typeId: UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+public func AKRenderDelegateBprimClassName(_ delegate: UnsafeMutableRawPointer?,
+                                           _ typeId: UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
 {
   _classNameLookup(delegate, typeId) { $0.bprimClassName(forType: $1) }
 }
