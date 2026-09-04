@@ -1,5 +1,5 @@
 {
-  "originHash" : "3350f02f2003d29dcdd3be3779d9f0aee3e7e4cc058f64058815e89104458d0a",
+  "originHash" : "ac336cdcbe1affb23c9b1aae452605b992ab9b15e6f1abfb79490c5e0786edaa",
   "pins" : [
     {
       "identity" : "imgui",
@@ -25,7 +25,7 @@
       "location" : "https://github.com/wabiverse/Lattice.git",
       "state" : {
         "branch" : "main",
-        "revision" : "0e789a1281d38f291824d2576c75030f95ff44ac"
+        "revision" : "0528ac2b9c9e1d856f0e56740d93ba20a0c1335d"
       }
     },
     {
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/wabiverse/MetaverseKit.git",
       "state" : {
-        "revision" : "2e8f4bc94dc870d5011db31677a82def53f64bc7",
-        "version" : "2.0.8"
+        "revision" : "7464f1ae0b3be541558bbc633f782595e2cb915f",
+        "version" : "2.0.9"
       }
     },
     {
@@ -96,8 +96,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "a878e7f8f46cfc0e1125e565b5c08e7d5272dc9a",
-        "version" : "1.14.0"
+        "revision" : "3ffafb9722d5d918c614feb496c8789a3b59d222",
+        "version" : "1.15.0"
       }
     },
     {
@@ -123,8 +123,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-syntax",
       "state" : {
-        "revision" : "2b59c0c741e9184ab057fd22950b491076d42e91",
-        "version" : "603.0.0"
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
       }
     },
     {
@@ -133,7 +133,7 @@
       "location" : "https://github.com/wabiverse/swift-usd.git",
       "state" : {
         "branch" : "dev",
-        "revision" : "2f5415acdf3f167ec65702a7563490630bf822b5"
+        "revision" : "86e6818fa35941564ef4b86a5db7f9c19ee8bc20"
       }
     },
     {
@@ -141,8 +141,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/moreSwift/swift-winui",
       "state" : {
-        "revision" : "df7642fbb88e23a9cc1bbd366c7d6d3780fd0251",
-        "version" : "0.2.1"
+        "revision" : "c4f1cb75c02f4a4fdefcef2e5c5c4388c7cf9389",
+        "version" : "0.2.2"
       }
     },
     {
@@ -150,8 +150,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/furbytm/SwiftLabGL.git",
       "state" : {
-        "revision" : "ec4a1277922720eb1317d9c3a27c5705de06e11c",
-        "version" : "0.0.7"
+        "revision" : "950dfa7b9f9add9e22b0760e9bab6748c5c343a7",
+        "version" : "0.0.8"
       }
     },
     {
