@@ -79,7 +79,12 @@ HdAkariTextureAtlas
 {
 public:
   static constexpr int kCellPixels = 256;     // resolution per cell.
-  static constexpr int kDefaultGridSize = 24; // fallback if never sized.
+  static constexpr int kDefaultGridSize = 4;  // fallback if never sized.
+
+  // Border reserved inside each cell so mip
+  // levels only sample individual cells.
+  static constexpr int kCellPadding = 16;
+  static constexpr int kMaxMipLevel = 3;
 
   // A material with no bound texture at all bakes to a flat fill sampled at
   // a single point (see mesh.cpp's ComputeAtlasUvs), so it only needs a
@@ -126,6 +131,9 @@ private:
   void BakeColorChannel(int px0, int py0, int regionSize,
                          std::string const &texPath, GfVec3f const &fallbackConst,
                          int tileMinU, int tileMinV, int tileMaxU, int tileMaxV);
+  // Replicates the baked interior's edge texels into the cell's padding
+  // border, so downstream mip generation never blends in a neighbor cell.
+  void FillCellBorder(int px0, int py0, int regionSize, int padding);
 
   mutable std::mutex _mutex;
   std::unordered_map<std::string, HdAkariAtlasCell> _cells;

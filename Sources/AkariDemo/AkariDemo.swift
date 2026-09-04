@@ -67,6 +67,9 @@ struct AkariDemo: App
 
     let stage = AppUtils.openOrCreateStage()
 
+    let stageIsZUp = Pixar.UsdGeomGetStageUpAxis(Overlay.TfWeakPtr(stage)) == .z
+    Akari.LabFXEngine.shared.setStageUpAxis(isZUp: stageIsZUp)
+
     hydra = Hydra.RenderEngine(stage: stage, rendererPluginId: Tf.Token(Akari.rendererPluginId))
 
     print("[akari] first light - renderer = \(Akari.rendererPluginId)")

@@ -330,6 +330,9 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
   bool isConstOnly = roughnessPath.empty() && metallicPath.empty() &&
                      opacityPath.empty() && colorPath.empty();
   int px0 = 0, py0 = 0, regionSize = kCellPixels;
+  // baked content is inset from the cell's actual grid placement,
+  // leaving a border for FillCellBorder to replicate into.
+  int contentPx0 = 0, contentPy0 = 0, contentSize = kCellPixels;
 
   {
     std::unique_lock<std::mutex> lock(_mutex);
@@ -363,6 +366,7 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
       px0 = bigCellX * kCellPixels + (slot % kConstCellsPerAxis) * kConstCellPixels;
       py0 = bigCellY * kCellPixels + (slot / kConstCellsPerAxis) * kConstCellPixels;
       regionSize = kConstCellPixels;
+      contentPx0 = px0; contentPy0 = py0; contentSize = regionSize;
     } else {
       // share cells using round-robin.
       int cellIndex = _nextCell % (gridSize * gridSize);
@@ -370,6 +374,9 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
       px0 = (cellIndex % gridSize) * kCellPixels;
       py0 = (cellIndex / gridSize) * kCellPixels;
       regionSize = kCellPixels;
+      contentPx0 = px0 + kCellPadding;
+      contentPy0 = py0 + kCellPadding;
+      contentSize = regionSize - 2 * kCellPadding;
     }
     if (_nextCell > gridSize * gridSize && !_warnedOverflow) {
       _warnedOverflow = true;
@@ -393,10 +400,10 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
     scanTiles(opacityPath);
     scanTiles(colorPath);
 
-    cell.u0 = float(px0) / float(width);
-    cell.v0 = float(py0) / float(width);
-    cell.u1 = cell.u0 + float(regionSize) / float(width);
-    cell.v1 = cell.v0 + float(regionSize) / float(width);
+    cell.u0 = float(contentPx0) / float(width);
+    cell.v0 = float(contentPy0) / float(width);
+    cell.u1 = cell.u0 + float(contentSize) / float(width);
+    cell.v1 = cell.v0 + float(contentSize) / float(width);
 
     if (tileMinU == INT_MAX) {
       cell.tileU0 = 0.0f; cell.tileV0 = 0.0f;
@@ -413,20 +420,24 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
 
   // no locking from here down.
   float avgOpacity = opacityConst;
-  BakeChannel(px0, py0, regionSize, /*R*/ 0, roughnessPath, roughnessConst,
+  BakeChannel(contentPx0, contentPy0, contentSize, /*R*/ 0, roughnessPath, roughnessConst,
               tileMinU, tileMinV, tileMaxU, tileMaxV, nullptr);
-  BakeChannel(px0, py0, regionSize, /*G*/ 1, metallicPath, metallicConst,
+  BakeChannel(contentPx0, contentPy0, contentSize, /*G*/ 1, metallicPath, metallicConst,
               tileMinU, tileMinV, tileMaxU, tileMaxV, nullptr);
-  BakeChannel(px0, py0, regionSize, /*B*/ 2, opacityPath, opacityConst,
+  BakeChannel(contentPx0, contentPy0, contentSize, /*B*/ 2, opacityPath, opacityConst,
               tileMinU, tileMinV, tileMaxU, tileMaxV, &avgOpacity);
   cell.averageOpacity = avgOpacity;
 
-  BakeChannel(px0, py0, regionSize, /*A*/ 3, std::string(), opacityThreshold,
+  BakeChannel(contentPx0, contentPy0, contentSize, /*A*/ 3, std::string(), opacityThreshold,
               tileMinU, tileMinV, tileMaxU, tileMaxV, nullptr);
   cell.opacityThreshold = opacityThreshold;
 
-  BakeColorChannel(px0, py0, regionSize, colorPath, colorConst,
+  BakeColorChannel(contentPx0, contentPy0, contentSize, colorPath, colorConst,
                    tileMinU, tileMinV, tileMaxU, tileMaxV);
+
+  if (!isConstOnly) {
+    FillCellBorder(px0, py0, regionSize, kCellPadding);
+  }
 
   {
     std::lock_guard<std::mutex> lock(_mutex);
@@ -547,6 +558,31 @@ HdAkariTextureAtlas::BakeColorChannel(int px0, int py0, int regionSize,
       }
     }
   }
+}
+
+void
+HdAkariTextureAtlas::FillCellBorder(int px0, int py0, int regionSize, int padding)
+{
+  int width = _gridSize.load(std::memory_order_relaxed) * kCellPixels;
+  int cx0 = px0 + padding, cx1 = px0 + regionSize - padding;
+  int cy0 = py0 + padding, cy1 = py0 + regionSize - padding;
+
+  auto fillBuffer = [&](std::vector<uint8_t> &pixels) {
+    for (int y = 0; y < regionSize; ++y) {
+      int py = py0 + y;
+      int sy = std::clamp(py, cy0, cy1 - 1);
+      for (int x = 0; x < regionSize; ++x) {
+        int px = px0 + x;
+        if (px >= cx0 && px < cx1 && py >= cy0 && py < cy1) continue; // interior, already baked.
+        int sx = std::clamp(px, cx0, cx1 - 1);
+        size_t srcIdx = (size_t(sy) * size_t(width) + size_t(sx)) * 4;
+        size_t dstIdx = (size_t(py) * size_t(width) + size_t(px)) * 4;
+        std::memcpy(&pixels[dstIdx], &pixels[srcIdx], 4);
+      }
+    }
+  };
+  fillBuffer(_pixels);
+  fillBuffer(_colorPixels);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

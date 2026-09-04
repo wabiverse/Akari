@@ -164,10 +164,11 @@ public extension Akari
         LABGLDISPATCH_glGenTextures(1, &tex)
         texture = tex
         LABGLDISPATCH_glBindTexture(GLenum(GL_TEXTURE_2D), texture)
-        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MIN_FILTER), GLint(GL_NEAREST))
-        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MAG_FILTER), GLint(GL_NEAREST))
+        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MIN_FILTER), GLint(GL_LINEAR_MIPMAP_LINEAR))
+        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MAG_FILTER), GLint(GL_LINEAR))
         LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_WRAP_S), GLint(GL_CLAMP_TO_EDGE))
         LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_WRAP_T), GLint(GL_CLAMP_TO_EDGE))
+        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MAX_LEVEL), GLint(3))
       }
       else
       {
@@ -178,6 +179,7 @@ public extension Akari
                                  width, height, 0,
                                  GLenum(GL_RGBA), GLenum(GL_UNSIGNED_BYTE),
                                  pixels)
+      LABGLDISPATCH_glGenerateMipmap(GLenum(GL_TEXTURE_2D))
     }
 
     /// Uploads both atlas textures to the GPU whenever the atlas has grown.
@@ -208,6 +210,15 @@ public extension Akari
         var tex = colorAtlasTexture
         runtime.setUniform("u_color_atlas", GLenum(GL_SAMPLER_2D), &tex)
       }
+    }
+
+    /// This is `true` when the opened usd stage's upAxis is "Z".
+    private var stageIsZUp = false
+
+    /// Call once, right after opening the usd stage.
+    public func setStageUpAxis(isZUp: Bool)
+    {
+      stageIsZUp = isZUp
     }
 
     /// The last GL_TONEMAP_* operator applied to the tonemap pass.
@@ -484,6 +495,9 @@ public extension Akari
       var sunHeightV = sunHeight
       runtime.setUniform("sunHeight", GLenum(GL_FLOAT), &sunHeightV)
       lastSunHeight = sunHeight // handles IBL rebaking, if changed.
+
+      var zUpV: Float = stageIsZUp ? 1 : 0
+      runtime.setUniform("u_zUp", GLenum(GL_FLOAT), &zUpV)
     }
 
     /// Sets the tonemap stage state: exposure, gamma,
@@ -775,7 +789,8 @@ public extension Akari
                     u_view: mat4 <- auto-view-matrix,
                     u_iblEnabled: float,
                     u_invProj: mat4,
-                    sunHeight: float ]
+                    sunHeight: float,
+                    u_zUp: float ]
         varying:  [ texCoord: vec2 ]
 
         vsh:
@@ -823,6 +838,11 @@ public extension Akari
             return 0.5 / mix(2.0 * NoL * NoV, NoL + NoV, roughness);
           }
 
+          vec3 toSkySpace(vec3 v)
+          {
+            return mix(v, vec3(v.x, v.z, -v.y), u_zUp);
+          }
+
           void main()
           {
             vec4 normalSample = texture(u_normal_texture, var.texCoord);
@@ -837,7 +857,7 @@ public extension Akari
               if (u_iblEnabled > 0.5) {
                 vec4 e = u_invProj * vec4(var.texCoord * 2.0 - 1.0, 1.0, 1.0);
                 vec3 worldDir = normalize(invView * (e.xyz / e.w));
-                vec3 sky = texture(u_envCube_texture, worldDir).rgb;
+                vec3 sky = texture(u_envCube_texture, toSkySpace(worldDir)).rgb;
                 o_final_texture = vec4(sky, 1.0);
               } else {
                 o_final_texture = vec4(diffuse, 1.0);
@@ -882,8 +902,9 @@ public extension Akari
 
               float terminatorSmooth = pow(smoothstep(-0.40, 0.40, NoL), 3.0);
 
-              vec3 dayColor = mix(texture(u_envCube_texture, L).rgb, vec3(1.0), clamp(sunHeight, 0.0, 1.0));
-              vec3 nightColor = mix(texture(u_envCube_texture, L).rgb, vec3(0.95, 0.95, 1.00), clamp(-sunHeight, 0.0, 1.0));
+              vec3 skyL = toSkySpace(L);
+              vec3 dayColor = mix(texture(u_envCube_texture, skyL).rgb, vec3(1.0), clamp(sunHeight, 0.0, 1.0));
+              vec3 nightColor = mix(texture(u_envCube_texture, skyL).rgb, vec3(0.95, 0.95, 1.00), clamp(-sunHeight, 0.0, 1.0));
               vec3 dynamicSky = mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade);
 
               color += (Fd + Fr) * terminatorSmooth * dynamicSky;
@@ -900,10 +921,10 @@ public extension Akari
             float lod = 5.0 * perceptualRoughness * (2.0 - perceptualRoughness);
             lod = clamp(lod, 0.0, 5.0);
 
-            vec3 prefilteredRadiance = textureLod(u_prefiltered_texture, r, lod).rgb;
+            vec3 prefilteredRadiance = textureLod(u_prefiltered_texture, toSkySpace(r), lod).rgb;
             vec3 Fr = E * prefilteredRadiance * energyCompensation;
 
-            vec3 irradiance = texture(u_irradiance_texture, N).rgb;
+            vec3 irradiance = texture(u_irradiance_texture, toSkySpace(N)).rgb;
             vec3 Fd = diffuseColor * irradiance * (1.0 - E);
 
             color += (Fd + Fr) * u_iblEnabled;
@@ -936,6 +957,11 @@ public extension Akari
             return 0.5 / mix(2.0 * NoL * NoV, NoL + NoV, roughness);
           }
 
+          float3 toSkySpace(float3 v, float zUp)
+          {
+            return mix(v, float3(v.x, v.z, -v.y), zUp);
+          }
+
           //@main
           {
             float4 normalSample = texture(u_normal_texture, var.texCoord);
@@ -954,7 +980,7 @@ public extension Akari
               if (u_iblEnabled > 0.5) {
                 float4 e = u_invProj * float4(var.texCoord * 2.0 - 1.0, 1.0, 1.0);
                 float3 worldDir = normalize(invView * (e.xyz / e.w));
-                float3 sky = texture(u_envCube_texture, worldDir).rgb;
+                float3 sky = texture(u_envCube_texture, toSkySpace(worldDir, u_zUp)).rgb;
                 o_final_texture = float4(sky, 1.0);
               } else {
                 o_final_texture = float4(diffuse, 1.0);
@@ -997,8 +1023,9 @@ public extension Akari
 
                 float terminatorSmooth = pow(smoothstep(-0.40, 0.40, NoL), 3.0);
 
-                float3 dayColor = mix(texture(u_envCube_texture, L).rgb, float3(1.0), saturate(sunHeight));
-                float3 nightColor = mix(texture(u_envCube_texture, L).rgb, float3(0.95, 0.95, 1.00), saturate(-sunHeight));
+                float3 skyL = toSkySpace(L, u_zUp);
+                float3 dayColor = mix(texture(u_envCube_texture, skyL).rgb, float3(1.0), saturate(sunHeight));
+                float3 nightColor = mix(texture(u_envCube_texture, skyL).rgb, float3(0.95, 0.95, 1.00), saturate(-sunHeight));
                 float3 dynamicSky = mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade);
 
                 color += (Fd + Fr) * terminatorSmooth * dynamicSky;
@@ -1015,10 +1042,10 @@ public extension Akari
               float lod = 5.0 * perceptualRoughness * (2.0 - perceptualRoughness);
               lod = clamp(lod, 0.0, 5.0);
 
-              float3 prefilteredRadiance = textureLod(u_prefiltered_texture, r, lod).rgb;
+              float3 prefilteredRadiance = textureLod(u_prefiltered_texture, toSkySpace(r, u_zUp), lod).rgb;
               float3 Fr = E * prefilteredRadiance * energyCompensation;
 
-              float3 irradiance = texture(u_irradiance_texture, N).rgb;
+              float3 irradiance = texture(u_irradiance_texture, toSkySpace(N, u_zUp)).rgb;
               float3 Fd = diffuseColor * irradiance * (1.0 - E);
 
               color += (Fd + Fr) * u_iblEnabled;
