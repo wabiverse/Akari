@@ -17,10 +17,10 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/wabiverse/swift-usd.git", branch: "dev"),
     .package(url: "https://github.com/wabiverse/Lattice.git", branch: "main"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.1.0"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.1.1"),
   ],
   targets: [
-    // todo: support externally provided openusd builds.
+    // TODO: support externally provided openusd builds.
     // .plugin(
     //   name: "BuildOpenUSD",
     //   capability: .buildTool()
@@ -34,7 +34,17 @@ let package = Package(
     //     .plugin(name: "BuildOpenUSD")
     //   ]
     // ),
-    
+
+    .target(
+      name: "AkariImaging",
+      cxxSettings: [
+        .define("_LIBCPP_ABI_NO_COMPRESSED_PAIR_PADDING")
+      ],
+      swiftSettings: [
+        .interoperabilityMode(.Cxx)
+      ]
+    ),
+
     .target(
       name: "AkariCore",
       dependencies: [
@@ -51,10 +61,10 @@ let package = Package(
         .target(name: "AkariCore"),
         .target(name: "HdAkari"),
         .product(name: "OpenUSDKit", package: "swift-usd"),
-        // todo: support externally provided openusd builds.
-        //.target(name: "OpenUSD"),
+        // TODO: support externally provided openusd builds.
+        // .target(name: "OpenUSD"),
         .product(name: "LatticeCore", package: "Lattice"),
-        //.product(name: "LatticeUSD", package: "Lattice"),
+        // .product(name: "LatticeUSD", package: "Lattice"),
         .product(name: "LabGL", package: "SwiftLabGL"),
         .product(name: "LabFX", package: "SwiftLabGL"),
       ],
@@ -74,8 +84,8 @@ let package = Package(
       dependencies: [
         .target(name: "AkariRender"),
         .target(name: "HdAkari"),
-        // todo: support externally provided openusd builds.
-        //.target(name: "OpenUSD"),
+        // TODO: support externally provided openusd builds.
+        // .target(name: "OpenUSD"),
         .product(name: "OpenUSDKit", package: "swift-usd"),
         .product(name: "HydraKit", package: "swift-usd")
       ],
@@ -90,8 +100,9 @@ let package = Package(
     .target(
       name: "HdAkari",
       dependencies: [
-        // todo: support externally provided openusd builds.
-        //.target(name: "OpenUSD"),
+        .target(name: "AkariImaging"),
+        // TODO: support externally provided openusd builds.
+        // .target(name: "OpenUSD"),
         .product(name: "OpenUSDKit", package: "swift-usd"),
         .product(name: "LabGL", package: "SwiftLabGL"),
       ],
@@ -114,8 +125,8 @@ let package = Package(
         .target(name: "AkariRender"),
         .target(name: "AkariHydra"),
         .target(name: "HdAkari"),
-        // todo: support externally provided openusd builds.
-        //.target(name: "OpenUSD"),
+        // TODO: support externally provided openusd builds.
+        // .target(name: "OpenUSD"),
         .product(name: "OpenUSDKit", package: "swift-usd"),
         .product(name: "HydraKit", package: "swift-usd")
       ],

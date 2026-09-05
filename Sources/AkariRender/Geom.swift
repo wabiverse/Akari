@@ -84,9 +84,10 @@ public extension Akari
         trisFlat[idx * 3 + 2] = tris[idx][2]
       }
 
-      let uvCount = uvs.size()
-      var uvsFlat = [Float](repeating: 0, count: triCount * 3 * 2)
-      for i in 0 ..< min(uvCount, triCount * 3)
+      // uvs are per corner, two floats each.
+      let corners = triCount * 3
+      var uvsFlat = [Float](repeating: 0, count: corners * 2)
+      for i in 0 ..< min(uvs.size(), corners)
       {
         let uv = uvs[i]
         uvsFlat[i * 2 + 0] = uv[0]
@@ -105,7 +106,7 @@ public extension Akari
                                  indices: inout [Int32],
                                  flipWinding: Bool = false)
     {
-      let kHardEdgeCos: Float = 0.8660254 // cos(30°)
+      let hardEdgeCos: Float = 0.8660254 // cos(30°)
 
       let triCount = trisFlat.count / 3
       let ptCount = pointsFlat.count / 3
@@ -122,8 +123,8 @@ public extension Akari
         return SIMD3<Float>(pointsFlat[o], pointsFlat[o + 1], pointsFlat[o + 2])
       }
 
-      var smooth = [SIMD3<Float>](repeating: SIMD3<Float>(0, 0, 0), count: ptCount)
-      var faceNormals = [SIMD3<Float>](repeating: SIMD3<Float>(0, 0, 0), count: triCount)
+      var smooth = [SIMD3<Float>](repeating: .zero, count: ptCount)
+      var faceNormals = [SIMD3<Float>](repeating: .zero, count: triCount)
       var faceValid = [Bool](repeating: false, count: triCount)
 
       for idx in 0 ..< triCount
@@ -131,24 +132,20 @@ public extension Akari
         let i0 = triIndices[idx * 3 + 0]
         let i1 = triIndices[idx * 3 + 1]
         let i2 = triIndices[idx * 3 + 2]
-        if i0 < 0 || i1 < 0 || i2 < 0
-        {
-          continue
-        }
+        guard i0 >= 0, i1 >= 0, i2 >= 0 else { continue }
+
         let p0 = point(i0); let p1 = point(i1); let p2 = point(i2)
         let fn = cross(p1 - p0, p2 - p0)
         let fnLen = length(fn)
-        if fnLen <= 1e-8
-        {
-          continue
-        }
+        guard fnLen > 1e-8 else { continue }
+
         faceNormals[idx] = fn / fnLen
         faceValid[idx] = true
         smooth[Int(i0)] += fn
         smooth[Int(i1)] += fn
         smooth[Int(i2)] += fn
       }
-      for i in 0 ..< smooth.count
+      for i in smooth.indices
       {
         let smoothLen = length(smooth[i])
         smooth[i] = smoothLen > 1e-8
@@ -160,7 +157,7 @@ public extension Akari
       {
         let p = Int(triIndices[idx * 3 + c])
         let sn = smooth[p]
-        let n = dot(faceNormals[idx], sn) > kHardEdgeCos ? sn : faceNormals[idx]
+        let n = dot(faceNormals[idx], sn) > hardEdgeCos ? sn : faceNormals[idx]
         let uo = (idx * 3 + c) * 2
         let uv = SIMD2<Float>(triUvs[uo], triUvs[uo + 1])
         indices.append(appendVertex(p, n, uv, pointsFlat, &verts))
@@ -169,9 +166,12 @@ public extension Akari
       for idx in 0 ..< triCount
       {
         guard faceValid[idx] else { continue }
-        if flipWinding {
+        if flipWinding
+        {
           emitCorner(idx, 0); emitCorner(idx, 2); emitCorner(idx, 1)
-        } else {
+        }
+        else
+        {
           emitCorner(idx, 0); emitCorner(idx, 1); emitCorner(idx, 2)
         }
       }
@@ -232,22 +232,22 @@ public extension Akari
         var queue = [seed]
         while let t = queue.popLast()
         {
-          for (nbr, sameDirection) in adjacency[t]
+          for (nbr, sameDirection) in adjacency[t] where !visited[nbr]
           {
-            if !visited[nbr]
-            {
-              visited[nbr] = true
-              flip[nbr] = sameDirection ? !flip[t] : flip[t]
-              component.append(nbr)
-              queue.append(nbr)
-            }
+            visited[nbr] = true
+            flip[nbr] = sameDirection ? !flip[t] : flip[t]
+            component.append(nbr)
+            queue.append(nbr)
           }
         }
 
-        let flippedCount = component.reduce(0) { $0 + (flip[$1] ? 1 : 0) }
+        let flippedCount = component.count { flip[$0] }
         if flippedCount * 2 > component.count
         {
-          for t in component { flip[t].toggle() }
+          for t in component
+          {
+            flip[t].toggle()
+          }
         }
       }
 

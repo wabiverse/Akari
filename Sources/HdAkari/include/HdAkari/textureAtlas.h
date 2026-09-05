@@ -64,7 +64,6 @@ struct HdAkariAtlasCell
   float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;   // atlas-space rect, [0,1].
   float tileU0 = 0.0f, tileV0 = 0.0f;                 // lowest UDIM tile's (u,v) origin.
   float tileUSpan = 1.0f, tileVSpan = 1.0f;           // tile-grid width/height covered.
-  float averageOpacity = 1.0f;                        // CPU-side opaque/transparent split.
   float opacityThreshold = 0.0f;                      // >0 means alpha-test/cutout, not blend.
 };
 
@@ -126,14 +125,10 @@ public:
 private:
   void BakeChannel(int px0, int py0, int regionSize, int channelIndex,
                     std::string const &texPath, float fallbackConst,
-                    int tileMinU, int tileMinV, int tileMaxU, int tileMaxV,
-                    float *outAverage);
+                    int tileMinU, int tileMinV, int tileMaxU, int tileMaxV);
   void BakeColorChannel(int px0, int py0, int regionSize,
                          std::string const &texPath, GfVec3f const &fallbackConst,
                          int tileMinU, int tileMinV, int tileMaxU, int tileMaxV);
-  // Replicates the baked interior's edge texels into the cell's padding
-  // border, so downstream mip generation never blends in a neighbor cell.
-  void FillCellBorder(int px0, int py0, int regionSize, int padding);
 
   mutable std::mutex _mutex;
   std::unordered_map<std::string, HdAkariAtlasCell> _cells;

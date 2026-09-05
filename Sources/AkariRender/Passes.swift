@@ -71,11 +71,11 @@ public extension Akari
     {
       // geometry stage: open the frame, rerecord the synced meshes
       // into the capture buffer, and set the per frame view matrix.
-      LabFXEngine.shared.beginFrame(width: ctx.target.width,
-                                    height: ctx.target.height)
-      LabFXEngine.shared.recordGeometry(renderParam: ctx.renderParam,
-                                        view: ctx.camera.view,
-                                        projection: ctx.camera.projection)
+      ctx.labfx.beginFrame(width: ctx.target.width,
+                           height: ctx.target.height)
+      ctx.labfx.recordGeometry(renderParam: ctx.renderParam,
+                               view: ctx.camera.view,
+                               projection: ctx.camera.projection)
     }
   }
 
@@ -110,7 +110,7 @@ public extension Akari
                                      format: .rgba16f))
       // lighting stage: the deferred resolve shades the G-buffer
       // with split sum IBL into the scene HDR color.
-      LabFXEngine.shared.setLighting(
+      ctx.labfx.setLighting(
         iblEnabled: ctx.settings.features.contains(.imageBasedLighting),
         projection: ctx.camera.projection,
         sunHeight: ctx.settings.light.sunHeight
@@ -229,10 +229,10 @@ public extension Akari
     public func execute(_: inout FrameState, _ ctx: FrameContext)
     {
       // tonemap stage: exposure, view transform, gamma, dither seed.
-      LabFXEngine.shared.setTonemap(exposure: ctx.settings.color.exposure,
-                                    gamma: ctx.settings.color.gamma,
-                                    viewTransform: ctx.settings.color.viewTransform,
-                                    frameIndex: ctx.frameIndex)
+      ctx.labfx.setTonemap(exposure: ctx.settings.color.exposure,
+                           gamma: ctx.settings.color.gamma,
+                           viewTransform: ctx.settings.color.viewTransform,
+                           frameIndex: ctx.frameIndex)
     }
   }
 
@@ -259,8 +259,8 @@ public extension Akari
     {
       // present stage: execute the deferred graph, present,
       // and wrap the tonemapped texture into the color AOV.
-      LabFXEngine.shared.present(color: ctx.target.color,
-                                 hgi: ctx.gpu.hgi)
+      ctx.labfx.present(color: ctx.target.color,
+                        hgi: ctx.gpu.hgi)
     }
   }
 

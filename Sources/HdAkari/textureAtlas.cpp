@@ -39,6 +39,8 @@
  * ----------------------------------------------------------------- */
 #include "HdAkari/textureAtlas.h"
 
+#include "HdAkari/akariImaging.h" // swift -> c++ interop, see Sources/AkariImaging.
+
 #include <Hd/renderIndex.h>
 #include <Hd/sceneDelegate.h>
 #include <Hio/image.h>
@@ -57,18 +59,6 @@
 PXR_NAMESPACE_OPEN_SCOPE
 
 namespace {
-
-/// Substitutes a UDIM tile number into a "<UDIM>"-templated path.
-/// `u`/`v` are tile grid coordinates (tile 1001 is u=0,v=0).
-std::string ResolveUdimTile(std::string const &templatePath, int u, int v)
-{
-  auto pos = templatePath.find("<UDIM>");
-  if (pos == std::string::npos) return templatePath;
-  int tileNum = 1001 + u + v * 10;
-  char buf[8];
-  std::snprintf(buf, sizeof(buf), "%04d", tileNum);
-  return templatePath.substr(0, pos) + buf + templatePath.substr(pos + 6);
-}
 
 /// Finds every UDIM tile that exists on disk for a templated path.
 std::vector<std::pair<int, int>> DiscoverUdimTiles(std::string const &templatePath)
@@ -102,44 +92,6 @@ std::vector<std::pair<int, int>> DiscoverUdimTiles(std::string const &templatePa
     tiles.push_back({(tileNum - 1001) % 10, (tileNum - 1001) / 10});
   }
   return tiles;
-}
-
-/// Quantizes a [0,1] float channel value to an 8-bit UNORM byte.
-uint8_t Quantize(float v)
-{
-  v = std::clamp(v, 0.0f, 1.0f);
-  return uint8_t(v * 255.0f + 0.5f);
-}
-
-/// Maps a semantic RGBA channel index (0=R, 1=G, 2=B, 3=A) to its physical
-/// byte offset within a texel.
-int PhysicalChannel(int semanticIndex)
-{
-  switch (semanticIndex) {
-    case 0: return 2;
-    case 2: return 0;
-    default: return semanticIndex;
-  }
-}
-
-/// Averages one destination texel's footprint in source space.
-float BoxFilterSample(std::vector<float> const &srcPixels, int srcW, int srcH, int nComp,
-                      int comp, int destX, int destW, int destY, int destH)
-{
-  int sx0 = (destX * srcW) / destW;
-  int sx1 = std::min(srcW, std::max(sx0 + 1, ((destX + 1) * srcW) / destW));
-  int sy0 = (destY * srcH) / destH;
-  int sy1 = std::min(srcH, std::max(sy0 + 1, ((destY + 1) * srcH) / destH));
-
-  double accum = 0.0;
-  int count = 0;
-  for (int sy = sy0; sy < sy1; ++sy) {
-    for (int sx = sx0; sx < sx1; ++sx) {
-      accum += srcPixels[(size_t(sy) * size_t(srcW) + size_t(sx)) * size_t(nComp) + size_t(comp)];
-      ++count;
-    }
-  }
-  return count > 0 ? float(accum / double(count)) : 0.0f;
 }
 
 /// Converts one texel of raw bytes into `nComp` floats.
@@ -331,7 +283,8 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
                      opacityPath.empty() && colorPath.empty();
   int px0 = 0, py0 = 0, regionSize = kCellPixels;
   // baked content is inset from the cell's actual grid placement,
-  // leaving a border for FillCellBorder to replicate into.
+  // leaving a border for `AkariImaging::Atlas::fillCellBorder` to
+  // replicate into.
   int contentPx0 = 0, contentPy0 = 0, contentSize = kCellPixels;
 
   {
@@ -419,24 +372,21 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
   }
 
   // no locking from here down.
-  float avgOpacity = opacityConst;
   BakeChannel(contentPx0, contentPy0, contentSize, /*R*/ 0, roughnessPath, roughnessConst,
-              tileMinU, tileMinV, tileMaxU, tileMaxV, nullptr);
+              tileMinU, tileMinV, tileMaxU, tileMaxV);
   BakeChannel(contentPx0, contentPy0, contentSize, /*G*/ 1, metallicPath, metallicConst,
-              tileMinU, tileMinV, tileMaxU, tileMaxV, nullptr);
+              tileMinU, tileMinV, tileMaxU, tileMaxV);
   BakeChannel(contentPx0, contentPy0, contentSize, /*B*/ 2, opacityPath, opacityConst,
-              tileMinU, tileMinV, tileMaxU, tileMaxV, &avgOpacity);
-  cell.averageOpacity = avgOpacity;
-
+              tileMinU, tileMinV, tileMaxU, tileMaxV);
   BakeChannel(contentPx0, contentPy0, contentSize, /*A*/ 3, std::string(), opacityThreshold,
-              tileMinU, tileMinV, tileMaxU, tileMaxV, nullptr);
+              tileMinU, tileMinV, tileMaxU, tileMaxV);
   cell.opacityThreshold = opacityThreshold;
 
   BakeColorChannel(contentPx0, contentPy0, contentSize, colorPath, colorConst,
                    tileMinU, tileMinV, tileMaxU, tileMaxV);
 
   if (!isConstOnly) {
-    FillCellBorder(px0, py0, regionSize, kCellPadding);
+    AkariImaging::Atlas::fillCellBorder(_pixels.data(), _colorPixels.data(), width, px0, py0, regionSize, kCellPadding);
   }
 
   {
@@ -452,22 +402,11 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
 void
 HdAkariTextureAtlas::BakeChannel(int px0, int py0, int regionSize, int channelIndex,
                                  std::string const &texPath, float fallbackConst,
-                                 int tileMinU, int tileMinV, int tileMaxU, int tileMaxV,
-                                 float *outAverage)
+                                 int tileMinU, int tileMinV, int tileMaxU, int tileMaxV)
 {
   int width = _gridSize.load(std::memory_order_relaxed) * kCellPixels;
 
-  double sum = 0.0;
-  uint8_t fallbackByte = Quantize(fallbackConst);
-  int physChannel = PhysicalChannel(channelIndex);
-  for (int y = 0; y < regionSize; ++y) {
-    for (int x = 0; x < regionSize; ++x) {
-      size_t idx = (size_t(py0 + y) * size_t(width) + size_t(px0 + x)) * 4 + physChannel;
-      _pixels[idx] = fallbackByte;
-    }
-  }
-  sum = double(fallbackByte) / 255.0 * double(regionSize) * double(regionSize);
-  size_t count = size_t(regionSize) * size_t(regionSize);
+  AkariImaging::Atlas::fillChannel(_pixels.data(), width, px0, py0, regionSize, channelIndex, fallbackConst);
 
   if (!texPath.empty() && tileMinU != INT_MAX) {
     int spanU = tileMaxU - tileMinU + 1;
@@ -475,7 +414,7 @@ HdAkariTextureAtlas::BakeChannel(int px0, int py0, int regionSize, int channelIn
 
     for (int tv = tileMinV; tv <= tileMaxV; ++tv) {
       for (int tu = tileMinU; tu <= tileMaxU; ++tu) {
-        std::string tilePath = ResolveUdimTile(texPath, tu, tv);
+        std::string tilePath = AkariImaging::Atlas::resolveUdimTile(texPath, tu, tv);
         std::vector<float> srcPixels;
         int srcW = 0, srcH = 0, nComp = 0;
         if (!DecodeTile(tilePath, srcPixels, srcW, srcH, nComp)) continue;
@@ -486,22 +425,13 @@ HdAkariTextureAtlas::BakeChannel(int px0, int py0, int regionSize, int channelIn
         int subY1 = py0 + ((tv - tileMinV + 1) * regionSize) / spanV;
         int subW = std::max(1, subX1 - subX0);
         int subH = std::max(1, subY1 - subY0);
-
-        for (int y = 0; y < subH; ++y) {
-          for (int x = 0; x < subW; ++x) {
-            float v = BoxFilterSample(srcPixels, srcW, srcH, nComp, 0, x, subW, y, subH);
-            uint8_t b = Quantize(v);
-            size_t idx = (size_t(subY0 + y) * size_t(width) + size_t(subX0 + x)) * 4 + physChannel;
-            sum += double(b) / 255.0 - double(_pixels[idx]) / 255.0;
-            _pixels[idx] = b;
-          }
-        }
+        
+        AkariImaging::Atlas::bakeChannelTile(_pixels.data(), width, srcPixels.data(),
+                                             srcW, srcH, nComp,
+                                             0, channelIndex,
+                                             subX0, subY0, subW, subH);
       }
     }
-  }
-
-  if (outAverage) {
-    *outAverage = count > 0 ? float(sum / double(count)) : fallbackConst;
   }
 }
 
@@ -512,18 +442,9 @@ HdAkariTextureAtlas::BakeColorChannel(int px0, int py0, int regionSize,
 {
   int width = _gridSize.load(std::memory_order_relaxed) * kCellPixels;
 
-  uint8_t fbR = Quantize(fallbackConst[0]);
-  uint8_t fbG = Quantize(fallbackConst[1]);
-  uint8_t fbB = Quantize(fallbackConst[2]);
-  for (int y = 0; y < regionSize; ++y) {
-    for (int x = 0; x < regionSize; ++x) {
-      size_t idx = (size_t(py0 + y) * size_t(width) + size_t(px0 + x)) * 4;
-      _colorPixels[idx + PhysicalChannel(0)] = fbR;
-      _colorPixels[idx + 1] = fbG;
-      _colorPixels[idx + PhysicalChannel(2)] = fbB;
-      _colorPixels[idx + 3] = 255;
-    }
-  }
+  AkariImaging::Atlas::fillColorRegion(_colorPixels.data(), width,
+                                       px0, py0, regionSize,
+                                       fallbackConst[0], fallbackConst[1], fallbackConst[2]);
 
   if (!texPath.empty() && tileMinU != INT_MAX) {
     int spanU = tileMaxU - tileMinU + 1;
@@ -531,7 +452,7 @@ HdAkariTextureAtlas::BakeColorChannel(int px0, int py0, int regionSize,
 
     for (int tv = tileMinV; tv <= tileMaxV; ++tv) {
       for (int tu = tileMinU; tu <= tileMaxU; ++tu) {
-        std::string tilePath = ResolveUdimTile(texPath, tu, tv);
+        std::string tilePath = AkariImaging::Atlas::resolveUdimTile(texPath, tu, tv);
         std::vector<float> srcPixels;
         int srcW = 0, srcH = 0, nComp = 0;
         if (!DecodeTile(tilePath, srcPixels, srcW, srcH, nComp)) continue;
@@ -543,46 +464,12 @@ HdAkariTextureAtlas::BakeColorChannel(int px0, int py0, int regionSize,
         int subW = std::max(1, subX1 - subX0);
         int subH = std::max(1, subY1 - subY0);
 
-        for (int y = 0; y < subH; ++y) {
-          for (int x = 0; x < subW; ++x) {
-            float r = BoxFilterSample(srcPixels, srcW, srcH, nComp, 0, x, subW, y, subH);
-            float g = nComp >= 2 ? BoxFilterSample(srcPixels, srcW, srcH, nComp, 1, x, subW, y, subH) : r;
-            float b = nComp >= 3 ? BoxFilterSample(srcPixels, srcW, srcH, nComp, 2, x, subW, y, subH) : r;
-            size_t idx = (size_t(subY0 + y) * size_t(width) + size_t(subX0 + x)) * 4;
-            _colorPixels[idx + PhysicalChannel(0)] = Quantize(r);
-            _colorPixels[idx + 1] = Quantize(g);
-            _colorPixels[idx + PhysicalChannel(2)] = Quantize(b);
-            _colorPixels[idx + 3] = 255;
-          }
-        }
+        AkariImaging::Atlas::bakeColorTile(_colorPixels.data(), width,
+                                           srcPixels.data(), srcW, srcW, nComp,
+                                           subX0, subY0, subW, subH);
       }
     }
   }
-}
-
-void
-HdAkariTextureAtlas::FillCellBorder(int px0, int py0, int regionSize, int padding)
-{
-  int width = _gridSize.load(std::memory_order_relaxed) * kCellPixels;
-  int cx0 = px0 + padding, cx1 = px0 + regionSize - padding;
-  int cy0 = py0 + padding, cy1 = py0 + regionSize - padding;
-
-  auto fillBuffer = [&](std::vector<uint8_t> &pixels) {
-    for (int y = 0; y < regionSize; ++y) {
-      int py = py0 + y;
-      int sy = std::clamp(py, cy0, cy1 - 1);
-      for (int x = 0; x < regionSize; ++x) {
-        int px = px0 + x;
-        if (px >= cx0 && px < cx1 && py >= cy0 && py < cy1) continue; // interior, already baked.
-        int sx = std::clamp(px, cx0, cx1 - 1);
-        size_t srcIdx = (size_t(sy) * size_t(width) + size_t(sx)) * 4;
-        size_t dstIdx = (size_t(py) * size_t(width) + size_t(px)) * 4;
-        std::memcpy(&pixels[dstIdx], &pixels[srcIdx], 4);
-      }
-    }
-  };
-  fillBuffer(_pixels);
-  fillBuffer(_colorPixels);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

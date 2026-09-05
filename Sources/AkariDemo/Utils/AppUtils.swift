@@ -119,7 +119,7 @@ public enum AppUtils
 
     return UsdStage.open(url.path)
   }
-  
+
   public static func usdScenePathFromArguments() -> String?
   {
     let arguments = CommandLine.arguments
@@ -133,16 +133,16 @@ public enum AppUtils
     }
     return nil
   }
-  
+
   public static func openOrCreateStage() -> UsdStage
   {
-    if let path = AppUtils.usdScenePathFromArguments()
+    if let path = usdScenePathFromArguments()
     {
-      return UsdStage.open(path)
+      UsdStage.open(path)
     }
     else
     {
-      return AppUtils.buildStage()
+      buildStage()
     }
   }
 }

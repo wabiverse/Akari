@@ -50,7 +50,7 @@ public extension Akari.Geom
   final class Batch
   {
     public static let vertexFloats = 14
-    public static let vertexStride = vertexFloats * MemoryLayout<Float>.size // 56
+    public static let vertexStride = vertexFloats * MemoryLayout<Float>.stride // 56
 
     private let maxVerts: Int
     private let maxIndices: Int
@@ -61,11 +61,11 @@ public extension Akari.Geom
 
     public init(estimatedTriangles: Int)
     {
-      let worstCaseVerts = max(estimatedTriangles, 1) * 3
-      let worstCaseIndices = max(estimatedTriangles, 1) * 3
+      // one vert and one index per triangle corner.
+      let worstCase = max(estimatedTriangles, 1) * 3
 
-      maxVerts = min(worstCaseVerts, Int(Int32.max) / Batch.vertexStride)
-      maxIndices = min(worstCaseIndices, Int(Int32.max) / MemoryLayout<Int32>.size)
+      maxVerts = min(worstCase, Int(Int32.max) / Self.vertexStride)
+      maxIndices = min(worstCase, Int(Int32.max) / MemoryLayout<Int32>.stride)
       vertBuf = .allocate(capacity: maxVerts * Self.vertexFloats)
       idxBuf = .allocate(capacity: maxIndices)
     }
@@ -81,7 +81,10 @@ public extension Akari.Geom
       vOff / Self.vertexFloats
     }
 
-    public var indexCount: Int { iOff }
+    public var indexCount: Int
+    {
+      iOff
+    }
 
     /// Appends one mesh's local-space vertex/index data,
     /// transforming positions/normals into world space
@@ -127,9 +130,9 @@ public extension Akari.Geom
       }
       vOff += vertCount * Self.vertexFloats
 
-      for j in 0 ..< localIndices.count
+      for (j, index) in localIndices.enumerated()
       {
-        idxBuf[iOff + j] = localIndices[j] + baseVertex
+        idxBuf[iOff + j] = index + baseVertex
       }
       iOff += localIndices.count
     }
@@ -140,20 +143,20 @@ public extension Akari.Geom
     public func draw()
     {
       guard vOff > 0 else { return }
-      let vbSize = GLsizei(vOff * MemoryLayout<Float>.stride)
-      let ibSize = GLsizei(iOff * MemoryLayout<Int32>.stride)
+      let vbBytes = vOff * MemoryLayout<Float>.stride
+      let ibBytes = iOff * MemoryLayout<Int32>.stride
 
-      let vb = gl.createBuffer(usage: GLuint(LGL_BUFFER_VERTEX | LGL_BUFFER_MAP_WRITE), sizeBytes: vbSize)
-      let ib = gl.createBuffer(usage: GLuint(LGL_BUFFER_INDEX | LGL_BUFFER_MAP_WRITE), sizeBytes: ibSize)
+      let vb = gl.createBuffer(usage: LGL_BUFFER_VERTEX | LGL_BUFFER_MAP_WRITE, sizeBytes: GLsizei(vbBytes))
+      let ib = gl.createBuffer(usage: LGL_BUFFER_INDEX | LGL_BUFFER_MAP_WRITE, sizeBytes: GLsizei(ibBytes))
 
       if let vPtr = gl.mapBuffer(vb)
       {
-        memcpy(vPtr, vertBuf.baseAddress!, vOff * MemoryLayout<Float>.stride)
+        memcpy(vPtr, vertBuf.baseAddress!, vbBytes)
         gl.unmapBuffer(vb)
       }
       if let iPtr = gl.mapBuffer(ib)
       {
-        memcpy(iPtr, idxBuf.baseAddress!, iOff * MemoryLayout<Int32>.stride)
+        memcpy(iPtr, idxBuf.baseAddress!, ibBytes)
         gl.unmapBuffer(ib)
       }
 
@@ -165,15 +168,18 @@ public extension Akari.Geom
       gl.enableClientState(GL_TEXTURE_COORD_ARRAY)
       gl.enableClientState(GL_NORMAL_ARRAY)
 
-      gl.vertexPointer(size: 4, type: GL_FLOAT, stride: GLsizei(Batch.vertexStride), pointer: UnsafeRawPointer(bitPattern: 0))
-      gl.colorPointer(size: 4, type: GL_FLOAT, stride: GLsizei(Batch.vertexStride), pointer: UnsafeRawPointer(bitPattern: 16))
-      gl.texCoordPointer(size: 2, type: GL_FLOAT, stride: GLsizei(Batch.vertexStride), pointer: UnsafeRawPointer(bitPattern: 32))
-      gl.normalPointer(type: GL_FLOAT, stride: GLsizei(Batch.vertexStride), pointer: UnsafeRawPointer(bitPattern: 40))
+      // float offsets into the interleaved vertex `append` writes.
+      let stride = GLsizei(Self.vertexStride)
+      let floatBytes = MemoryLayout<Float>.stride
+      gl.vertexPointer(size: 4, type: GL_FLOAT, stride: stride, pointer: .init(bitPattern: 0 * floatBytes))
+      gl.colorPointer(size: 4, type: GL_FLOAT, stride: stride, pointer: .init(bitPattern: 4 * floatBytes))
+      gl.texCoordPointer(size: 2, type: GL_FLOAT, stride: stride, pointer: .init(bitPattern: 8 * floatBytes))
+      gl.normalPointer(type: GL_FLOAT, stride: stride, pointer: .init(bitPattern: 10 * floatBytes))
 
       gl.drawElements(mode: GL_TRIANGLES,
                       count: Int32(iOff),
                       type: GL_UNSIGNED_INT,
-                      indices: UnsafeRawPointer(bitPattern: 0))
+                      indices: .init(bitPattern: 0))
 
       gl.disableClientState(GL_NORMAL_ARRAY)
       gl.disableClientState(GL_TEXTURE_COORD_ARRAY)

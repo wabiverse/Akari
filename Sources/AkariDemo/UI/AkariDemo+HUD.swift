@@ -51,12 +51,12 @@ extension AkariDemo
   {
     @State private var state: AkariDemo.HUDState
 
-    public init(engine: Akari.RenderEngine)
+    init(engine: Akari.RenderEngine)
     {
       _state = State(wrappedValue: AkariDemo.HUDState(engine: engine))
     }
 
-    public var body: some View
+    var body: some View
     {
       VStack(alignment: .leading, spacing: 3)
       {
@@ -72,15 +72,20 @@ extension AkariDemo
         sectionHeader("COLOR PIPELINE")
         viewTransformRow
         qualityRow
-        exposureRow
-        gammaRow
+        sliderRow("Exposure", String(format: "%+.1f EV", state.exposure),
+                  state.$exposure, in: -4 ... 4)
+        sliderRow("Gamma", String(format: "%.2f", state.gamma),
+                  state.$gamma, in: 0.4 ... 2.5)
 
         sectionHeader("SAMPLING")
-        samplesRow
-        renderSamplesRow
-        
+        sliderRow("Samples", String(format: "%d", Int(state.samples)),
+                  state.$samples, in: 1 ... 64)
+        sliderRow("Render Samples", String(format: "%d", Int(state.renderSamples)),
+                  state.$renderSamples, in: 1 ... 128)
+
         sectionHeader("LIGHTING")
-        environmentSunHeightRow
+        sliderRow("Environment Sun Height", String(format: "%.2f", state.environmentSunHeight),
+                  state.$environmentSunHeight, in: -1 ... 1)
 
         sectionHeader("FEATURES")
         featuresSection
@@ -120,78 +125,24 @@ extension AkariDemo
       }
     }
 
-    private var exposureRow: some View
+    /// A labelled slider that pushes the edit into the engine on change.
+    private func sliderRow(_ label: String,
+                           _ readout: String,
+                           _ binding: Binding<Double>,
+                           in range: ClosedRange<Double>) -> some View
     {
       VStack(alignment: .leading, spacing: 2)
       {
         HStack(spacing: 6)
         {
-          key("Exposure")
-          value(String(format: "%+.1f EV", state.exposure))
+          key(label)
+          value(readout)
         }
-        Slider(value: state.$exposure.onChange { _ in state.apply() }, in: -4 ... 4)
+        Slider(value: binding.onChange { _ in state.apply() }, in: range)
           .frame(width: 160)
       }
     }
 
-    private var gammaRow: some View
-    {
-      VStack(alignment: .leading, spacing: 2)
-      {
-        HStack(spacing: 6)
-        {
-          key("Gamma")
-          value(String(format: "%.2f", state.gamma))
-        }
-        Slider(value: state.$gamma.onChange { _ in state.apply() }, in: 0.4 ... 2.5)
-          .frame(width: 160)
-      }
-    }
-
-    private var samplesRow: some View
-    {
-      VStack(alignment: .leading, spacing: 2)
-      {
-        HStack(spacing: 6)
-        {
-          key("Samples")
-          value(String(format: "%d", Int(state.samples)))
-        }
-        Slider(value: state.$samples.onChange { _ in state.apply() },
-               in: 1 ... 64)
-          .frame(width: 160)
-      }
-    }
-
-    private var renderSamplesRow: some View
-    {
-      VStack(alignment: .leading, spacing: 2)
-      {
-        HStack(spacing: 6)
-        {
-          key("Render Samples")
-          value(String(format: "%d", Int(state.renderSamples)))
-        }
-        Slider(value: state.$renderSamples.onChange { _ in state.apply() },
-               in: 1 ... 128)
-          .frame(width: 160)
-      }
-    }
-
-    private var environmentSunHeightRow: some View
-    {
-      VStack(alignment: .leading, spacing: 2)
-      {
-        HStack(spacing: 6)
-        {
-          key("Environment Sun Height")
-          value(String(format: "%.2f", state.environmentSunHeight))
-        }
-        Slider(value: state.$environmentSunHeight.onChange { _ in state.apply() }, in: -1 ... 1)
-          .frame(width: 160)
-      }
-    }
-    
     private var featuresSection: some View
     {
       HStack(alignment: .top, spacing: 16)

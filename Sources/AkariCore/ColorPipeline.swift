@@ -230,7 +230,7 @@ public struct ColorPipeline: Sendable
     {
       // prevent redundant state changes.
       guard viewTransform != oldValue else { return }
-        
+
       // set the active tonemap on change.
       gl.tonemap(viewTransform.uniform)
     }

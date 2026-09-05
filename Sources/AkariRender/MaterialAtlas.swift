@@ -39,49 +39,66 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
-import AkariHydra
-import AkariRender
-import CxxStdlib
-import Foundation
-import HydraKit
-import OpenUSDKit
-import SwiftCrossUI
+import HdAkari
+import LabGL
 
-/// First light for the Akari render engine.
-@main
-struct AkariDemo: App
+public extension Akari
 {
-  typealias Backend = PlatformBackend
-
-  let hydra: Hydra.RenderEngine
-  let engine: Akari.RenderEngine
-
-  init()
+  /// Uploads the shared material + color texture atlases to the GPU.
+  final class MaterialAtlas
   {
-    Pixar.Bundler.shared.setup(.resources)
+    private var materialTexture: GLuint = 0
+    private var colorTexture: GLuint = 0
 
-    AppUtils.registerAkariPlugin()
+    public init() {}
 
-    engine = Akari.RenderEngine(settings: RenderSettings(quality: .high))
-    registerAkariRenderer(engine: engine)
-
-    let stage = AppUtils.openOrCreateStage()
-
-    let stageIsZUp = Pixar.UsdGeomGetStageUpAxis(Overlay.TfWeakPtr(stage)) == .z
-    engine.labfx.setStageUpAxis(isZUp: stageIsZUp)
-
-    hydra = Hydra.RenderEngine(stage: stage, rendererPluginId: Tf.Token(Akari.rendererPluginId))
-
-    print("[akari] first light - renderer = \(Akari.rendererPluginId)")
-  }
-
-  var body: some Scene
-  {
-    WindowGroup("Akari - Hydra Render Engine (First Light)")
+    /// Reuploads when the atlas is dirty, returns both
+    /// texture names (0 until the first upload).
+    public func uploadIfNeeded(_ atlas: Pixar.HdAkariTextureAtlas) -> (material: GLuint, color: GLuint)
     {
-      Hydra.Viewport(engine: hydra)
-        .frame(minWidth: 900, minHeight: 600)
-        .overlay(alignment: .topLeading) { HUD(engine: engine) }
+      if atlas.ConsumeDirty()
+      {
+        let width = GLsizei(atlas.Width())
+        let height = GLsizei(atlas.Height())
+        if let pixels = atlas.PixelData()
+        {
+          upload(&materialTexture, pixels: pixels, width: width, height: height)
+        }
+        if let colorPixels = atlas.ColorPixelData()
+        {
+          upload(&colorTexture, pixels: colorPixels, width: width, height: height)
+        }
+      }
+      return (materialTexture, colorTexture)
+    }
+
+    /// Uploads a texture atlas's pixels to `texture`.
+    private func upload(_ texture: inout GLuint, pixels: UnsafePointer<UInt8>,
+                        width: Int32, height: Int32)
+    {
+      if texture == 0
+      {
+        var tex: GLuint = 0
+        gl.genTextures(count: 1, textures: &tex)
+        texture = tex
+
+        gl.bindTexture(target: GL_TEXTURE_2D, texture: texture)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GL_LINEAR_MIPMAP_LINEAR)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GL_LINEAR)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_WRAP_S, param: GL_CLAMP_TO_EDGE)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_WRAP_T, param: GL_CLAMP_TO_EDGE)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAX_LEVEL, param: GLint(3))
+      }
+      else
+      {
+        gl.bindTexture(target: GL_TEXTURE_2D, texture: texture)
+      }
+
+      gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA,
+                    width: width, height: height, border: 0,
+                    format: GLenum(GL_RGBA), type: GL_UNSIGNED_BYTE,
+                    pixels: pixels)
+      gl.generateMipmap(GL_TEXTURE_2D)
     }
   }
 }

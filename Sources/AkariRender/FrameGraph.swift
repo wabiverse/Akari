@@ -58,18 +58,6 @@ public extension Akari
     }
   }
 
-  /// A 4x4 matrix as 16 row-major floats.
-  struct Matrix4: Sendable
-  {
-    public var m: [Float]
-    public init(_ m: [Float])
-    {
-      self.m = m.count == 16 ? m : Array(repeating: 0, count: 16)
-    }
-
-    public static let identity = Matrix4([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
-  }
-
   /// The view the frame is rendered from.
   struct Camera: Sendable
   {
@@ -98,6 +86,7 @@ public extension Akari
   struct FrameContext: @unchecked Sendable
   {
     public let gpu: GpuContext
+    public let labfx: Akari.LabFXEngine
     public let camera: Camera
     public let target: FrameTarget
     public let settings: RenderSettings

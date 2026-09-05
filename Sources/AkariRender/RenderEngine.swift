@@ -58,6 +58,7 @@ public extension Akari
     private var pipeline: RenderPipeline
     private var graph: [any RenderPassNode]
     private var gpu: GpuContext?
+    public let labfx = Akari.LabFXEngine()
     private var frameIndex: UInt64 = 0
     private var lastStatsRevision: UInt64 = 0
     private var lastCamera: (view: [Float], projection: [Float])?
@@ -112,17 +113,16 @@ public extension Akari
 
       // detect camera motion so the TAA resolve can skip accumulation
       // while the view changes to prevent ghosting.
-      var cameraMoved = lastCamera == nil
-      if let last = lastCamera
+      let cameraMoved = lastCamera.map
       {
-        cameraMoved = cameraMoved || !matrixNear(last.view, view)
-          || !matrixNear(last.projection, projection)
-      }
+        !matrixNear($0.view, view) || !matrixNear($0.projection, projection)
+      } ?? true
       lastCamera = (view: view, projection: projection)
 
       let camera = Camera(view: Matrix4(view), projection: Matrix4(projection))
       let target = FrameTarget(color: color, depth: depth, width: width, height: height)
       let ctx = FrameContext(gpu: gpu,
+                             labfx: labfx,
                              camera: camera,
                              target: target,
                              settings: settings,
@@ -143,12 +143,7 @@ public extension Akari
     /// Returns `true` when two camera matrices are identical within a small epsilon.
     private func matrixNear(_ a: [Float], _ b: [Float]) -> Bool
     {
-      guard a.count == b.count else { return false }
-      for i in 0 ..< a.count where abs(a[i] - b[i]) > 1e-6
-      {
-        return false
-      }
-      return true
+      a.count == b.count && zip(a, b).allSatisfy { abs($0 - $1) <= 1e-6 }
     }
 
     /// Debug output that geometry sync is feeding the engine.

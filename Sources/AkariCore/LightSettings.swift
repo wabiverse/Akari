@@ -43,10 +43,10 @@ public struct LightSettings: Sendable
 {
   /// Sun height, for day/night approximation.
   public var sunHeight: Float = 0
-  
+
   public init()
   {}
-  
+
   public init(sunHeight: Float)
   {
     self.sunHeight = sunHeight
