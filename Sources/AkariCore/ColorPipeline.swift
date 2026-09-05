@@ -141,7 +141,7 @@ public enum ViewTransform: String, Sendable, CaseIterable
 public extension ViewTransform
 {
   /// The tonemap switch value for use in shaders.
-  var uniform: Int32
+  var uniform: GLenum
   {
     switch self
     {
@@ -232,7 +232,7 @@ public struct ColorPipeline: Sendable
       guard viewTransform != oldValue else { return }
         
       // set the active tonemap on change.
-      gl.tonemap(GLenum(viewTransform.uniform))
+      gl.tonemap(viewTransform.uniform)
     }
   }
 

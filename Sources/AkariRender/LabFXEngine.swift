@@ -51,13 +51,16 @@ public extension Akari
   final class LabFXEngine
   {
     public nonisolated(unsafe) static let shared = LabFXEngine()
+    
+    public typealias LabGLWindowHandle = OpaquePointer
+    public typealias LabGLCaptureBuffer = OpaquePointer
+    public typealias LabFXGraph = UnsafeMutablePointer<lab.fx.Graph>
 
-    /// Opaque `labgl_WindowHandle`.
-    private var windowHandle: OpaquePointer?
+    private var windowHandle: LabGLWindowHandle?
     /// Parsed `.labfx` tree.
-    private var graph: UnsafeMutablePointer<lab.fx.labfx>?
-    /// Opaque `LabGLCaptureBuffer` the scene geometry is recorded into.
-    private var captureBuffer: OpaquePointer?
+    private var graph: LabFXGraph?
+    /// Buffer the scene geometry is recorded into.
+    private var captureBuffer: LabGLCaptureBuffer?
     /// The LabFX runtime driving the graph.
     private var runtime = lab.fx.Runtime()
     private var lastWidth = 0
@@ -161,25 +164,26 @@ public extension Akari
       if texture == 0
       {
         var tex: GLuint = 0
-        LABGLDISPATCH_glGenTextures(1, &tex)
+        gl.genTextures(count: 1, textures: &tex)
         texture = tex
-        LABGLDISPATCH_glBindTexture(GLenum(GL_TEXTURE_2D), texture)
-        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MIN_FILTER), GLint(GL_LINEAR_MIPMAP_LINEAR))
-        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MAG_FILTER), GLint(GL_LINEAR))
-        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_WRAP_S), GLint(GL_CLAMP_TO_EDGE))
-        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_WRAP_T), GLint(GL_CLAMP_TO_EDGE))
-        LABGLDISPATCH_glTexParameteri(GLenum(GL_TEXTURE_2D), GLenum(GL_TEXTURE_MAX_LEVEL), GLint(3))
+
+        gl.bindTexture(target: GL_TEXTURE_2D, texture: texture)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GL_LINEAR_MIPMAP_LINEAR)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GL_LINEAR)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_WRAP_S, param: GL_CLAMP_TO_EDGE)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_WRAP_T, param: GL_CLAMP_TO_EDGE)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAX_LEVEL, param: GLint(3))
       }
       else
       {
-        LABGLDISPATCH_glBindTexture(GLenum(GL_TEXTURE_2D), texture)
+        gl.bindTexture(target: GL_TEXTURE_2D, texture: texture)
       }
 
-      LABGLDISPATCH_glTexImage2D(GLenum(GL_TEXTURE_2D), 0, GL_RGBA,
-                                 width, height, 0,
-                                 GLenum(GL_RGBA), GLenum(GL_UNSIGNED_BYTE),
-                                 pixels)
-      LABGLDISPATCH_glGenerateMipmap(GLenum(GL_TEXTURE_2D))
+      gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA,
+                    width: width, height: height, border: 0,
+                    format: GLenum(GL_RGBA), type: GL_UNSIGNED_BYTE,
+                    pixels: pixels)
+      gl.generateMipmap(GL_TEXTURE_2D)
     }
 
     /// Uploads both atlas textures to the GPU whenever the atlas has grown.
@@ -203,12 +207,12 @@ public extension Akari
       if materialAtlasTexture != 0
       {
         var tex = materialAtlasTexture
-        runtime.setUniform("u_material_atlas", GLenum(GL_SAMPLER_2D), &tex)
+        runtime.setUniform("u_material_atlas", type: GL_SAMPLER_2D, data: &tex)
       }
       if colorAtlasTexture != 0
       {
         var tex = colorAtlasTexture
-        runtime.setUniform("u_color_atlas", GLenum(GL_SAMPLER_2D), &tex)
+        runtime.setUniform("u_color_atlas", type: GL_SAMPLER_2D, data: &tex)
       }
     }
 
@@ -336,8 +340,8 @@ public extension Akari
 
       if width != lastWidth || height != lastHeight
       {
-        labgl_resize(windowHandle, Int32(width), Int32(height))
-        runtime.resize(Int32(width), Int32(height))
+        labgl.resize(windowHandle, width: Int32(width), height: Int32(height))
+        runtime.resize(rootWidth: Int32(width), rootHeight: Int32(height))
         // buffer rebuild wipes the baked IBL textures,
         // so rerun the IBL passes on the next frame to
         // rebake, then disable them again.
@@ -348,7 +352,7 @@ public extension Akari
 
       if iblNeedsBake { setIblPasses(active: true) }
 
-      labgl_beginFrame(windowHandle)
+      labgl.beginFrame(windowHandle)
     }
 
     /// Rerecords the synced meshes into the capture buffer and sets
@@ -367,10 +371,10 @@ public extension Akari
         let scene = renderParam.GetScene()
       else { return }
 
-      LABGLDISPATCH_glMatrixMode(GLenum(GL_PROJECTION))
-      LABGLDISPATCH_glLoadMatrixf(projection.m)
-      LABGLDISPATCH_glMatrixMode(GLenum(GL_MODELVIEW))
-      LABGLDISPATCH_glLoadMatrixf(view.m)
+      gl.matrixMode(GL_PROJECTION)
+      gl.loadMatrix(projection.m)
+      gl.matrixMode(GL_MODELVIEW)
+      gl.loadMatrix(view.m)
 
       runtime.setViewMatrix(view.m)
 
@@ -387,15 +391,15 @@ public extension Akari
 
       let meshes = scene.Snapshot()
 
-      labgl_captureClear(captureBuffer)
-      labgl_captureStart(captureBuffer)
+      labgl.captureClear(captureBuffer)
+      labgl.captureStart(captureBuffer)
 
-      LABGLDISPATCH_glEnable(GLenum(GL_DEPTH_TEST))
-      LABGLDISPATCH_glDepthFunc(GLenum(GL_LESS))
-      
-      LABGLDISPATCH_glEnable(GLenum(GL_CULL_FACE))
-      LABGLDISPATCH_glCullFace(GLenum(GL_BACK))
-      LABGLDISPATCH_glFrontFace(GLenum(GL_CCW))
+      gl.enable(GL_DEPTH_TEST)
+      gl.depthFunc(GL_LESS)
+
+      gl.enable(GL_CULL_FACE)
+      gl.cullFace(GL_BACK)
+      gl.frontFace(GL_CCW)
 
       // serial phase.
       var readyItems: [MeshDrawItem] = []
@@ -471,7 +475,7 @@ public extension Akari
       }
       meshGeometryCache = newCache
       batch.draw()
-      labgl_captureStop()
+      labgl.captureStop()
     }
 
     /// Sets the deferred lighting stage state: the split sum IBL toggle,
@@ -484,20 +488,20 @@ public extension Akari
     public func setLighting(iblEnabled: Bool, projection: Matrix4, sunHeight: Float)
     {
       var iblOn: Float = iblEnabled ? 1 : 0
-      runtime.setUniform("u_iblEnabled", UInt32(GL_FLOAT), &iblOn)
+      runtime.setUniform("u_iblEnabled", type: GL_FLOAT, data: &iblOn)
 
       let invProj = Self.mat4Inverse(projection.m)
       invProj.withUnsafeBufferPointer
       { buf in
-        runtime.setUniform("u_invProj", UInt32(GL_FLOAT_MAT4), buf.baseAddress)
+        runtime.setUniform("u_invProj", type: GL_FLOAT_MAT4, data: buf.baseAddress)
       }
 
       var sunHeightV = sunHeight
-      runtime.setUniform("sunHeight", GLenum(GL_FLOAT), &sunHeightV)
+      runtime.setUniform("sunHeight", type: GL_FLOAT, data: &sunHeightV)
       lastSunHeight = sunHeight // handles IBL rebaking, if changed.
 
       var zUpV: Float = stageIsZUp ? 1 : 0
-      runtime.setUniform("u_zUp", GLenum(GL_FLOAT), &zUpV)
+      runtime.setUniform("u_zUp", type: GL_FLOAT, data: &zUpV)
     }
 
     /// Sets the tonemap stage state: exposure, gamma,
@@ -514,19 +518,19 @@ public extension Akari
                            frameIndex: UInt64)
     {
       var expV = exposure
-      runtime.setUniform("exposure", GLenum(GL_FLOAT), &expV)
+      runtime.setUniform("exposure", type: GL_FLOAT, data: &expV)
 
       var gammaV = gamma
-      runtime.setUniform("gamma", GLenum(GL_FLOAT), &gammaV)
+      runtime.setUniform("gamma", type: GL_FLOAT, data: &gammaV)
 
       var fIdx = Int32(frameIndex & 0xFFFF)
-      runtime.setUniform("frameIndex", GLenum(GL_INT), &fIdx)
+      runtime.setUniform("frameIndex", type: GL_INT, data: &fIdx)
 
-      if GLenum(viewTransform.uniform) != lastTonemap
+      if viewTransform.uniform != lastTonemap
       {
-        lastTonemap = GLenum(viewTransform.uniform)
+        lastTonemap = viewTransform.uniform
 
-        runtime.setPassTonemap("tonemap", GLenum(viewTransform.uniform))
+        runtime.setPassTonemap("tonemap", tonemap: viewTransform.uniform)
       }
     }
 
@@ -548,12 +552,12 @@ public extension Akari
         setIblPasses(active: false)
         iblNeedsBake = false
       }
-      labgl_present(windowHandle)
+      labgl.present(windowHandle)
 
       // export the tonemapped color buffer's native texture
       // and hand it to the color AOV through Hgi.
       guard let color, let hgi else { return }
-      let finalTex = runtime.bufferTexture("tonemap", "tonemap")
+      let finalTex = runtime.texture("tonemap", named: "tonemap")
       guard finalTex != 0 else { return }
       let native = lglGetTextureNativeHandle(finalTex)
       if native != 0
@@ -567,7 +571,7 @@ public extension Akari
       guard windowHandle == nil else { return }
 
       // headless attach.
-      guard let handle = labgl_attachOffscreen(Int32(width), Int32(height))
+      guard let handle = labgl.attachOffscreen(width: Int32(width), height: Int32(height))
       else
       {
         print("[akari/labgl] labgl_attachOffscreen failed")
@@ -576,7 +580,7 @@ public extension Akari
       windowHandle = handle
 
       // parse + build the deferred graph once.
-      guard let parsed = lab.fx.parse_labfx(Self.kDeferredGraph, Self.kDeferredGraph.utf8.count)
+      guard let parsed = lab.fx.parse(Self.kDeferredGraph, length: Self.kDeferredGraph.utf8.count)
       else
       {
         print("[akari/labgl] labfx parse failed")
@@ -584,7 +588,7 @@ public extension Akari
       }
       graph = parsed
 
-      guard runtime.build(parsed, Int32(width), Int32(height))
+      guard runtime.build(parsed, rootWidth: Int32(width), rootHeight: Int32(height))
       else
       {
         print("[akari/labgl] labfx runtime build failed")
@@ -593,16 +597,16 @@ public extension Akari
 
       // roughness reached at the prefilter's last mip.
       var roughnessScale: Float = 1.0
-      runtime.setUniform("roughnessScale", GLenum(GL_FLOAT), &roughnessScale)
+      runtime.setUniform("roughnessScale", type: GL_FLOAT, data: &roughnessScale)
 
       // capture buffer the geometry pass replays each frame.
-      guard let cap = labgl_captureCreate()
+      guard let cap = labgl.captureCreate()
       else
       {
         print("[akari/labgl] labgl_captureCreate failed")
         return
       }
-      runtime.setMeshCapture("mesh", cap)
+      runtime.setMeshCapture("mesh", buffer: cap)
       captureBuffer = cap
 
       lastWidth = width
@@ -614,17 +618,17 @@ public extension Akari
       runtime.destroy()
       if let captureBuffer
       {
-        labgl_captureDestroy(captureBuffer)
+        labgl.captureDestroy(captureBuffer)
         self.captureBuffer = nil
       }
       if let graph
       {
-        lab.fx.free_labfx(graph)
+        lab.fx.free(graph)
         self.graph = nil
       }
       if let windowHandle
       {
-        labgl_destroyWindow(windowHandle)
+        labgl.destroyWindow(windowHandle)
         self.windowHandle = nil
       }
     }

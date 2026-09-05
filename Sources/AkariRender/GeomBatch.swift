@@ -143,42 +143,42 @@ public extension Akari.Geom
       let vbSize = GLsizei(vOff * MemoryLayout<Float>.stride)
       let ibSize = GLsizei(iOff * MemoryLayout<Int32>.stride)
 
-      let vb = LABGLDISPATCH_lglCreateBuffer(GLuint(LGL_BUFFER_VERTEX | LGL_BUFFER_MAP_WRITE), vbSize)
-      let ib = LABGLDISPATCH_lglCreateBuffer(GLuint(LGL_BUFFER_INDEX | LGL_BUFFER_MAP_WRITE), ibSize)
+      let vb = gl.createBuffer(usage: GLuint(LGL_BUFFER_VERTEX | LGL_BUFFER_MAP_WRITE), sizeBytes: vbSize)
+      let ib = gl.createBuffer(usage: GLuint(LGL_BUFFER_INDEX | LGL_BUFFER_MAP_WRITE), sizeBytes: ibSize)
 
-      if let vPtr = LABGLDISPATCH_lglMapBuffer(vb)
+      if let vPtr = gl.mapBuffer(vb)
       {
         memcpy(vPtr, vertBuf.baseAddress!, vOff * MemoryLayout<Float>.stride)
-        LABGLDISPATCH_lglUnmapBuffer(vb)
+        gl.unmapBuffer(vb)
       }
-      if let iPtr = LABGLDISPATCH_lglMapBuffer(ib)
+      if let iPtr = gl.mapBuffer(ib)
       {
         memcpy(iPtr, idxBuf.baseAddress!, iOff * MemoryLayout<Int32>.stride)
-        LABGLDISPATCH_lglUnmapBuffer(ib)
+        gl.unmapBuffer(ib)
       }
 
-      LABGLDISPATCH_glBindBuffer(GLenum(GL_ARRAY_BUFFER), vb)
-      LABGLDISPATCH_glBindBuffer(GLenum(GL_ELEMENT_ARRAY_BUFFER), ib)
-      
-      LABGLDISPATCH_glEnableClientState(GLenum(GL_VERTEX_ARRAY))
-      LABGLDISPATCH_glEnableClientState(GLenum(GL_COLOR_ARRAY))
-      LABGLDISPATCH_glEnableClientState(GLenum(GL_TEXTURE_COORD_ARRAY))
-      LABGLDISPATCH_glEnableClientState(GLenum(GL_NORMAL_ARRAY))
+      gl.bindBuffer(target: GL_ARRAY_BUFFER, buffer: vb)
+      gl.bindBuffer(target: GL_ELEMENT_ARRAY_BUFFER, buffer: ib)
 
-      LABGLDISPATCH_glVertexPointer(4, GLenum(GL_FLOAT), GLsizei(Batch.vertexStride), UnsafeRawPointer(bitPattern: 0))
-      LABGLDISPATCH_glColorPointer(4, GLenum(GL_FLOAT), GLsizei(Batch.vertexStride), UnsafeRawPointer(bitPattern: 16))
-      LABGLDISPATCH_glTexCoordPointer(2, GLenum(GL_FLOAT), GLsizei(Batch.vertexStride), UnsafeRawPointer(bitPattern: 32))
-      LABGLDISPATCH_glNormalPointer(GLenum(GL_FLOAT), GLsizei(Batch.vertexStride), UnsafeRawPointer(bitPattern: 40))
+      gl.enableClientState(GL_VERTEX_ARRAY)
+      gl.enableClientState(GL_COLOR_ARRAY)
+      gl.enableClientState(GL_TEXTURE_COORD_ARRAY)
+      gl.enableClientState(GL_NORMAL_ARRAY)
 
-      LABGLDISPATCH_glDrawElements(GLenum(GL_TRIANGLES),
-                                   Int32(iOff),
-                                   GLenum(GL_UNSIGNED_INT),
-                                   UnsafeRawPointer(bitPattern: 0))
+      gl.vertexPointer(size: 4, type: GL_FLOAT, stride: GLsizei(Batch.vertexStride), pointer: UnsafeRawPointer(bitPattern: 0))
+      gl.colorPointer(size: 4, type: GL_FLOAT, stride: GLsizei(Batch.vertexStride), pointer: UnsafeRawPointer(bitPattern: 16))
+      gl.texCoordPointer(size: 2, type: GL_FLOAT, stride: GLsizei(Batch.vertexStride), pointer: UnsafeRawPointer(bitPattern: 32))
+      gl.normalPointer(type: GL_FLOAT, stride: GLsizei(Batch.vertexStride), pointer: UnsafeRawPointer(bitPattern: 40))
 
-      LABGLDISPATCH_glDisableClientState(GLenum(GL_NORMAL_ARRAY))
-      LABGLDISPATCH_glDisableClientState(GLenum(GL_TEXTURE_COORD_ARRAY))
-      LABGLDISPATCH_glDisableClientState(GLenum(GL_COLOR_ARRAY))
-      LABGLDISPATCH_glDisableClientState(GLenum(GL_VERTEX_ARRAY))
+      gl.drawElements(mode: GL_TRIANGLES,
+                      count: Int32(iOff),
+                      type: GL_UNSIGNED_INT,
+                      indices: UnsafeRawPointer(bitPattern: 0))
+
+      gl.disableClientState(GL_NORMAL_ARRAY)
+      gl.disableClientState(GL_TEXTURE_COORD_ARRAY)
+      gl.disableClientState(GL_COLOR_ARRAY)
+      gl.disableClientState(GL_VERTEX_ARRAY)
 
       vOff = 0
       iOff = 0
