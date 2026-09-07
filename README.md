@@ -15,6 +15,8 @@
 
 ###### <samp>♫ [<b>∆</b>](https://youtu.be/1XwU8H6e8Ts?si=-eokO_nbdRnAtCp9).</samp>
 
+<img width="800" height="581" alt="akari_cascaded_shadow_maps" src="https://github.com/user-attachments/assets/93f58ea2-a75b-46f0-b0b6-99d16b3dae09" />
+
 </div>
 
 ## Overview
