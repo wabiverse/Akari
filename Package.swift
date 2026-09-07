@@ -17,7 +17,7 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/wabiverse/swift-usd.git", branch: "dev"),
     .package(url: "https://github.com/wabiverse/Lattice.git", branch: "main"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.1.1"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.1.2"),
   ],
   targets: [
     // TODO: support externally provided openusd builds.
@@ -145,6 +145,24 @@ let package = Package(
       name: "AkariCoreTests",
       dependencies: [
         .target(name: "AkariCore")
+      ],
+      swiftSettings: [
+        .interoperabilityMode(.Cxx)
+      ]
+    ),
+
+    .testTarget(
+      name: "AkariRenderTests",
+      dependencies: [
+        .target(name: "AkariCore"),
+        .target(name: "AkariRender"),
+        .target(name: "AkariHydra"),
+      ],
+      cxxSettings: [
+        .define("_LIBCPP_ABI_NO_COMPRESSED_PAIR_PADDING")
+      ],
+      swiftSettings: [
+        .interoperabilityMode(.Cxx)
       ]
     )
   ],

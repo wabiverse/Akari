@@ -58,6 +58,8 @@ public extension Akari.Geom
     private let idxBuf: UnsafeMutableBufferPointer<Int32>
     private var vOff = 0
     private var iOff = 0
+    private var boundsMin = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+    private var boundsMax = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
 
     public init(estimatedTriangles: Int)
     {
@@ -86,6 +88,13 @@ public extension Akari.Geom
       iOff
     }
 
+    /// World space bounds of everything appended so far,
+    /// `nil` until the first vertex lands.
+    public var worldBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
+    {
+      boundsMin.x <= boundsMax.x ? (boundsMin, boundsMax) : nil
+    }
+
     /// Appends one mesh's local-space vertex/index data,
     /// transforming positions/normals into world space
     /// as it writes.
@@ -109,15 +118,22 @@ public extension Akari.Geom
         let nx = localVerts[s + 3]; let ny = localVerts[s + 4]; let nz = localVerts[s + 5]
         let uu = localVerts[s + 6]; let vv = localVerts[s + 7]
 
-        vertBuf[d + 0] = m[0] * px + m[4] * py + m[8] * pz + m[12]
-        vertBuf[d + 1] = m[1] * px + m[5] * py + m[9] * pz + m[13]
-        vertBuf[d + 2] = m[2] * px + m[6] * py + m[10] * pz + m[14]
+        let world = SIMD3(m[0] * px + m[4] * py + m[8] * pz + m[12],
+                          m[1] * px + m[5] * py + m[9] * pz + m[13],
+                          m[2] * px + m[6] * py + m[10] * pz + m[14])
+        boundsMin = pointwiseMin(boundsMin, world)
+        boundsMax = pointwiseMax(boundsMax, world)
+
+        vertBuf[d + 0] = world.x
+        vertBuf[d + 1] = world.y
+        vertBuf[d + 2] = world.z
         vertBuf[d + 3] = 1.0
 
-        vertBuf[d + 4] = 1.0
-        vertBuf[d + 5] = 1.0
-        vertBuf[d + 6] = 1.0
-        vertBuf[d + 7] = 1.0
+        // unused RGBA, since we use a material atlas.
+        vertBuf[d + 4] = 1.0 // R
+        vertBuf[d + 5] = 1.0 // G
+        vertBuf[d + 6] = 1.0 // B
+        vertBuf[d + 7] = 1.0 // A
 
         vertBuf[d + 8] = uu
         vertBuf[d + 9] = vv

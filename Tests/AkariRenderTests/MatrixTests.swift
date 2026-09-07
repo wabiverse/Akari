@@ -38,53 +38,63 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-import AkariCore
+import Testing
+@testable import AkariCore
+@testable import AkariRender
 
-/// Resolves a set of ``RenderSettings`` into the
-/// ordered list of passes that actually run this
-/// frame, the assembled frame graph.
-public struct RenderPipeline: Sendable
+@Suite("Matrix4")
+struct MatrixTests
 {
-  public var settings: RenderSettings
-
-  public init(settings: RenderSettings)
+  @Test("identity round trips a point unchanged")
+  func identityTransform()
   {
-    self.settings = settings
+    let p = SIMD3<Float>(1, 2, 3)
+    let out = Akari.Matrix4.identity.transform(p)
+    #expect(abs(out.x - p.x) < 1e-5)
+    #expect(abs(out.y - p.y) < 1e-5)
+    #expect(abs(out.z - p.z) < 1e-5)
   }
 
-  /// The passes that run for the current settings, in execution order.
-  public var activePasses: [RenderPassID]
+  @Test("inverse undoes an arbitrary lookAt")
+  func inverseRoundTrip()
   {
-    let f = settings.features
-
-    var passes: [RenderPassID] = [.depthPrepass, .geometry]
-
-    // shadows replay the geometry capture the geometry pass
-    // records, so they can only be drawn once it has run.
-    if f.contains(.shadowMaps) { passes.append(.shadow) }
-
-    if f.contains(.ambientOcclusion) { passes.append(.ambientOcclusion) }
-
-    passes.append(.lighting)
-
-    if f.contains(.screenSpaceGI) { passes.append(.screenSpaceGI) }
-    // reflections run when either screen space or hardware RT is on.
-    if f.contains(.screenSpaceReflections) || f.contains(.hardwareRayTracing)
+    let view = Akari.Matrix4.lookAt(eye: SIMD3(3, 4, 5), target: SIMD3(0, 0, 0), up: SIMD3(0, 1, 0))
+    let roundTrip = view.inverse() * view
+    for c in 0 ..< 4
     {
-      passes.append(.reflections)
+      for r in 0 ..< 4
+      {
+        let expected: Float = c == r ? 1 : 0
+        #expect(abs(roundTrip[c, r] - expected) < 1e-4)
+      }
     }
+  }
 
-    passes.append(.transparency)
+  @Test("ortho maps the near-far box onto NDC [-1, 1]")
+  func orthoProjectsBoxCorners()
+  {
+    let proj = Akari.Matrix4.ortho(left: -2, right: 2, bottom: -1, top: 1, near: 0.5, far: 10)
+    let nearCorner = proj.transform(SIMD3(-2, -1, -0.5))
+    #expect(abs(nearCorner.x - -1) < 1e-4)
+    #expect(abs(nearCorner.y - -1) < 1e-4)
+    #expect(abs(nearCorner.z - -1) < 1e-4)
 
-    if f.contains(.volumetrics) { passes.append(.volumetrics) }
-    if f.contains(.temporalAA) { passes.append(.temporalResolve) }
-    if f.contains(.bloom) { passes.append(.bloom) }
-    if f.contains(.depthOfField) { passes.append(.depthOfField) }
+    let farCorner = proj.transform(SIMD3(2, 1, -10))
+    #expect(abs(farCorner.x - 1) < 1e-4)
+    #expect(abs(farCorner.y - 1) < 1e-4)
+    #expect(abs(farCorner.z - 1) < 1e-4)
+  }
 
-    // the color pipeline.
-    passes.append(.tonemap)
-    passes.append(.present)
+  @Test("atlasRect maps clip space onto its UV sub-rect")
+  func atlasRectMapsCorners()
+  {
+    let rect = Akari.Matrix4.atlasRect(origin: SIMD2(0.25, 0.5), size: SIMD2(0.25, 0.25))
+    let bottomLeft = rect.transform(SIMD3(-1, -1, 0))
+    #expect(abs(bottomLeft.x - 0.25) < 1e-5)
+    #expect(abs(bottomLeft.y - 0.5) < 1e-5)
 
-    return passes
+    let topRight = rect.transform(SIMD3(1, 1, 0))
+    #expect(abs(topRight.x - 0.5) < 1e-5)
+    #expect(abs(topRight.y - 0.75) < 1e-5)
   }
 }

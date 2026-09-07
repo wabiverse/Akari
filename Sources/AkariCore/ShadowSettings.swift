@@ -38,53 +38,46 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-import AkariCore
-
-/// Resolves a set of ``RenderSettings`` into the
-/// ordered list of passes that actually run this
-/// frame, the assembled frame graph.
-public struct RenderPipeline: Sendable
+/// How the shadow atlas is carved up and filtered.
+public struct ShadowSettings: Sendable
 {
-  public var settings: RenderSettings
+  /// Square atlas edge, in texels.
+  public var atlasSize: Int = 4096
+  /// Allocation granularity, the atlas is a grid of these.
+  public var pageSize: Int = 256
+  /// Square edge of one cascade's tile, in texels.
+  public var cascadeResolution: Int = 1024
+  /// Sun cascades, clamped to ``maxCascades``.
+  public var cascadeCount: Int = 4
+  /// View distance the last cascade reaches.
+  public var maxDistance: Float = 200
+  /// 0 spaces the cascade splits uniformly, 1 logarithmically.
+  public var splitDistribution: Float = 0.85
+  /// Constant offset applied to the comparison depth.
+  public var depthBias: Float = 0.0015
+  /// Extra offset as surfaces turn away from the light.
+  public var normalBias: Float = 0.04
+  /// PCF tap spacing, in atlas texels.
+  public var filterRadius: Float = 1.5
+  /// Fraction of ``maxDistance`` over which shadows fade out.
+  public var fadeRatio: Float = 0.1
 
-  public init(settings: RenderSettings)
+  /// The deferred shader carries one matrix and one rect per
+  /// cascade, so this bounds ``cascadeCount``.
+  public static let maxCascades = 4
+
+  public init()
+  {}
+
+  /// Cascades actually rendered.
+  public var resolvedCascadeCount: Int
   {
-    self.settings = settings
+    min(max(cascadeCount, 1), Self.maxCascades)
   }
 
-  /// The passes that run for the current settings, in execution order.
-  public var activePasses: [RenderPassID]
+  /// Pages along one edge of a cascade tile.
+  public var cascadePages: Int
   {
-    let f = settings.features
-
-    var passes: [RenderPassID] = [.depthPrepass, .geometry]
-
-    // shadows replay the geometry capture the geometry pass
-    // records, so they can only be drawn once it has run.
-    if f.contains(.shadowMaps) { passes.append(.shadow) }
-
-    if f.contains(.ambientOcclusion) { passes.append(.ambientOcclusion) }
-
-    passes.append(.lighting)
-
-    if f.contains(.screenSpaceGI) { passes.append(.screenSpaceGI) }
-    // reflections run when either screen space or hardware RT is on.
-    if f.contains(.screenSpaceReflections) || f.contains(.hardwareRayTracing)
-    {
-      passes.append(.reflections)
-    }
-
-    passes.append(.transparency)
-
-    if f.contains(.volumetrics) { passes.append(.volumetrics) }
-    if f.contains(.temporalAA) { passes.append(.temporalResolve) }
-    if f.contains(.bloom) { passes.append(.bloom) }
-    if f.contains(.depthOfField) { passes.append(.depthOfField) }
-
-    // the color pipeline.
-    passes.append(.tonemap)
-    passes.append(.present)
-
-    return passes
+    max(1, (cascadeResolution + pageSize - 1) / pageSize)
   }
 }

@@ -69,6 +69,12 @@ public extension Akari
 
     private let materialAtlas = Akari.MaterialAtlas()
     private let recorder = Akari.Geom.Recorder()
+    private let shadowAtlas = Akari.ShadowAtlas()
+
+    /// World bounds of the last recorded geometry.
+    private var sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
+    /// Set once the atlas has tiles the deferred pass can sample.
+    private var shadowsReady = false
 
     /// This is `true` when the opened usd stage's upAxis is "Z".
     private var stageIsZUp = false
@@ -77,6 +83,13 @@ public extension Akari
     public func setStageUpAxis(isZUp: Bool)
     {
       stageIsZUp = isZUp
+    }
+
+    /// Compute sun direction based on the opened usd stages's upAxis.
+    private func worldSpaceSunDirection(_ light: LightSettings) -> SIMD3<Float>
+    {
+      let sky = light.sunDirection
+      return stageIsZUp ? SIMD3(sky.x, -sky.z, sky.y) : sky
     }
 
     /// The last GL_TONEMAP_* operator applied to the tonemap pass.
@@ -190,8 +203,8 @@ public extension Akari
         let mat = Pixar.GfMatrix4f(mesh.transform)
         guard let mPtr = mat.GetArray() else { continue }
         let worldMatrix = Array(UnsafeBufferPointer(start: mPtr, count: 16))
-        let normalMatrix = Akari.normalMatrix3x3(mPtr)
-        let flipWinding = Akari.determinant3x3(mPtr) < 0
+        let normalMatrix = Matrix.normalMatrix3x3(mPtr)
+        let flipWinding = Matrix.determinant3x3(mPtr) < 0
 
         rawMeshes.append(Akari.Geom.Recorder.RawMesh(id: mesh.id.string, dataRevision: mesh.dataRevision,
                                                      flipWinding: flipWinding, points: mesh.points,
@@ -222,6 +235,79 @@ public extension Akari
       }
       batch.draw()
       labgl.captureStop()
+
+      sceneBounds = batch.worldBounds
+    }
+
+    /// Fits the sun cascades into the shadow atlas and redraws whichever
+    /// tiles went stale, then binds them for the deferred resolve.
+    ///
+    /// - Parameters:
+    ///   - renderParam: hydra render param.
+    ///   - camera: the view the cascades are fitted to.
+    ///   - settings: the frame's render settings.
+    ///   - frameIndex: per frame counter, drives atlas eviction.
+    public func renderShadows(renderParam: Pixar.HdAkariRenderParam,
+                              camera: Akari.Camera,
+                              settings: RenderSettings,
+                              frameIndex: UInt64)
+    {
+      shadowsReady = false
+      guard
+        let captureBuffer,
+        let sceneBounds,
+        let scene = renderParam.GetScene()
+      else { return }
+
+      let shadow = settings.light.shadow
+      let views = shadowAtlas.render(capture: captureBuffer,
+                                     camera: camera,
+                                     lightDirection: worldSpaceSunDirection(settings.light),
+                                     sceneBounds: sceneBounds,
+                                     sceneRevision: scene.Revision(),
+                                     frameIndex: frameIndex,
+                                     settings: shadow)
+      guard !views.isEmpty else { return }
+
+      bindShadowViews(views, settings: shadow)
+      shadowsReady = true
+
+      // the atlas draws left the light's matrices on the stack,
+      // so put the camera back before the captured replay.
+      gl.matrixMode(GL_PROJECTION)
+      gl.loadMatrix(camera.projection.m)
+      gl.matrixMode(GL_MODELVIEW)
+      gl.loadMatrix(camera.view.m)
+    }
+
+    private func bindShadowViews(_ views: [Akari.ShadowAtlas.View], settings: ShadowSettings)
+    {
+      setSampler("u_shadow_atlas", shadowAtlas.texture)
+
+      // the shader carries a fixed set of cascade slots, so the unused
+      // tail repeats the last view rather than sampling stale matrices.
+      for slot in 0 ..< ShadowSettings.maxCascades
+      {
+        let view = views[min(slot, views.count - 1)]
+        setMatrix("u_shadowMatrix\(slot)", view.matrix)
+        setVector("u_shadowRect\(slot)", view.rect)
+      }
+
+      var splits = SIMD4<Float>(repeating: .greatestFiniteMagnitude)
+      for (i, view) in views.prefix(4).enumerated()
+      {
+        splits[i] = view.splitFar
+      }
+      setVector("u_shadowSplits", splits)
+
+      setVector("u_shadowParams", SIMD4(1 / Float(max(settings.atlasSize, 1)),
+                                        settings.depthBias,
+                                        settings.normalBias,
+                                        Float(views.count)))
+
+      let far = views.last?.splitFar ?? settings.maxDistance
+      let fade = max(far * min(max(settings.fadeRatio, 0.001), 1), 1e-3)
+      setVector("u_shadowFilter", SIMD4(settings.filterRadius, far - fade, 1 / fade, 0))
     }
 
     /// Sets the deferred lighting stage state: the split sum IBL toggle,
@@ -230,15 +316,21 @@ public extension Akari
     /// - Parameters:
     ///   - iblEnabled: gates the split sum IBL lobes.
     ///   - projection: 16 row-major floats, view->clip.
-    ///   - sunHeight: height of the sun [-1, 1] for day/night.
-    public func setLighting(iblEnabled: Bool, projection: Matrix4, sunHeight: Float)
+    ///   - light: sun height and shadow configuration.
+    ///   - shadowsEnabled: gates the cascade lookup.
+    public func setLighting(iblEnabled: Bool, projection: Matrix4,
+                            light: LightSettings, shadowsEnabled: Bool)
     {
       setFloat("u_iblEnabled", iblEnabled ? 1 : 0)
       setMatrix("u_invProj", projection.inverse())
 
-      setFloat("sunHeight", sunHeight)
-      lastSunHeight = sunHeight // handles IBL rebaking, if changed.
+      setFloat("sunHeight", light.sunHeight)
+      lastSunHeight = light.sunHeight // handles IBL rebaking, if changed.
 
+      let sun = worldSpaceSunDirection(light)
+      setVector("u_sunDirection", SIMD4(sun.x, sun.y, sun.z, 0))
+
+      setFloat("u_shadowEnabled", shadowsEnabled && shadowsReady ? 1 : 0)
       setFloat("u_zUp", stageIsZUp ? 1 : 0)
     }
 
@@ -321,6 +413,12 @@ public extension Akari
       runtime.setUniform(name, type: GL_SAMPLER_2D, data: &texture)
     }
 
+    private func setVector(_ name: String, _ value: SIMD4<Float>)
+    {
+      var value = value
+      runtime.setUniform(name, type: GLenum(GL_FLOAT_VEC4), data: &value)
+    }
+
     private func setMatrix(_ name: String, _ matrix: Matrix4)
     {
       matrix.m.withUnsafeBufferPointer
@@ -385,6 +483,7 @@ public extension Akari
 
     private func teardown()
     {
+      shadowAtlas.release()
       runtime.destroy()
       if let captureBuffer
       {

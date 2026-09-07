@@ -139,11 +139,25 @@ shader: deferred-shade
               u_prefiltered_texture: samplerCube,
               u_irradiance_texture: samplerCube,
               u_dfg_texture: sampler2d,
+              u_shadow_atlas: sampler2d,
               u_view: mat4 <- auto-view-matrix,
               u_iblEnabled: float,
               u_invProj: mat4,
               sunHeight: float,
-              u_zUp: float ]
+              u_zUp: float,
+              u_sunDirection: vec4,
+              u_shadowEnabled: float,
+              u_shadowMatrix0: mat4,
+              u_shadowMatrix1: mat4,
+              u_shadowMatrix2: mat4,
+              u_shadowMatrix3: mat4,
+              u_shadowRect0: vec4,
+              u_shadowRect1: vec4,
+              u_shadowRect2: vec4,
+              u_shadowRect3: vec4,
+              u_shadowSplits: vec4,
+              u_shadowParams: vec4,
+              u_shadowFilter: vec4 ]
   varying:  [ texCoord: vec2 ]
 
   vsh:
@@ -196,6 +210,67 @@ shader: deferred-shade
       return mix(v, vec3(v.x, v.z, -v.y), u_zUp);
     }
 
+    // u_shadowParams = (1 / atlas size, depth bias, normal bias, cascade count)
+    // u_shadowFilter = (tap spacing in texels, fade start, 1 / fade range, unused)
+
+    const float CASCADE_BLEND = 0.2;
+
+    float sampleCascadeShadow(int cascade, vec3 worldPos, float bias, float texelStep)
+    {
+      mat4 m = u_shadowMatrix0;
+      vec4 rect = u_shadowRect0;
+      if (cascade == 1)      { m = u_shadowMatrix1; rect = u_shadowRect1; }
+      else if (cascade == 2) { m = u_shadowMatrix2; rect = u_shadowRect2; }
+      else if (cascade == 3) { m = u_shadowMatrix3; rect = u_shadowRect3; }
+
+      vec4 clip = m * vec4(worldPos, 1.0);
+      if (clip.w <= 0.0) return 1.0;
+      vec3 uvz = clip.xyz / clip.w;
+
+      if (uvz.z >= 1.0 || abs(uvz.x) > 1.0 || abs(uvz.y) > 1.0) return 1.0;
+
+      float lit = 0.0;
+      for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+          vec2 uv = clamp(uvz.xy + vec2(float(x), float(y)) * texelStep, rect.xy, rect.zw);
+          lit += (uvz.z - bias) <= texture(u_shadow_atlas, uv).r ? 1.0 : 0.0;
+        }
+      }
+      return lit * (1.0 / 9.0);
+    }
+
+    float cascadeShadow(vec3 worldPos, float NoL, float viewDepth)
+    {
+      if (u_shadowEnabled < 0.5) return 1.0;
+
+      int cascadeCount = int(u_shadowParams.w);
+      int cascade = 0;
+      if (viewDepth > u_shadowSplits.x) cascade = 1;
+      if (viewDepth > u_shadowSplits.y) cascade = 2;
+      if (viewDepth > u_shadowSplits.z) cascade = 3;
+      if (cascade > cascadeCount - 1) return 1.0;
+
+      float bias = u_shadowParams.y + u_shadowParams.z * (1.0 - NoL);
+      float texelStep = u_shadowParams.x * u_shadowFilter.x;
+
+      float lit = sampleCascadeShadow(cascade, worldPos, bias, texelStep);
+
+      if (cascade < cascadeCount - 1) {
+        float splitFar = cascade == 0 ? u_shadowSplits.x
+                        : cascade == 1 ? u_shadowSplits.y
+                        : u_shadowSplits.z;
+        float blendStart = splitFar * (1.0 - CASCADE_BLEND);
+        float t = clamp((viewDepth - blendStart) / max(splitFar - blendStart, 1e-4), 0.0, 1.0);
+        if (t > 0.0) {
+          float litNext = sampleCascadeShadow(cascade + 1, worldPos, bias, texelStep);
+          lit = mix(lit, litNext, t);
+        }
+      }
+
+      float fade = clamp((viewDepth - u_shadowFilter.y) * u_shadowFilter.z, 0.0, 1.0);
+      return mix(lit, 1.0, fade);
+    }
+
     void main()
     {
       vec4 normalSample = texture(u_normal_texture, var.texCoord);
@@ -204,7 +279,9 @@ shader: deferred-shade
       vec3 diffuse = texture(u_diffuse_texture, var.texCoord).xyz;
       vec2 materialSample = texture(u_material_texture, var.texCoord).rg;
 
-      mat3 invView = mat3(inverse(u_view));
+      mat4 invViewFull = inverse(u_view);
+      mat3 invView = mat3(invViewFull);
+      vec3 worldPos = (invViewFull * vec4(posEye, 1.0)).xyz;
 
       if (normalSample.a < 0.5) {
         if (u_iblEnabled > 0.5) {
@@ -229,14 +306,8 @@ shader: deferred-shade
       vec3 f0 = mix(vec3(0.04), baseColor, metallic);
       vec3 diffuseColor = baseColor * (1.0 - metallic);
 
-      float celestialAngle = clamp(abs(sunHeight) + 0.01, 0.0, 1.0) * 75.0 * PI / 180.0;
-      vec3 sunL = normalize(vec3(0.4 * cos(celestialAngle),
-                                  sin(celestialAngle),
-                                  -0.5 * cos(celestialAngle)));
-      vec3 moonL = vec3(-sunL.x, sunL.y, -sunL.z);
-
+      vec3 L = normalize(u_sunDirection.xyz);
       float nightFade = smoothstep(-0.3, 0.05, sunHeight);
-      vec3 L = normalize(mix(moonL, sunL, nightFade));
 
       vec3 color = vec3(0.0);
       float NoL = max(dot(N, L), 1e-4);
@@ -260,7 +331,9 @@ shader: deferred-shade
         vec3 nightColor = mix(texture(u_envCube_texture, skyL).rgb, vec3(0.95, 0.95, 1.00), clamp(-sunHeight, 0.0, 1.0));
         vec3 dynamicSky = mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade);
 
-        color += (Fd + Fr) * terminatorSmooth * dynamicSky;
+        float shadow = cascadeShadow(worldPos, NoL, -posEye.z);
+
+        color += (Fd + Fr) * terminatorSmooth * dynamicSky * shadow;
       }
 
       vec3 dfg = texture(u_dfg_texture, vec2(NoV, perceptualRoughness)).rgb;
@@ -315,6 +388,71 @@ shader: deferred-shade
       return mix(v, float3(v.x, v.z, -v.y), zUp);
     }
 
+    // u_shadowParams = (1 / atlas size, depth bias, normal bias, cascade count)
+    // u_shadowFilter = (tap spacing in texels, fade start, 1 / fade range, unused)
+
+    constexpr constant float CASCADE_BLEND = 0.2;
+
+    float sampleCascadeShadow(int cascade, float3 worldPos, float bias, float texelStep,
+                              texture2d<float> atlas, sampler atlasSmp,
+                              constant Uniforms& u)
+    {
+      float4x4 m = u.u_shadowMatrix0;
+      float4 rect = u.u_shadowRect0;
+      if (cascade == 1)      { m = u.u_shadowMatrix1; rect = u.u_shadowRect1; }
+      else if (cascade == 2) { m = u.u_shadowMatrix2; rect = u.u_shadowRect2; }
+      else if (cascade == 3) { m = u.u_shadowMatrix3; rect = u.u_shadowRect3; }
+
+      float4 clip = m * float4(worldPos, 1.0);
+      if (clip.w <= 0.0) return 1.0;
+      float3 uvz = clip.xyz / clip.w;
+
+      if (uvz.z >= 1.0 || abs(uvz.x) > 1.0 || abs(uvz.y) > 1.0) return 1.0;
+
+      float lit = 0.0;
+      for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+          float2 uv = clamp(uvz.xy + float2(float(x), float(y)) * texelStep, rect.xy, rect.zw);
+          lit += (uvz.z - bias) <= atlas.sample(atlasSmp, uv).r ? 1.0 : 0.0;
+        }
+      }
+      return lit * (1.0 / 9.0);
+    }
+
+    float cascadeShadow(float3 worldPos, float NoL, float viewDepth,
+                        texture2d<float> atlas, sampler atlasSmp,
+                        constant Uniforms& u)
+    {
+      if (u.u_shadowEnabled < 0.5) return 1.0;
+
+      int cascadeCount = int(u.u_shadowParams.w);
+      int cascade = 0;
+      if (viewDepth > u.u_shadowSplits.x) cascade = 1;
+      if (viewDepth > u.u_shadowSplits.y) cascade = 2;
+      if (viewDepth > u.u_shadowSplits.z) cascade = 3;
+      if (cascade > cascadeCount - 1) return 1.0;
+
+      float bias = u.u_shadowParams.y + u.u_shadowParams.z * (1.0 - NoL);
+      float texelStep = u.u_shadowParams.x * u.u_shadowFilter.x;
+
+      float lit = sampleCascadeShadow(cascade, worldPos, bias, texelStep, atlas, atlasSmp, u);
+
+      if (cascade < cascadeCount - 1) {
+        float splitFar = cascade == 0 ? u.u_shadowSplits.x
+                        : cascade == 1 ? u.u_shadowSplits.y
+                        : u.u_shadowSplits.z;
+        float blendStart = splitFar * (1.0 - CASCADE_BLEND);
+        float t = clamp((viewDepth - blendStart) / max(splitFar - blendStart, 1e-4), 0.0, 1.0);
+        if (t > 0.0) {
+          float litNext = sampleCascadeShadow(cascade + 1, worldPos, bias, texelStep, atlas, atlasSmp, u);
+          lit = mix(lit, litNext, t);
+        }
+      }
+
+      float fade = clamp((viewDepth - u.u_shadowFilter.y) * u.u_shadowFilter.z, 0.0, 1.0);
+      return mix(lit, 1.0, fade);
+    }
+
     //@main
     {
       float4 normalSample = texture(u_normal_texture, var.texCoord);
@@ -328,6 +466,8 @@ shader: deferred-shade
         float3(u_view[0][1], u_view[1][1], u_view[2][1]),
         float3(u_view[0][2], u_view[1][2], u_view[2][2])
       );
+
+      float3 worldPos = invView * (posEye - float3(u_view[3][0], u_view[3][1], u_view[3][2]));
 
       if (normalSample.a < 0.5) {
         if (u_iblEnabled > 0.5) {
@@ -350,14 +490,8 @@ shader: deferred-shade
         float3 f0 = mix(float3(0.04), baseColor, metallic);
         float3 diffuseColor = baseColor * (1.0 - metallic);
 
-        float celestialAngle = saturate(abs(sunHeight) + 0.01) * 75.0 * PI / 180.0;
-        float3 sunL = normalize(float3(0.4 * cos(celestialAngle),
-                                       sin(celestialAngle),
-                                       -0.5 * cos(celestialAngle)));
-        float3 moonL = float3(-sunL.x, sunL.y, -sunL.z);
-
+        float3 L = normalize(u_sunDirection.xyz);
         float nightFade = smoothstep(-0.3, 0.05, sunHeight);
-        float3 L = normalize(mix(moonL, sunL, nightFade));
 
         float3 color = float3(0.0);
         float NoL = max(dot(N, L), 1e-4);
@@ -381,7 +515,10 @@ shader: deferred-shade
           float3 nightColor = mix(texture(u_envCube_texture, skyL).rgb, float3(0.95, 0.95, 1.00), saturate(-sunHeight));
           float3 dynamicSky = mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade);
 
-          color += (Fd + Fr) * terminatorSmooth * dynamicSky;
+          float shadow = cascadeShadow(worldPos, NoL, -posEye.z,
+                                       u_shadow_atlas, u_shadow_atlas_smp, _u);
+
+          color += (Fd + Fr) * terminatorSmooth * dynamicSky * shadow;
         }
 
         float3 dfg = texture(u_dfg_texture, float2(NoV, perceptualRoughness)).rgb;

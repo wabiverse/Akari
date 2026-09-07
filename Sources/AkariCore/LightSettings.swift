@@ -38,17 +38,52 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
+import Foundation
+
 /// Scene light settings.
 public struct LightSettings: Sendable
 {
   /// Sun height, for day/night approximation.
   public var sunHeight: Float = 0
+  /// Shadow atlas configuration.
+  public var shadow = ShadowSettings()
 
   public init()
   {}
 
-  public init(sunHeight: Float)
+  public init(sunHeight: Float, shadow: ShadowSettings = ShadowSettings())
   {
     self.sunHeight = sunHeight
+    self.shadow = shadow
+  }
+
+  /// World space direction toward the dominant celestial body, swinging
+  /// from the sun to the moon across dusk. The deferred shader reads this
+  /// as a uniform, and the shadow cascades are fitted to it, so both stay
+  /// on the same light no matter how `sunHeight` is driven.
+  public var sunDirection: SIMD3<Float>
+  {
+    let angle = min(max(abs(sunHeight) + 0.01, 0), 1) * 75 * .pi / 180
+    let c = cos(angle)
+    let sun = Self.normalize(SIMD3<Float>(0.4 * c, sin(angle), -0.5 * c))
+    let moon = SIMD3<Float>(-sun.x, sun.y, -sun.z)
+
+    let t = Self.smoothstep(-0.3, 0.05, sunHeight)
+    return Self.normalize(moon + (sun - moon) * t)
+  }
+}
+
+public extension LightSettings
+{
+  private static func normalize(_ v: SIMD3<Float>) -> SIMD3<Float>
+  {
+    let length = (v * v).sum().squareRoot()
+    return length > 1e-6 ? v / length : SIMD3<Float>(0, 1, 0)
+  }
+
+  private static func smoothstep(_ edge0: Float, _ edge1: Float, _ x: Float) -> Float
+  {
+    let t = min(max((x - edge0) / (edge1 - edge0), 0), 1)
+    return t * t * (3 - 2 * t)
   }
 }

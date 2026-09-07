@@ -53,12 +53,18 @@ public extension Akari
       s.features.contains(.shadowMaps)
     }
 
-    public func execute(_ state: inout FrameState, _: FrameContext)
+    public func execute(_ state: inout FrameState, _ ctx: FrameContext)
     {
-      state.declare(.shadowAtlas, RenderTargetDesc(width: 4096, height: 4096, format: .depth32f))
-      // TODO: fit N cascades to the view frustum, snap to texels,
-      // render depth only per cascade + per punctual/area light
-      // into the atlas.
+      let shadow = ctx.settings.light.shadow
+      state.declare(.shadowAtlas, RenderTargetDesc(width: shadow.atlasSize,
+                                                   height: shadow.atlasSize,
+                                                   format: .depth32f))
+      ctx.labfx.renderShadows(renderParam: ctx.renderParam,
+                              camera: ctx.camera,
+                              settings: ctx.settings,
+                              frameIndex: ctx.frameIndex)
+      // TODO: punctual and area lights, once they arrive as Sprims, take
+      // their own tiles out of the same atlas.
     }
   }
 
@@ -113,7 +119,8 @@ public extension Akari
       ctx.labfx.setLighting(
         iblEnabled: ctx.settings.features.contains(.imageBasedLighting),
         projection: ctx.camera.projection,
-        sunHeight: ctx.settings.light.sunHeight
+        light: ctx.settings.light,
+        shadowsEnabled: ctx.settings.features.contains(.shadowMaps)
       )
     }
   }
