@@ -1,5 +1,5 @@
 {
-  "originHash" : "7b67e891ee1ff507444243c9940ee5b722bb1efc515a62e3abe4d79a37beb345",
+  "originHash" : "548b585064bf0bd3732acede4b6d82d23cbe2eff55cb572c3427a28927544eb0",
   "pins" : [
     {
       "identity" : "imgui",
@@ -141,8 +141,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/moreSwift/swift-winui",
       "state" : {
-        "revision" : "c4f1cb75c02f4a4fdefcef2e5c5c4388c7cf9389",
-        "version" : "0.2.2"
+        "revision" : "df7642fbb88e23a9cc1bbd366c7d6d3780fd0251",
+        "version" : "0.2.1"
       }
     },
     {
@@ -150,8 +150,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/furbytm/SwiftLabGL.git",
       "state" : {
-        "revision" : "1b9f07e1d18b6a421ce64fbdd92330562764d6e1",
-        "version" : "0.1.2"
+        "revision" : "b7a3d88b33a10bc218b30b67b0a760ddbfd1d2b9",
+        "version" : "0.1.4"
       }
     },
     {
