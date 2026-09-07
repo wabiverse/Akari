@@ -150,8 +150,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/furbytm/SwiftLabGL.git",
       "state" : {
-        "revision" : "b7a3d88b33a10bc218b30b67b0a760ddbfd1d2b9",
-        "version" : "0.1.4"
+        "revision" : "034ec6b12a9141996d1e78fa820219ceb2fd19a8",
+        "version" : "0.1.5"
       }
     },
     {

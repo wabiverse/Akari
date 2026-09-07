@@ -230,7 +230,10 @@ public extension Akari
       {
         farthestVisibleCorner = max(farthestVisibleCorner, -camera.view.transform(corner).z)
       }
-      let paddedReach = farthestVisibleCorner * 1.5
+      let bandFactor: Float = 1.05
+      let band = (log(max(farthestVisibleCorner, 1)) / log(bandFactor)).rounded(.up)
+      let quantizedCorner = pow(bandFactor, band)
+      let paddedReach = quantizedCorner * 1.5
       let shadowFar = min(frustumFar, max(settings.maxDistance, paddedReach))
       guard frustumNear > 0, shadowFar > frustumNear else { return [] }
 
@@ -354,7 +357,7 @@ public extension Akari
     /// redrawn this pass.
     private func beginAtlasPass()
     {
-      gl.bindRenderTargetPreserving(target)
+      gl.bindRenderTarget(target)
 
       gl.disable(GLenum(GL_BLEND))
       gl.enable(GL_DEPTH_TEST)
