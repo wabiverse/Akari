@@ -198,7 +198,7 @@ public extension Akari
       {
         if mesh.points.empty() || mesh.triangleIndices.empty() { continue }
 
-        triangleEstimate += mesh.triangleIndices.size() / 3
+        triangleEstimate += mesh.triangleIndices.size()
 
         let mat = Pixar.GfMatrix4f(mesh.transform)
         guard let mPtr = mat.GetArray() else { continue }

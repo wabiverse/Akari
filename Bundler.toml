@@ -1,0 +1,11 @@
+format_version = 2
+
+[apps.AkariDemo]
+identifier = 'foundation.wabi.AkariDemo'
+product = 'AkariDemo'
+version = '0.0.1'
+category = 'public.app-category.graphics-design'
+
+[apps.AkariDemo.plist]
+commit = '$(COMMIT_HASH)'
+CFBundleDocumentTypes = [ { type = "dict", value = { CFBundleTypeExtensions = [ 'usd', 'usda', 'usdc', 'usdz' ], CFBundleTypeName = 'Universal Scene Description File', CFBundleTypeRole = 'Editor', LSIsAppleDefaultForType = true, LSItemContentTypes = [ 'com.pixar.universal-scene-description', 'com.pixar.universal-scene-description-mobile', 'com.pixar.usd.ascii', 'com.pixar.usd.crate' ], CFBundleTypeIconSystemGenerated = true } } ]
