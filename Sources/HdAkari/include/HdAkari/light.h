@@ -37,55 +37,43 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
+#ifndef HDAKARI_LIGHT_H
+#define HDAKARI_LIGHT_H
 
-import AkariCore
+#include "pxr/pxrns.h"
+#include "HdAkari/api.h"
+#include "Hd/light.h"
 
-/// Resolves a set of ``RenderSettings`` into the
-/// ordered list of passes that actually run this
-/// frame, the assembled frame graph.
-public struct RenderPipeline: Sendable
+#include "Sdf/path.h"
+
+PXR_NAMESPACE_OPEN_SCOPE
+
+class HdAkariLight final : public HdLight
 {
-  public var settings: RenderSettings
+public:
+  HDAKARI_API
+  explicit HdAkariLight(SdfPath const &id);
 
-  public init(settings: RenderSettings)
-  {
-    self.settings = settings
-  }
+  ~HdAkariLight() override;
 
-  /// The passes that run for the current settings, in execution order.
-  public var activePasses: [RenderPassID]
-  {
-    let f = settings.features
+  HDAKARI_API
+  void Sync(HdSceneDelegate *delegate,
+            HdRenderParam   *renderParam,
+            HdDirtyBits     *dirtyBits) override;
 
-    var passes: [RenderPassID] = [.depthPrepass, .geometry]
+  HDAKARI_API
+  HdDirtyBits GetInitialDirtyBitsMask() const override;
 
-    if f.contains(.volumetrics) { passes.append(.volumetrics) }
+  HDAKARI_API
+  void Finalize(HdRenderParam *renderParam) override;
 
-    // shadows replay the geometry capture the geometry pass
-    // records, so they can only be drawn once it has run.
-    if f.contains(.shadowMaps) { passes.append(.shadow) }
+private:
+  HdAkariLight(const HdAkariLight &) = delete;
+  HdAkariLight &operator=(const HdAkariLight &) = delete;
 
-    if f.contains(.ambientOcclusion) { passes.append(.ambientOcclusion) }
+  uint64_t _dataGeneration = 0;
+};
 
-    passes.append(.lighting)
+PXR_NAMESPACE_CLOSE_SCOPE
 
-    if f.contains(.screenSpaceGI) { passes.append(.screenSpaceGI) }
-    // reflections run when either screen space or hardware RT is on.
-    if f.contains(.screenSpaceReflections) || f.contains(.hardwareRayTracing)
-    {
-      passes.append(.reflections)
-    }
-
-    passes.append(.transparency)
-
-    if f.contains(.temporalAA) { passes.append(.temporalResolve) }
-    if f.contains(.bloom) { passes.append(.bloom) }
-    if f.contains(.depthOfField) { passes.append(.depthOfField) }
-
-    // the color pipeline.
-    passes.append(.tonemap)
-    passes.append(.present)
-
-    return passes
-  }
-}
+#endif // HDAKARI_LIGHT_H

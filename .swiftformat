@@ -128,4 +128,3 @@
 --xctest-symbols 
 --yoda-swap always
 --disable preferForLoop,trailingCommas
---enable isEmpty

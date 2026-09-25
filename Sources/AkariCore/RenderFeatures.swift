@@ -73,6 +73,8 @@ public struct RenderFeatures: OptionSet, Sendable
   /// Hardware ray tracing (aka "realtime ray tracing") for reflections,
   /// shadows, and one bounce GI where screen space fails.
   public static let hardwareRayTracing = RenderFeatures(rawValue: 1 << 11)
+  /// Demo overlay with LabFX `callback:` passes and `latency:` ring buffers.
+  public static let fireflies = RenderFeatures(rawValue: 1 << 12)
 
   /// The complete realtime fidelity stack (screen space, no hardware RT).
   public static let fullFidelity: RenderFeatures = [

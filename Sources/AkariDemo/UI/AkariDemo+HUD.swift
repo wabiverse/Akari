@@ -58,41 +58,66 @@ extension AkariDemo
 
     var body: some View
     {
-      VStack(alignment: .leading, spacing: 3)
+      ScrollView
       {
-        Text("AKARI 灯り")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundColor(Color(white: 0.62))
-        Text("\(state.activePassCount)")
-          .font(.system(size: 30, weight: .bold).monospaced())
-        Text("frame graph passes active")
-          .font(.system(size: 12))
-          .foregroundColor(Color(white: 0.62))
+        VStack(alignment: .leading, spacing: 3)
+        {
+          Text("AKARI 灯り")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(Color(white: 0.62))
+          Text("\(state.activePassCount)")
+            .font(.system(size: 30, weight: .bold).monospaced())
+          Text("frame graph passes active")
+            .font(.system(size: 12))
+            .foregroundColor(Color(white: 0.62))
 
-        sectionHeader("COLOR PIPELINE")
-        viewTransformRow
-        qualityRow
-        sliderRow("Exposure", String(format: "%+.1f EV", state.exposure),
-                  state.$exposure, in: -4 ... 4)
-        sliderRow("Gamma", String(format: "%.2f", state.gamma),
-                  state.$gamma, in: 0.4 ... 2.5)
+          sectionHeader("COLOR PIPELINE")
+          viewTransformRow
+          qualityRow
+          sliderRow("Exposure", String(format: "%+.1f EV", state.exposure),
+                    state.$exposure, in: -4 ... 4)
+          sliderRow("Gamma", String(format: "%.2f", state.gamma),
+                    state.$gamma, in: 0.4 ... 2.5)
 
-        sectionHeader("SAMPLING")
-        sliderRow("Samples", String(format: "%d", Int(state.samples)),
-                  state.$samples, in: 1 ... 64)
-        sliderRow("Render Samples", String(format: "%d", Int(state.renderSamples)),
-                  state.$renderSamples, in: 1 ... 128)
+          sectionHeader("SAMPLING")
+          sliderRow("Samples", String(format: "%d", Int(state.samples)),
+                    state.$samples, in: 1 ... 64)
+          sliderRow("Render Samples", String(format: "%d", Int(state.renderSamples)),
+                    state.$renderSamples, in: 1 ... 128)
 
-        sectionHeader("LIGHTING")
-        sliderRow("Environment Sun Height", String(format: "%.2f", state.environmentSunHeight),
-                  state.$environmentSunHeight, in: -1 ... 1)
+          sectionHeader("LIGHTING")
+          sliderRow("Environment Sun Height", String(format: "%.2f", state.environmentSunHeight),
+                    state.$environmentSunHeight, in: -1 ... 1)
+          sliderRow("Sun Angle", String(format: "%.2f°", state.environmentSunAngle),
+                    state.$environmentSunAngle, in: 0 ... 20)
+          Group
+          {
+            sliderRow("Clipmap LOD Bias", String(format: "%+.0f", state.shadowLevelLodBias),
+                      state.$shadowLevelLodBias, in: -4 ... 4)
+            sliderRow("Max Shadow Distance", String(format: "%.0f", state.shadowMaxDistance),
+                      state.$shadowMaxDistance, in: 2 ... 200)
+          }
 
-        sectionHeader("FEATURES")
-        featuresSection
+          Group
+          {
+            sectionHeader("VOLUMETRICS")
+            sliderRow("Fog Density", String(format: "%.3f", state.volumeDensity),
+                      state.$volumeDensity, in: 0 ... 0.2)
+            sliderRow("Fog Anisotropy", String(format: "%+.2f", state.volumeAnisotropy),
+                      state.$volumeAnisotropy, in: -0.9 ... 0.9)
+            sliderRow("Fog Distance", String(format: "%.0f", state.volumeMaxDistance),
+                      state.$volumeMaxDistance, in: 5 ... 500)
+            Toggle("Volume shadows", isOn: state.volumeShadowsBinding)
+              .toggleStyle(.switch)
+          }
 
-        Text("edits rebuild the frame graph live")
-          .font(.system(size: 10))
-          .foregroundColor(Color(white: 0.5))
+          sectionHeader("FEATURES")
+          featuresSection
+
+          Text("edits rebuild the frame graph live")
+            .font(.system(size: 10))
+            .foregroundColor(Color(white: 0.5))
+        }
       }
       .padding(14)
       .background(Color(white: 0.14, opacity: 0.66))
@@ -106,7 +131,7 @@ extension AkariDemo
       HStack(spacing: 6)
       {
         key("View transform")
-        Picker(of: ViewTransform.allCases,
+        Picker(of: Akari.Color.ViewTransform.allCases,
                selection: state.$viewTransform.onChange { _ in state.apply() })
       }
     }
@@ -164,6 +189,7 @@ extension AkariDemo
           featureToggle(.depthOfField, "Depth of field")
           featureToggle(.volumetrics, "Volumetrics")
           featureToggle(.hardwareRayTracing, "Hardware RT")
+          featureToggle(.fireflies, "Fireflies (demo)")
         }
       }
     }

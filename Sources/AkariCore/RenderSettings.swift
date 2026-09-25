@@ -61,9 +61,11 @@ public struct RenderSettings: Sendable
   /// The active lighting/shading/post features.
   public var features: RenderFeatures = RenderSettings.features(for: .medium)
   /// Scene exposure + display view transform (AgX by default).
-  public var color: ColorPipeline = .init()
+  public var color: Akari.Color.Pipeline = .init()
   /// Scene light settings.
   public var light: LightSettings = .init()
+  /// Scene volume settings.
+  public var volume: VolumeSettings = .init()
   /// Frame rate the interactive pipeline budgets toward.
   public var targetFrameRate: Int = 60
   /// Viewport sample count (defaults to 16).
@@ -71,24 +73,26 @@ public struct RenderSettings: Sendable
   /// Final render sample count (defaults 64).
   public var renderSamples: Int = 64
   /// GPU backend (`Metal`, `OpenGL`, `Vulkan`).
-  public var backend: GpuBackend = .preferredForCurrentPlatform
+  public var backend: Akari.GPU.Backend = .preferredForCurrentPlatform
 
   public init()
   {}
 
   public init(quality: RenderQuality = .medium,
               features: RenderFeatures? = nil,
-              color: ColorPipeline = ColorPipeline(),
+              color: Akari.Color.Pipeline = Akari.Color.Pipeline(),
               light: LightSettings = LightSettings(),
+              volume: VolumeSettings = VolumeSettings(),
               targetFrameRate: Int = 60,
               samples: Int = 16,
               renderSamples: Int = 64,
-              backend: GpuBackend = .preferredForCurrentPlatform)
+              backend: Akari.GPU.Backend = .preferredForCurrentPlatform)
   {
     self.quality = quality
     self.features = features ?? Self.features(for: quality)
     self.color = color
     self.light = light
+    self.volume = volume
     self.targetFrameRate = targetFrameRate
     self.samples = samples
     self.renderSamples = renderSamples

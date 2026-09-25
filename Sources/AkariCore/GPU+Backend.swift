@@ -38,54 +38,38 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-import AkariCore
+import Foundation
 
-/// Resolves a set of ``RenderSettings`` into the
-/// ordered list of passes that actually run this
-/// frame, the assembled frame graph.
-public struct RenderPipeline: Sendable
+public extension Akari
 {
-  public var settings: RenderSettings
-
-  public init(settings: RenderSettings)
+  enum GPU
   {
-    self.settings = settings
-  }
-
-  /// The passes that run for the current settings, in execution order.
-  public var activePasses: [RenderPassID]
-  {
-    let f = settings.features
-
-    var passes: [RenderPassID] = [.depthPrepass, .geometry]
-
-    if f.contains(.volumetrics) { passes.append(.volumetrics) }
-
-    // shadows replay the geometry capture the geometry pass
-    // records, so they can only be drawn once it has run.
-    if f.contains(.shadowMaps) { passes.append(.shadow) }
-
-    if f.contains(.ambientOcclusion) { passes.append(.ambientOcclusion) }
-
-    passes.append(.lighting)
-
-    if f.contains(.screenSpaceGI) { passes.append(.screenSpaceGI) }
-    // reflections run when either screen space or hardware RT is on.
-    if f.contains(.screenSpaceReflections) || f.contains(.hardwareRayTracing)
+    /// The GPU backend Akari renders through.
+    ///
+    /// Akari does not own a render hardware interface (RHI) of its own,
+    /// each case maps to a LabGL backend (`Metal`, `OpenGL`, `Vulkan`).
+    public enum Backend: String, Sendable
     {
-      passes.append(.reflections)
+      /// Apple platforms (macOS, iOS, visionOS) via `Metal`.
+      case metal
+
+      /// Linux, Android and Windows via `OpenGL`.
+      case openGL
+
+      /// A future Linux, Android, and Windows backend via `Vulkan`.
+      @available(*, unavailable, message: "The .vulkan backend is not yet supported, use .openGL instead.")
+      case vulkan
+
+      /// The backend Akari defaults to on the platform it's compiled for.
+      public static var preferredForCurrentPlatform: Backend
+      {
+        #if os(macOS) || os(iOS) || os(tvOS) || os(visionOS)
+          return .metal
+        #else
+          // default to Vulkan when it becomes available later.
+          return .openGL
+        #endif
+      }
     }
-
-    passes.append(.transparency)
-
-    if f.contains(.temporalAA) { passes.append(.temporalResolve) }
-    if f.contains(.bloom) { passes.append(.bloom) }
-    if f.contains(.depthOfField) { passes.append(.depthOfField) }
-
-    // the color pipeline.
-    passes.append(.tonemap)
-    passes.append(.present)
-
-    return passes
   }
 }

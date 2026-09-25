@@ -38,54 +38,51 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-import AkariCore
+import Foundation
+import LabGL
 
-/// Resolves a set of ``RenderSettings`` into the
-/// ordered list of passes that actually run this
-/// frame, the assembled frame graph.
-public struct RenderPipeline: Sendable
+public extension Akari
 {
-  public var settings: RenderSettings
-
-  public init(settings: RenderSettings)
+  enum Color
   {
-    self.settings = settings
-  }
-
-  /// The passes that run for the current settings, in execution order.
-  public var activePasses: [RenderPassID]
-  {
-    let f = settings.features
-
-    var passes: [RenderPassID] = [.depthPrepass, .geometry]
-
-    if f.contains(.volumetrics) { passes.append(.volumetrics) }
-
-    // shadows replay the geometry capture the geometry pass
-    // records, so they can only be drawn once it has run.
-    if f.contains(.shadowMaps) { passes.append(.shadow) }
-
-    if f.contains(.ambientOcclusion) { passes.append(.ambientOcclusion) }
-
-    passes.append(.lighting)
-
-    if f.contains(.screenSpaceGI) { passes.append(.screenSpaceGI) }
-    // reflections run when either screen space or hardware RT is on.
-    if f.contains(.screenSpaceReflections) || f.contains(.hardwareRayTracing)
+    /// Scene exposure and display mapping applied before/at the view transform.
+    public struct Pipeline: Sendable
     {
-      passes.append(.reflections)
+      /// The display view transform.
+      public var viewTransform: Akari.Color.ViewTransform = .agx
+      {
+        didSet
+        {
+          // prevent redundant state changes.
+          guard viewTransform != oldValue else { return }
+
+          // set the active tonemap on change.
+          gl.tonemap(viewTransform.uniform)
+        }
+      }
+
+      /// Exposure in stops (EV). 0 is neutral, +1 doubles scene luminance.
+      public var exposure: Float = 0
+
+      /// Post-transform gamma trim (rarely needed, 1.0 = untouched).
+      public var gamma: Float = 1
+
+      /// Viewport clear / background color.
+      public var background: (Float, Float, Float, Float) = (0.82, 0.40, 0.12, 1)
+
+      public init()
+      {}
+
+      public init(viewTransform: Akari.Color.ViewTransform,
+                  exposure: Float,
+                  gamma: Float,
+                  background: (Float, Float, Float, Float))
+      {
+        self.viewTransform = viewTransform
+        self.exposure = exposure
+        self.gamma = gamma
+        self.background = background
+      }
     }
-
-    passes.append(.transparency)
-
-    if f.contains(.temporalAA) { passes.append(.temporalResolve) }
-    if f.contains(.bloom) { passes.append(.bloom) }
-    if f.contains(.depthOfField) { passes.append(.depthOfField) }
-
-    // the color pipeline.
-    passes.append(.tonemap)
-    passes.append(.present)
-
-    return passes
   }
 }

@@ -94,9 +94,14 @@ public extension Akari
         gl.bindTexture(target: GL_TEXTURE_2D, texture: texture)
       }
 
-      gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA,
-                    width: width, height: height, border: 0,
-                    format: GLenum(GL_RGBA), type: GL_UNSIGNED_BYTE,
+      gl.texImage2D(target: GL_TEXTURE_2D,
+                    level: 0,
+                    internalFormat: GL_RGBA,
+                    width: width,
+                    height: height,
+                    border: 0,
+                    format: GL_RGBA,
+                    type: GL_UNSIGNED_BYTE,
                     pixels: pixels)
       gl.generateMipmap(GL_TEXTURE_2D)
     }

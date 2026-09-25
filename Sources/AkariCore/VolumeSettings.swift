@@ -38,54 +38,26 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-import AkariCore
-
-/// Resolves a set of ``RenderSettings`` into the
-/// ordered list of passes that actually run this
-/// frame, the assembled frame graph.
-public struct RenderPipeline: Sendable
+/// How the volume should fill the view, through the froxel grid.
+public struct VolumeSettings: Sendable
 {
-  public var settings: RenderSettings
+  /// Fog density per world unit.
+  public var density: Float = 0.02
+  /// Henyey Greenstein phase anisotropy.
+  public var anisotropy: Float = 0.3
+  /// View depth the froxel grid reaches, clamped to the camera's far plane.
+  public var maxDistance: Float = 100
+  /// Attenuate the light reaching each froxel by the fog between it and the light.
+  public var shadows = false
 
-  public init(settings: RenderSettings)
+  public init()
+  {}
+
+  public init(density: Float, anisotropy: Float = 0.3, maxDistance: Float = 100, shadows: Bool = false)
   {
-    self.settings = settings
-  }
-
-  /// The passes that run for the current settings, in execution order.
-  public var activePasses: [RenderPassID]
-  {
-    let f = settings.features
-
-    var passes: [RenderPassID] = [.depthPrepass, .geometry]
-
-    if f.contains(.volumetrics) { passes.append(.volumetrics) }
-
-    // shadows replay the geometry capture the geometry pass
-    // records, so they can only be drawn once it has run.
-    if f.contains(.shadowMaps) { passes.append(.shadow) }
-
-    if f.contains(.ambientOcclusion) { passes.append(.ambientOcclusion) }
-
-    passes.append(.lighting)
-
-    if f.contains(.screenSpaceGI) { passes.append(.screenSpaceGI) }
-    // reflections run when either screen space or hardware RT is on.
-    if f.contains(.screenSpaceReflections) || f.contains(.hardwareRayTracing)
-    {
-      passes.append(.reflections)
-    }
-
-    passes.append(.transparency)
-
-    if f.contains(.temporalAA) { passes.append(.temporalResolve) }
-    if f.contains(.bloom) { passes.append(.bloom) }
-    if f.contains(.depthOfField) { passes.append(.depthOfField) }
-
-    // the color pipeline.
-    passes.append(.tonemap)
-    passes.append(.present)
-
-    return passes
+    self.density = density
+    self.anisotropy = anisotropy
+    self.maxDistance = maxDistance
+    self.shadows = shadows
   }
 }

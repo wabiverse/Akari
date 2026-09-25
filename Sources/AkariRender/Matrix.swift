@@ -40,92 +40,63 @@
 
 import AkariCore
 import HdAkari
+import simd
 
 public extension Akari
 {
-  /// A 4x4 matrix as 16 row-major floats.
+  /// A 4x4 matrix, column-major.
   struct Matrix4: Sendable
   {
-    public var m: [Float]
-    public init(_ m: [Float])
+    public var simd: simd_float4x4
+
+    public init(_ simd: simd_float4x4)
     {
-      self.m = m.count == 16 ? m : Array(repeating: 0, count: 16)
+      self.simd = simd
     }
 
-    public static let identity = Matrix4([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+    public init(_ m: [Float])
+    {
+      simd = m.count == 16
+        ? m.withUnsafeBytes { $0.loadUnaligned(as: simd_float4x4.self) }
+        : simd_float4x4()
+    }
 
-    /// Inverse via Gauss-Jordan elimination.
+    /// A copy of the 16 floats, for APIs that take an array.
+    public var m: [Float]
+    {
+      withUnsafeFloats(Array.init)
+    }
+
+    public func withUnsafeFloats<R>(_ body: (UnsafeBufferPointer<Float>) throws -> R) rethrows -> R
+    {
+      try withUnsafeBytes(of: simd) { try body($0.bindMemory(to: Float.self)) }
+    }
+
+    public static let identity = Matrix4(matrix_identity_float4x4)
+
+    /// Zero for a singular matrix.
     public func inverse() -> Matrix4
     {
-      var a = m
-      var inv: [Float] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
-      for col in 0 ..< 4
-      {
-        var pivot = col
-        var best = abs(a[col * 4 + col])
-        for r in (col + 1) ..< 4 where abs(a[r * 4 + col]) > best
-        {
-          best = abs(a[r * 4 + col]); pivot = r
-        }
-        if best < 1e-9 { return Matrix4(Array(repeating: 0, count: 16)) }
-        if pivot != col
-        {
-          for k in 0 ..< 4
-          {
-            a.swapAt(col * 4 + k, pivot * 4 + k)
-            inv.swapAt(col * 4 + k, pivot * 4 + k)
-          }
-        }
-        let d = a[col * 4 + col]
-        for k in 0 ..< 4
-        {
-          a[col * 4 + k] /= d; inv[col * 4 + k] /= d
-        }
-        for r in 0 ..< 4 where r != col
-        {
-          let f = a[r * 4 + col]
-          if f == 0 { continue }
-          for k in 0 ..< 4
-          {
-            a[r * 4 + k] -= f * a[col * 4 + k]; inv[r * 4 + k] -= f * inv[col * 4 + k]
-          }
-        }
-      }
-      return Matrix4(inv)
+      let inv = Matrix4(simd.inverse)
+      return inv.withUnsafeFloats { $0.allSatisfy(\.isFinite) } ? inv : Matrix4(simd_float4x4())
     }
 
     /// Composed transform, `rhs` applies first.
     public static func * (lhs: Matrix4, rhs: Matrix4) -> Matrix4
     {
-      var out = [Float](repeating: 0, count: 16)
-      for c in 0 ..< 4
-      {
-        for r in 0 ..< 4
-        {
-          var sum: Float = 0
-          for k in 0 ..< 4
-          {
-            sum += lhs[k, r] * rhs[c, k]
-          }
-          out[c * 4 + r] = sum
-        }
-      }
-      return Matrix4(out)
+      Matrix4(lhs.simd * rhs.simd)
     }
 
     public subscript(column: Int, row: Int) -> Float
     {
-      m[column * 4 + row]
+      simd[column][row]
     }
 
     /// Applies the transform to a point, dividing through by w.
     public func transform(_ p: SIMD3<Float>) -> SIMD3<Float>
     {
-      let x = self[0, 0] * p.x + self[1, 0] * p.y + self[2, 0] * p.z + self[3, 0]
-      let y = self[0, 1] * p.x + self[1, 1] * p.y + self[2, 1] * p.z + self[3, 1]
-      let z = self[0, 2] * p.x + self[1, 2] * p.y + self[2, 2] * p.z + self[3, 2]
-      let w = self[0, 3] * p.x + self[1, 3] * p.y + self[2, 3] * p.z + self[3, 3]
-      return abs(w) > 1e-9 ? SIMD3(x, y, z) / w : SIMD3(x, y, z)
+      let v = simd * SIMD4(p, 1)
+      return abs(v.w) > 1e-9 ? SIMD3(v.x, v.y, v.z) / v.w : SIMD3(v.x, v.y, v.z)
     }
 
     /// Right handed view matrix looking from `eye` toward `target`.
@@ -134,12 +105,12 @@ public extension Akari
       let f = Akari.Matrix.normalize(target - eye)
       let s = Akari.Matrix.normalize(Akari.Matrix.cross(f, up))
       let u = Akari.Matrix.cross(s, f)
-      return Matrix4([
-        s.x, u.x, -f.x, 0,
-        s.y, u.y, -f.y, 0,
-        s.z, u.z, -f.z, 0,
-        -Akari.Matrix.dot(s, eye), -Akari.Matrix.dot(u, eye), Akari.Matrix.dot(f, eye), 1
-      ])
+      return Matrix4(simd_float4x4(columns: (
+        SIMD4(s.x, u.x, -f.x, 0),
+        SIMD4(s.y, u.y, -f.y, 0),
+        SIMD4(s.z, u.z, -f.z, 0),
+        SIMD4(-Akari.Matrix.dot(s, eye), -Akari.Matrix.dot(u, eye), Akari.Matrix.dot(f, eye), 1)
+      )))
     }
 
     public static func ortho(left: Float, right: Float, bottom: Float, top: Float,
@@ -149,31 +120,48 @@ public extension Akari
       let tb = top - bottom
       let fn = far - near
       guard abs(rl) > 1e-9, abs(tb) > 1e-9, abs(fn) > 1e-9 else { return .identity }
-      return Matrix4([
-        2 / rl, 0, 0, 0,
-        0, 2 / tb, 0, 0,
-        0, 0, -2 / fn, 0,
-        -(right + left) / rl, -(top + bottom) / tb, -(far + near) / fn, 1
-      ])
+      return Matrix4(simd_float4x4(columns: (
+        SIMD4(2 / rl, 0, 0, 0),
+        SIMD4(0, 2 / tb, 0, 0),
+        SIMD4(0, 0, -2 / fn, 0),
+        SIMD4(-(right + left) / rl, -(top + bottom) / tb, -(far + near) / fn, 1)
+      )))
+    }
+
+    public static func perspective(left: Float, right: Float, bottom: Float, top: Float,
+                                   near: Float, far: Float) -> Matrix4
+    {
+      let rl = right - left
+      let tb = top - bottom
+      let fn = far - near
+      guard abs(rl) > 1e-9, abs(tb) > 1e-9, abs(fn) > 1e-9, near > 0 else { return .identity }
+      return Matrix4(simd_float4x4(columns: (
+        SIMD4(2 * near / rl, 0, 0, 0),
+        SIMD4(0, 2 * near / tb, 0, 0),
+        SIMD4((right + left) / rl, (top + bottom) / tb, -(far + near) / fn, -1),
+        SIMD4(0, 0, -2 * far * near / fn, 0)
+      )))
     }
 
     public static func translation(_ t: SIMD3<Float>) -> Matrix4
     {
-      Matrix4([1, 0, 0, 0,
-               0, 1, 0, 0,
-               0, 0, 1, 0,
-               t.x, t.y, t.z, 1])
+      Matrix4(simd_float4x4(columns: (
+        SIMD4(1, 0, 0, 0),
+        SIMD4(0, 1, 0, 0),
+        SIMD4(0, 0, 1, 0),
+        SIMD4(t.x, t.y, t.z, 1)
+      )))
     }
 
     /// Maps clip space onto an atlas sub rect, `origin` and `size` in UV.
     public static func atlasRect(origin: SIMD2<Float>, size: SIMD2<Float>) -> Matrix4
     {
-      Matrix4([
-        0.5 * size.x, 0, 0, 0,
-        0, 0.5 * size.y, 0, 0,
-        0, 0, 0.5, 0,
-        origin.x + 0.5 * size.x, origin.y + 0.5 * size.y, 0.5, 1
-      ])
+      Matrix4(simd_float4x4(columns: (
+        SIMD4(0.5 * size.x, 0, 0, 0),
+        SIMD4(0, 0.5 * size.y, 0, 0),
+        SIMD4(0, 0, 0.5, 0),
+        SIMD4(origin.x + 0.5 * size.x, origin.y + 0.5 * size.y, 0.5, 1)
+      )))
     }
   }
 }

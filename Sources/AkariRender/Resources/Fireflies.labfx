@@ -1,0 +1,15 @@
+--- labfx version 1.0
+
+name: Akari Fireflies
+version: 1.0
+
+buffer: fireflies
+  has depth: no
+  latency: triple
+  textures:
+    size: [32 1]
+    [ state, f32x4 ]
+
+pass: simulate
+  callback: simulate
+  outputs: fireflies [state]

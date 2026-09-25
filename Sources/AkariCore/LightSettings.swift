@@ -45,6 +45,8 @@ public struct LightSettings: Sendable
 {
   /// Sun height, for day/night approximation.
   public var sunHeight: Float = 0
+  /// Angular diameter of the sun disk in radians.
+  public var sunAngle: Float = 4 * .pi / 180
   /// Shadow atlas configuration.
   public var shadow = ShadowSettings()
 

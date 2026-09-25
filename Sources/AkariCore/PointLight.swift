@@ -38,54 +38,31 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-import AkariCore
+import Foundation
 
-/// Resolves a set of ``RenderSettings`` into the
-/// ordered list of passes that actually run this
-/// frame, the assembled frame graph.
-public struct RenderPipeline: Sendable
+public extension Akari
 {
-  public var settings: RenderSettings
-
-  public init(settings: RenderSettings)
+  enum Lux
   {
-    self.settings = settings
-  }
-
-  /// The passes that run for the current settings, in execution order.
-  public var activePasses: [RenderPassID]
-  {
-    let f = settings.features
-
-    var passes: [RenderPassID] = [.depthPrepass, .geometry]
-
-    if f.contains(.volumetrics) { passes.append(.volumetrics) }
-
-    // shadows replay the geometry capture the geometry pass
-    // records, so they can only be drawn once it has run.
-    if f.contains(.shadowMaps) { passes.append(.shadow) }
-
-    if f.contains(.ambientOcclusion) { passes.append(.ambientOcclusion) }
-
-    passes.append(.lighting)
-
-    if f.contains(.screenSpaceGI) { passes.append(.screenSpaceGI) }
-    // reflections run when either screen space or hardware RT is on.
-    if f.contains(.screenSpaceReflections) || f.contains(.hardwareRayTracing)
+    /// One Akari point light from the scene.
+    public struct PointLight: Sendable
     {
-      passes.append(.reflections)
+      /// World-space position.
+      public var position: SIMD3<Float>
+      /// Illuminated linear color.
+      public var color: SIMD3<Float>
+      /// Radiant intensity.
+      public var intensity: Float
+      /// Sphere radius in world units.
+      public var radius: Float
+
+      public init(position: SIMD3<Float>, color: SIMD3<Float>, intensity: Float, radius: Float)
+      {
+        self.position = position
+        self.color = color
+        self.intensity = intensity
+        self.radius = radius
+      }
     }
-
-    passes.append(.transparency)
-
-    if f.contains(.temporalAA) { passes.append(.temporalResolve) }
-    if f.contains(.bloom) { passes.append(.bloom) }
-    if f.contains(.depthOfField) { passes.append(.depthOfField) }
-
-    // the color pipeline.
-    passes.append(.tonemap)
-    passes.append(.present)
-
-    return passes
   }
 }

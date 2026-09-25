@@ -73,9 +73,9 @@ struct RenderSettingsTests
   func backendDefault()
   {
     #if os(macOS) || os(visionOS) || os(iOS) || os(tvOS) || os(watchOS)
-      #expect(GpuBackend.preferredForCurrentPlatform == .metal)
+      #expect(Akari.GPU.Backend.preferredForCurrentPlatform == .metal)
     #else
-      #expect(GpuBackend.preferredForCurrentPlatform == .openGL)
+      #expect(Akari.GPU.Backend.preferredForCurrentPlatform == .openGL)
     #endif
   }
 }

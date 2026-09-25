@@ -85,12 +85,26 @@ struct HdAkariMeshData
 };
 
 
+struct HdAkariLightData
+{
+  SdfPath id;
+  GfMatrix4d transform = GfMatrix4d(1.0);
+  float colorR = 1.0f;
+  float colorG = 1.0f;
+  float colorB = 1.0f;
+  float intensity = 1.0f;
+  float exposure = 0.0f;
+  float radius = 0.5f;
+  bool visible = true;
+  uint64_t dataRevision = 0;
+};
+
 /// @class HdAkariScene
 ///
-/// Thread safe registry of the meshes the delegate has synced.
+/// Thread safe registry of the meshes and lights the delegate has synced.
 ///
-/// `HdAkariMesh` writes into it (Sync runs on worker threads),
-/// the render pass reads a snapshot to draw. One per render
+/// `HdAkariMesh` and `HdAkariLight` write into it (Sync runs on worker
+/// threads), the render pass reads a snapshot to draw. One per render
 /// delegate from the render param.
 ///
 class SWIFT_SHARED_REFERENCE(HdAkariSceneRetain, HdAkariSceneRelease)
@@ -193,10 +207,54 @@ public:
     return _revision.load(std::memory_order_relaxed);
   }
 
+  void UpdateLight(HdAkariLightData data)
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _lights[data.id] = std::move(data);
+    _lightRevision.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  void RemoveLight(SdfPath const &id)
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _lights.erase(id);
+    _lightRevision.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  size_t LightCount() const
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _lights.size();
+  }
+
+  /// Copy out the current visible lights for a frame, same shape as Snapshot() for meshes.
+  std::vector<HdAkariLightData> LightSnapshot() const
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    std::vector<HdAkariLightData> out;
+    out.reserve(_lights.size());
+    for (auto const &kv : _lights)
+    {
+      if (kv.second.visible)
+      {
+        out.push_back(kv.second);
+      }
+    }
+    return out;
+  }
+
+  /// Monotonically increasing counter, bumped on every UpdateLight/RemoveLight.
+  uint64_t LightRevision() const
+  {
+    return _lightRevision.load(std::memory_order_relaxed);
+  }
+
 private:
   mutable std::mutex _mutex;
   std::unordered_map<SdfPath, HdAkariMeshData, SdfPath::Hash> _meshes;
   std::atomic<uint64_t> _revision{0};
+  std::unordered_map<SdfPath, HdAkariLightData, SdfPath::Hash> _lights;
+  std::atomic<uint64_t> _lightRevision{0};
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

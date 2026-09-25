@@ -41,104 +41,104 @@
 import Foundation
 import LabGL
 
-/// The view transform applied in the tonemap pass.
-/// Every tonemap LabGL ships (`GL_TONEMAP_*`) is
-/// exposed so it can be selected from the UI and
-/// driven through the tonemap pass.
-public enum ViewTransform: String, Sendable, CaseIterable
+public extension Akari.Color
 {
-  /// Akari's modern default (same as Blender's EEVEE).
-  case agx
+  /// The view transform applied in the tonemap pass.
+  enum ViewTransform: String, Sendable, CaseIterable
+  {
+    /// Akari's modern default (same as Blender's EEVEE).
+    case agx
 
-  /// The older filmic transform (ACES fitted curve by Narkowicz).
-  case filmic
+    /// The older filmic transform (ACES fitted curve by Narkowicz).
+    case filmic
 
-  /// ACES 1.x RRT+ODT.
-  case aces
+    /// ACES 1.x RRT+ODT.
+    case aces
 
-  /// Khronos PBR Neutral (for material accuracy over a cinematic look).
-  case khronosPBRNeutral
+    /// Khronos PBR Neutral (for material accuracy over a cinematic look).
+    case khronosPBRNeutral
 
-  /// ACES 1.x RRT variant fitted by John Hable's colleague (Guy).
-  case acesGuy
+    /// ACES 1.x RRT variant fitted by John Hable's colleague (Guy).
+    case acesGuy
 
-  /// ACES fitted curve by Stephen Hill.
-  case acesHill
+    /// ACES fitted curve by Stephen Hill.
+    case acesHill
 
-  /// Aldridge's filmic tone curve.
-  case aldridge
+    /// Aldridge's filmic tone curve.
+    case aldridge
 
-  /// Hard clamp to [0, 1].
-  case clamping
+    /// Hard clamp to [0, 1].
+    case clamping
 
-  /// "Day" photographic operator.
-  case day
+    /// "Day" photographic operator.
+    case day
 
-  /// Drago's logarithmic mapping.
-  case drago
+    /// Drago's logarithmic mapping.
+    case drago
 
-  /// Durand–Dorsey contrast-preserving operator.
-  case durandDorsey
+    /// Durand–Dorsey contrast-preserving operator.
+    case durandDorsey
 
-  /// Exponential exposure curve.
-  case exponential
+    /// Exponential exposure curve.
+    case exponential
 
-  /// Pure exponentiation curve.
-  case exponentiation
+    /// Pure exponentiation curve.
+    case exponentiation
 
-  /// Ferwerda's tone mapping.
-  case ferwerda
+    /// Ferwerda's tone mapping.
+    case ferwerda
 
-  /// Pure gamma curve.
-  case gamma
+    /// Pure gamma curve.
+    case gamma
 
-  /// Hable's filmic curve (Uncharted 2).
-  case hable
+    /// Hable's filmic curve (Uncharted 2).
+    case hable
 
-  /// Hable's updated (linear-gamma) fit.
-  case hableUpdated
+    /// Hable's updated (linear-gamma) fit.
+    case hableUpdated
 
-  /// Hejl–Burgess–Dawson filmic fit.
-  case hejlBurgessDawson
+    /// Hejl–Burgess–Dawson filmic fit.
+    case hejlBurgessDawson
 
-  /// Logarithmic exposure curve.
-  case logarithmic
+    /// Logarithmic exposure curve.
+    case logarithmic
 
-  /// Lottes' filmic curve.
-  case lottes
+    /// Lottes' filmic curve.
+    case lottes
 
-  /// Reinhard division by max component.
-  case maxdivision
+    /// Reinhard division by max component.
+    case maxdivision
 
-  /// Reinhard division by mean value.
-  case meanvalue
+    /// Reinhard division by mean value.
+    case meanvalue
 
-  /// Classic Reinhard operator.
-  case reinhard
+    /// Classic Reinhard operator.
+    case reinhard
 
-  /// Reinhard extended with a white-point curve (Devlin).
-  case reinhardDevlin
+    /// Reinhard extended with a white-point curve (Devlin).
+    case reinhardDevlin
 
-  /// Reinhard extended, brightness-aware variant.
-  case reinhardExtended
+    /// Reinhard extended, brightness-aware variant.
+    case reinhardExtended
 
-  /// Schlick's rational approximation.
-  case schlick
+    /// Schlick's rational approximation.
+    case schlick
 
-  /// Tumblin–Rushmeier operator.
-  case tumblinRushmeier
+    /// Tumblin–Rushmeier operator.
+    case tumblinRushmeier
 
-  /// Uchimura's tone curve.
-  case uchimura
+    /// Uchimura's tone curve.
+    case uchimura
 
-  /// Ward's scale-preserving operator.
-  case ward
+    /// Ward's scale-preserving operator.
+    case ward
 
-  /// sRGB with no tone curve (same as Storm's default).
-  case sRGB
+    /// sRGB with no tone curve (same as Storm's default).
+    case sRGB
+  }
 }
 
-public extension ViewTransform
+public extension Akari.Color.ViewTransform
 {
   /// The tonemap switch value for use in shaders.
   var uniform: GLenum
@@ -179,7 +179,7 @@ public extension ViewTransform
   }
 }
 
-extension ViewTransform: CustomStringConvertible
+extension Akari.Color.ViewTransform: CustomStringConvertible
 {
   /// Display label for UI (pickers, HUD).
   public var description: String
@@ -217,45 +217,5 @@ extension ViewTransform: CustomStringConvertible
       case .uchimura: "Uchimura"
       case .ward: "Ward"
     }
-  }
-}
-
-/// Scene exposure and display mapping applied before/at the view transform.
-public struct ColorPipeline: Sendable
-{
-  /// The display view transform.
-  public var viewTransform: ViewTransform = .agx
-  {
-    didSet
-    {
-      // prevent redundant state changes.
-      guard viewTransform != oldValue else { return }
-
-      // set the active tonemap on change.
-      gl.tonemap(viewTransform.uniform)
-    }
-  }
-
-  /// Exposure in stops (EV). 0 is neutral, +1 doubles scene luminance.
-  public var exposure: Float = 0
-
-  /// Post-transform gamma trim (rarely needed, 1.0 = untouched).
-  public var gamma: Float = 1
-
-  /// Viewport clear / background color.
-  public var background: (Float, Float, Float, Float) = (0.82, 0.40, 0.12, 1)
-
-  public init()
-  {}
-
-  public init(viewTransform: ViewTransform,
-              exposure: Float,
-              gamma: Float,
-              background: (Float, Float, Float, Float))
-  {
-    self.viewTransform = viewTransform
-    self.exposure = exposure
-    self.gamma = gamma
-    self.background = background
   }
 }

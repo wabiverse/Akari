@@ -53,7 +53,7 @@ public extension Akari
     enum Prim
     {
       enum Rprim: String, CaseIterable { case mesh, sphere, cube }
-      enum Sprim: String, CaseIterable { case camera, material }
+      enum Sprim: String, CaseIterable { case camera, material, sphereLight }
       enum Bprim: String, CaseIterable { case renderBuffer }
     }
 

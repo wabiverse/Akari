@@ -58,8 +58,13 @@ public extension Akari.Geom
     private let idxBuf: UnsafeMutableBufferPointer<Int32>
     private var vOff = 0
     private var iOff = 0
+    /// Index ranges drawn separately so the shadow pass can cull by chunk.
+    private static let chunkIndices = 6000
+    private var chunkStarts: [Int] = [0]
     private var boundsMin = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
     private var boundsMax = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+    /// One world AABB per appended mesh, min then max, six floats each.
+    public private(set) var casterBounds: [Float] = []
 
     public init(estimatedTriangles: Int)
     {
@@ -110,6 +115,9 @@ public extension Akari.Geom
 
       let baseVertex = Int32(vertexCount)
 
+      var meshMin = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+      var meshMax = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+
       for v in 0 ..< vertCount
       {
         let s = v * 8
@@ -123,6 +131,8 @@ public extension Akari.Geom
                           m[2] * px + m[6] * py + m[10] * pz + m[14])
         boundsMin = pointwiseMin(boundsMin, world)
         boundsMax = pointwiseMax(boundsMax, world)
+        meshMin = pointwiseMin(meshMin, world)
+        meshMax = pointwiseMax(meshMax, world)
 
         vertBuf[d + 0] = world.x
         vertBuf[d + 1] = world.y
@@ -145,11 +155,17 @@ public extension Akari.Geom
         vertBuf[d + 13] = 0.0
       }
       vOff += vertCount * Self.vertexFloats
+      if meshMin.x <= meshMax.x
+      {
+        casterBounds.append(contentsOf: [meshMin.x, meshMin.y, meshMin.z,
+                                         meshMax.x, meshMax.y, meshMax.z])
+      }
 
       for (j, index) in localIndices.enumerated()
       {
         idxBuf[iOff + j] = index + baseVertex
       }
+      if iOff - chunkStarts[chunkStarts.count - 1] >= Self.chunkIndices { chunkStarts.append(iOff) }
       iOff += localIndices.count
     }
 
@@ -192,10 +208,15 @@ public extension Akari.Geom
       gl.texCoordPointer(size: 2, type: GL_FLOAT, stride: stride, pointer: .init(bitPattern: 8 * floatBytes))
       gl.normalPointer(type: GL_FLOAT, stride: stride, pointer: .init(bitPattern: 10 * floatBytes))
 
-      gl.drawElements(mode: GL_TRIANGLES,
-                      count: Int32(iOff),
-                      type: GL_UNSIGNED_INT,
-                      indices: .init(bitPattern: 0))
+      for (c, start) in chunkStarts.enumerated()
+      {
+        let end = c + 1 < chunkStarts.count ? chunkStarts[c + 1] : iOff
+        guard end > start else { continue }
+        gl.drawElements(mode: GL_TRIANGLES,
+                        count: Int32(end - start),
+                        type: GL_UNSIGNED_INT,
+                        indices: .init(bitPattern: start * MemoryLayout<Int32>.stride))
+      }
 
       gl.disableClientState(GL_NORMAL_ARRAY)
       gl.disableClientState(GL_TEXTURE_COORD_ARRAY)
@@ -204,6 +225,7 @@ public extension Akari.Geom
 
       vOff = 0
       iOff = 0
+      chunkStarts = [0]
     }
   }
 }

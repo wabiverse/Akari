@@ -51,6 +51,8 @@ public enum RenderPassID: String, CaseIterable, Sendable
   case shadow
   /// Opaque geometry, G-buffer (deferred) or forward+ shaded opaque.
   case geometry
+  /// Froxel volumetrics composite.
+  case volumetrics
   /// Ground truth ambient occlusion (GTAO).
   case ambientOcclusion
   /// Direct + image based lighting (PBR, analytic & area lights, IBL).
@@ -61,8 +63,6 @@ public enum RenderPassID: String, CaseIterable, Sendable
   case reflections
   /// Sorted forward transparency.
   case transparency
-  /// Froxel volumetrics composite.
-  case volumetrics
   /// Temporal resolve / anti aliasing (also stabilizes the SS effects).
   case temporalResolve
   /// Bloom.

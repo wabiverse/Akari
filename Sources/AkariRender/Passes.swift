@@ -43,8 +43,8 @@ import HdAkari
 
 public extension Akari
 {
-  /// Cascaded shadow maps for the sun + spot/area shadow maps.
-  struct ShadowPass: RenderPassNode
+  /// Virtual shadow maps for the sun and point lights.
+  struct ShadowPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .shadow
     public init() {}
@@ -53,12 +53,9 @@ public extension Akari
       s.features.contains(.shadowMaps)
     }
 
-    public func execute(_ state: inout FrameState, _ ctx: FrameContext)
+    public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
-      let shadow = ctx.settings.light.shadow
-      state.declare(.shadowAtlas, RenderTargetDesc(width: shadow.atlasSize,
-                                                   height: shadow.atlasSize,
-                                                   format: .depth32f))
+      ctx.labfx.markShadowPageUsage(camera: ctx.camera, settings: ctx.settings)
       ctx.labfx.renderShadows(renderParam: ctx.renderParam,
                               camera: ctx.camera,
                               settings: ctx.settings,
@@ -69,11 +66,11 @@ public extension Akari
   }
 
   /// Opaque geometry into a compact G-buffer (deferred) or forward+ shaded.
-  struct GeometryPass: RenderPassNode
+  struct GeometryPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .geometry
     public init() {}
-    public func execute(_: inout FrameState, _ ctx: FrameContext)
+    public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       // geometry stage: open the frame, rerecord the synced meshes
       // into the capture buffer, and set the per frame view matrix.
@@ -82,11 +79,12 @@ public extension Akari
       ctx.labfx.recordGeometry(renderParam: ctx.renderParam,
                                view: ctx.camera.view,
                                projection: ctx.camera.projection)
+      ctx.labfx.renderGbufferEarly()
     }
   }
 
   /// Ground truth ambient occlusion (GTAO).
-  struct AmbientOcclusionPass: RenderPassNode
+  struct AmbientOcclusionPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .ambientOcclusion
     public init() {}
@@ -95,25 +93,27 @@ public extension Akari
       s.features.contains(.ambientOcclusion)
     }
 
-    public func execute(_ state: inout FrameState, _ ctx: FrameContext)
+    public func execute(_ state: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       state.declare(.ambientOcclusion,
-                    RenderTargetDesc(width: ctx.target.width, height: ctx.target.height,
-                                     format: .r16f, scale: 0.5))
+                    Akari.GPU.RenderTargetDesc(width: ctx.target.width,
+                                               height: ctx.target.height,
+                                               format: .r16f, scale: 0.5))
       // TODO: GTAO from depth + normals, multi bounce term, bilateral blur.
     }
   }
 
   /// Direct + image based lighting.
-  struct LightingPass: RenderPassNode
+  struct LightingPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .lighting
     public init() {}
-    public func execute(_ state: inout FrameState, _ ctx: FrameContext)
+    public func execute(_ state: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       state.declare(.sceneColorHDR,
-                    RenderTargetDesc(width: ctx.target.width, height: ctx.target.height,
-                                     format: .rgba16f))
+                    Akari.GPU.RenderTargetDesc(width: ctx.target.width,
+                                               height: ctx.target.height,
+                                               format: .rgba16f))
       // lighting stage: the deferred resolve shades the G-buffer
       // with split sum IBL into the scene HDR color.
       ctx.labfx.setLighting(
@@ -126,7 +126,7 @@ public extension Akari
   }
 
   /// Screen space global illumination (indirect diffuse bounce).
-  struct ScreenSpaceGIPass: RenderPassNode
+  struct ScreenSpaceGIPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .screenSpaceGI
     public init() {}
@@ -135,18 +135,18 @@ public extension Akari
       s.features.contains(.screenSpaceGI)
     }
 
-    public func execute(_ state: inout FrameState, _ ctx: FrameContext)
+    public func execute(_ state: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       state.declare(.screenSpaceGI,
-                    RenderTargetDesc(width: ctx.target.width, height: ctx.target.height,
-                                     format: .rgba16f, scale: 0.5))
-      // TODO: horizon scan gather from scene color + depth, denoise,
-      // reproject against history, composite into sceneColorHDR.
+                    Akari.GPU.RenderTargetDesc(width: ctx.target.width,
+                                               height: ctx.target.height,
+                                               format: .rgba16f, scale: 0.5))
+      ctx.labfx.setScreenSpaceGI()
     }
   }
 
   /// Screen space reflections with hardware RT as the off screen fallback.
-  struct ReflectionsPass: RenderPassNode
+  struct ReflectionsPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .reflections
     public init() {}
@@ -155,27 +155,28 @@ public extension Akari
       s.features.contains(.screenSpaceReflections) || s.features.contains(.hardwareRayTracing)
     }
 
-    public func execute(_ state: inout FrameState, _ ctx: FrameContext)
+    public func execute(_ state: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       state.declare(.reflections,
-                    RenderTargetDesc(width: ctx.target.width, height: ctx.target.height,
-                                     format: .rgba16f))
+                    Akari.GPU.RenderTargetDesc(width: ctx.target.width,
+                                               height: ctx.target.height,
+                                               format: .rgba16f))
       // TODO: SSR march in HDR color, RT fill on miss when enabled,
       // resolve against roughness, composite into sceneColorHDR.
     }
   }
 
   /// Sorted forward transparency over the resolved opaque HDR color.
-  struct TransparencyPass: RenderPassNode
+  struct TransparencyPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .transparency
     public init() {}
-    public func execute(_: inout FrameState, _: FrameContext) {}
+    public func execute(_: inout Akari.GPU.FrameState, _: Akari.GPU.FrameContext) {}
     // TODO: back to front (or OIT) forward shade transparent prims.
   }
 
   /// Froxel volumetrics (fog, light shafts).
-  struct VolumetricsPass: RenderPassNode
+  struct VolumetricsPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .volumetrics
     public init() {}
@@ -184,12 +185,19 @@ public extension Akari
       s.features.contains(.volumetrics)
     }
 
-    public func execute(_: inout FrameState, _: FrameContext) {}
-    // TODO: froxel scatter / extinction integration, composite.
+    public func execute(_ state: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
+    {
+      let froxelAtlas = Akari.GPU.RenderTargetDesc(width: ctx.target.width,
+                                                   height: ctx.target.height,
+                                                   format: .rgba16f, scale: 0.5)
+      state.declare(.volumeScatter, froxelAtlas)
+      state.declare(.volumeIntegrated, froxelAtlas)
+      ctx.labfx.setVolumetrics(camera: ctx.camera, volume: ctx.settings.volume)
+    }
   }
 
   /// Temporal anti aliasing / reprojection, also stabilizes the SS effects.
-  struct TemporalResolvePass: RenderPassNode
+  struct TemporalResolvePass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .temporalResolve
     public init() {}
@@ -198,19 +206,20 @@ public extension Akari
       s.features.contains(.temporalAA)
     }
 
-    public func execute(_ state: inout FrameState, _ ctx: FrameContext)
+    public func execute(_ state: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       state.declare(.history,
-                    RenderTargetDesc(width: ctx.target.width, height: ctx.target.height,
-                                     format: .rgba16f))
-      // TODO: temporal accumulation, blend 1/samples of the jittered current
-      // frame into a persistent history buffer, then hand the resolved frame
-      // to the tonemap.
+                    Akari.GPU.RenderTargetDesc(width: ctx.target.width,
+                                               height: ctx.target.height,
+                                               format: .rgba16f))
+      ctx.labfx.setTemporal(camera: ctx.unjitteredCamera,
+                            samples: ctx.settings.samples,
+                            moving: ctx.cameraMoved)
     }
   }
 
   /// Physically based bloom.
-  struct BloomPass: RenderPassNode
+  struct BloomPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .bloom
     public init() {}
@@ -219,21 +228,22 @@ public extension Akari
       s.features.contains(.bloom)
     }
 
-    public func execute(_ state: inout FrameState, _ ctx: FrameContext)
+    public func execute(_ state: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       state.declare(.bloomChain,
-                    RenderTargetDesc(width: ctx.target.width / 2, height: ctx.target.height / 2,
-                                     format: .rgba16f))
+                    Akari.GPU.RenderTargetDesc(width: ctx.target.width / 2,
+                                               height: ctx.target.height / 2,
+                                               format: .rgba16f))
       // TODO: Karis averaged downsample pyramid, tent upsample, add.
     }
   }
 
   /// Apply view transformation (AgX by default).
-  struct TonemapPass: RenderPassNode
+  struct TonemapPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .tonemap
     public init() {}
-    public func execute(_: inout FrameState, _ ctx: FrameContext)
+    public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       // tonemap stage: exposure, view transform, gamma, dither seed.
       ctx.labfx.setTonemap(exposure: ctx.settings.color.exposure,
@@ -244,7 +254,7 @@ public extension Akari
   }
 
   /// Depth of field (bokeh) over the resolved HDR color.
-  struct DepthOfFieldPass: RenderPassNode
+  struct DepthOfFieldPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .depthOfField
     public init() {}
@@ -253,33 +263,35 @@ public extension Akari
       s.features.contains(.depthOfField)
     }
 
-    public func execute(_: inout FrameState, _: FrameContext) {}
+    public func execute(_: inout Akari.GPU.FrameState, _: Akari.GPU.FrameContext) {}
     // TODO: CoC from depth, tiled gather bokeh, composite.
   }
 
   /// Hand the final image to the bound color AOV (Hydra composites / presents).
-  struct PresentPass: RenderPassNode
+  struct PresentPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .present
     public init() {}
-    public func execute(_: inout FrameState, _ ctx: FrameContext)
+    public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       // present stage: execute the deferred graph, present,
       // and wrap the tonemapped texture into the color AOV.
       ctx.labfx.present(color: ctx.target.color,
-                        hgi: ctx.gpu.hgi)
+                        hgi: ctx.gpu.hgi,
+                        fireflies: ctx.settings.features.contains(.fireflies))
     }
   }
 
   /// Depth-only prepass (Hi-Z seed, overdraw kill, SS-effect input).
-  struct DepthPrepass: RenderPassNode
+  struct DepthPrepass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .depthPrepass
     public init() {}
-    public func execute(_ state: inout FrameState, _ ctx: FrameContext)
+    public func execute(_ state: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
-      state.declare(.depth, RenderTargetDesc(width: ctx.target.width, height: ctx.target.height,
-                                             format: .depth32f))
+      state.declare(.depth, Akari.GPU.RenderTargetDesc(width: ctx.target.width,
+                                                       height: ctx.target.height,
+                                                       format: .depth32f))
     }
   }
 }

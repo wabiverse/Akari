@@ -67,8 +67,7 @@ struct AkariDemo: App
 
     let stage = AppUtils.openOrCreateStage()
 
-    let stageIsZUp = Pixar.UsdGeomGetStageUpAxis(Overlay.TfWeakPtr(stage)) == .z
-    engine.labfx.setStageUpAxis(isZUp: stageIsZUp)
+    engine.labfx.setStageUpAxis(isZUp: UsdGeom.getUpAxis(for: stage) == .z)
 
     hydra = Hydra.RenderEngine(stage: stage, rendererPluginId: Tf.Token(Akari.rendererPluginId))
 
@@ -82,6 +81,7 @@ struct AkariDemo: App
       Hydra.Viewport(engine: hydra)
         .frame(minWidth: 900, minHeight: 600)
         .overlay(alignment: .topLeading) { HUD(engine: engine) }
+        .environment(\.colorScheme, .dark)
     }
   }
 }

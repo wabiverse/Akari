@@ -126,6 +126,7 @@ public extension Akari
       var smooth = [SIMD3<Float>](repeating: .zero, count: ptCount)
       var faceNormals = [SIMD3<Float>](repeating: .zero, count: triCount)
       var faceValid = [Bool](repeating: false, count: triCount)
+      var facesPerVertex = [[Int32]](repeating: [], count: ptCount)
 
       for idx in 0 ..< triCount
       {
@@ -144,6 +145,9 @@ public extension Akari
         smooth[Int(i0)] += fn
         smooth[Int(i1)] += fn
         smooth[Int(i2)] += fn
+        facesPerVertex[Int(i0)].append(Int32(idx))
+        facesPerVertex[Int(i1)].append(Int32(idx))
+        facesPerVertex[Int(i2)].append(Int32(idx))
       }
       for i in smooth.indices
       {
@@ -153,11 +157,28 @@ public extension Akari
           : SIMD3<Float>(0, 1, 0)
       }
 
+      var vertexIsSmooth = [Bool](repeating: true, count: ptCount)
+      for v in 0 ..< ptCount
+      {
+        let faces = facesPerVertex[v]
+        guard faces.count > 1 else { continue }
+        outer: for a in 0 ..< faces.count
+        {
+          for b in (a + 1) ..< faces.count
+          {
+            if dot(faceNormals[Int(faces[a])], faceNormals[Int(faces[b])]) <= hardEdgeCos
+            {
+              vertexIsSmooth[v] = false
+              break outer
+            }
+          }
+        }
+      }
+
       func emitCorner(_ idx: Int, _ c: Int)
       {
         let p = Int(triIndices[idx * 3 + c])
-        let sn = smooth[p]
-        let n = dot(faceNormals[idx], sn) > hardEdgeCos ? sn : faceNormals[idx]
+        let n = vertexIsSmooth[p] ? smooth[p] : faceNormals[idx]
         let uo = (idx * 3 + c) * 2
         let uv = SIMD2<Float>(triUvs[uo], triUvs[uo + 1])
         indices.append(appendVertex(p, n, uv, pointsFlat, &verts))

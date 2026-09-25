@@ -56,8 +56,8 @@ public extension Akari
     }
 
     private var pipeline: RenderPipeline
-    private var graph: [any RenderPassNode]
-    private var gpu: GpuContext?
+    private var graph: [any Akari.GPU.RenderPassNode]
+    private var gpu: Akari.GPU.HydraContext?
     public let labfx = Akari.LabFXEngine()
     private var frameIndex: UInt64 = 0
     private var lastStatsRevision: UInt64 = 0
@@ -105,9 +105,14 @@ public extension Akari
     {
       if gpu == nil || gpu?.hgi != hgi
       {
-        gpu = GpuContext(hgi: hgi, backend: settings.backend)
+        gpu = Akari.GPU.HydraContext(hgi: hgi, backend: settings.backend)
       }
-      guard let gpu, width > 0, height > 0 else { return }
+
+      guard
+        let gpu,
+        width > 0,
+        height > 0
+      else { return }
 
       logSceneStats(renderParam)
 
@@ -117,27 +122,56 @@ public extension Akari
       {
         !matrixNear($0.view, view) || !matrixNear($0.projection, projection)
       } ?? true
+
       lastCamera = (view: view, projection: projection)
 
-      let camera = Camera(view: Matrix4(view), projection: Matrix4(projection))
-      let target = FrameTarget(color: color, depth: depth, width: width, height: height)
-      let ctx = FrameContext(gpu: gpu,
-                             labfx: labfx,
-                             camera: camera,
-                             target: target,
-                             settings: settings,
-                             frameIndex: frameIndex,
-                             cameraMoved: cameraMoved,
-                             isFinalRender: isFinalRender,
-                             renderParam: renderParam)
+      let unjitteredCamera = Akari.Camera(view: Matrix4(view), projection: Matrix4(projection))
+      var camera = unjitteredCamera
+      if settings.features.contains(.temporalAA)
+      {
+        let index = frameIndex % UInt64(min(max(settings.samples, 1), 16)) + 1
+        let jitter = SIMD2(Self.halton(index, 2), Self.halton(index, 3)) - 0.5
+        camera.projection = Matrix4.translation(SIMD3(2 * jitter.x / Float(width),
+                                                      2 * jitter.y / Float(height), 0)) * camera.projection
+      }
 
-      var state = FrameState(target: target)
+      let target = Akari.GPU.HydraTarget(color: color,
+                                         depth: depth,
+                                         width: width,
+                                         height: height)
+
+      let ctx = Akari.GPU.FrameContext(gpu: gpu,
+                                       labfx: labfx,
+                                       camera: camera,
+                                       unjitteredCamera: unjitteredCamera,
+                                       target: target,
+                                       settings: settings,
+                                       frameIndex: frameIndex,
+                                       cameraMoved: cameraMoved,
+                                       isFinalRender: isFinalRender,
+                                       renderParam: renderParam)
+
+      var state = Akari.GPU.FrameState(target: target)
       for node in graph
       {
         node.execute(&state, ctx)
       }
 
       frameIndex &+= 1
+    }
+
+    private static func halton(_ index: UInt64, _ base: UInt64) -> Float
+    {
+      var result: Float = 0
+      var fraction: Float = 1
+      var i = index
+      while i > 0
+      {
+        fraction /= Float(base)
+        result += fraction * Float(i % base)
+        i /= base
+      }
+      return result
     }
 
     /// Returns `true` when two camera matrices are identical within a small epsilon.
@@ -161,12 +195,12 @@ public extension Akari
     }
 
     /// Map the resolved pass order onto concrete graph nodes.
-    private static func buildGraph(for settings: RenderSettings) -> [any RenderPassNode]
+    private static func buildGraph(for settings: RenderSettings) -> [any Akari.GPU.RenderPassNode]
     {
       RenderPipeline(settings: settings).activePasses.compactMap(node(for:))
     }
 
-    private static func node(for id: RenderPassID) -> (any RenderPassNode)?
+    private static func node(for id: RenderPassID) -> (any Akari.GPU.RenderPassNode)?
     {
       switch id
       {

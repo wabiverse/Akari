@@ -41,43 +41,36 @@
 /// How the shadow atlas is carved up and filtered.
 public struct ShadowSettings: Sendable
 {
-  /// Square atlas edge, in texels.
-  public var atlasSize: Int = 4096
-  /// Allocation granularity, the atlas is a grid of these.
-  public var pageSize: Int = 256
-  /// Square edge of one cascade's tile, in texels.
-  public var cascadeResolution: Int = 1024
-  /// Sun cascades, clamped to ``maxCascades``.
-  public var cascadeCount: Int = 4
-  /// View distance the last cascade reaches.
-  public var maxDistance: Float = 200
-  /// 0 spaces the cascade splits uniformly, 1 logarithmically.
-  public var splitDistribution: Float = 0.85
+  /// Reach of the sun's shadow, measured from the camera.
+  public var maxDistance: Float = 30
   /// Constant offset applied to the comparison depth.
   public var depthBias: Float = 0.0015
   /// Extra offset as surfaces turn away from the light.
   public var normalBias: Float = 0.04
-  /// PCF tap spacing, in atlas texels.
-  public var filterRadius: Float = 1.5
-  /// Fraction of ``maxDistance`` over which shadows fade out.
-  public var fadeRatio: Float = 0.1
 
-  /// The deferred shader carries one matrix and one rect per
-  /// cascade, so this bounds ``cascadeCount``.
-  public static let maxCascades = 4
+  /// Which technique renders the sun's shadows.
+  public enum Technique: String, Sendable, CaseIterable
+  {
+    /// Fixed depth slices of the camera frustum.
+    case cascaded
+    /// Concentric levels centered on the camera, doubling in radius.
+    case clipmap
+  }
+
+  public var levelLodBias: Float = 0
+  /// Ceiling on how many clipmap levels can be active at once, clamped to ``maxLevels``.
+  public var levelCount: Int32 = ShadowSettings.maxLevels
+
+  public static let maxLevels: Int32 = 24
 
   public init()
   {}
 
-  /// Cascades actually rendered.
-  public var resolvedCascadeCount: Int
+  /// Levels available before the frame's required
+  /// reach further limits how many are actually
+  /// fitted.
+  public var resolvedLevelCount: Int
   {
-    min(max(cascadeCount, 1), Self.maxCascades)
-  }
-
-  /// Pages along one edge of a cascade tile.
-  public var cascadePages: Int
-  {
-    max(1, (cascadeResolution + pageSize - 1) / pageSize)
+    Int(min(max(levelCount, 1), Self.maxLevels))
   }
 }

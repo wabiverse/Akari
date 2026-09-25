@@ -1,10 +1,10 @@
 {
-  "originHash" : "548b585064bf0bd3732acede4b6d82d23cbe2eff55cb572c3427a28927544eb0",
+  "originHash" : "fe8619a0d097bbf1f1258f34d99227ed28a09b7fc38d487fc18c7027b3c27063",
   "pins" : [
     {
       "identity" : "imgui",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/the-swift-collective/imgui",
+      "location" : "https://github.com/the-swift-collective/imgui.git",
       "state" : {
         "revision" : "5bd25cffd4ad22635563aa29c59ebee56943964e",
         "version" : "1.92.0"
@@ -60,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/onevcat/Rainbow.git",
       "state" : {
-        "revision" : "cdf146ae671b2624917648b61c908d1244b98ca1",
-        "version" : "4.2.1"
+        "revision" : "711ca908ca19d16e577d575c8d0a48151a16bb1b",
+        "version" : "4.2.2"
       }
     },
     {
@@ -76,10 +76,10 @@
     {
       "identity" : "swift-cross-ui",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/furbytm/swift-cross-ui.git",
+      "location" : "https://github.com/moreSwift/swift-cross-ui.git",
       "state" : {
-        "revision" : "823cecd0949aa78a035deefe4204eefb2dd0a213",
-        "version" : "0.7.2"
+        "revision" : "f8bdf05729ae1cd1b7f3ec4e57177a6965052146",
+        "version" : "0.9.0"
       }
     },
     {
@@ -96,8 +96,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "3ffafb9722d5d918c614feb496c8789a3b59d222",
-        "version" : "1.15.0"
+        "revision" : "9c6fb14227f55d8f711ce3847dc2f419fb0ecacb",
+        "version" : "1.15.1"
       }
     },
     {
@@ -132,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/wabiverse/swift-usd.git",
       "state" : {
-        "branch" : "dev",
-        "revision" : "86e6818fa35941564ef4b86a5db7f9c19ee8bc20"
+        "revision" : "d85b2cecbc12cd8cbf6c25ddea794fd551009fb9",
+        "version" : "26.8.4"
       }
     },
     {
@@ -141,8 +141,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/moreSwift/swift-winui",
       "state" : {
-        "revision" : "df7642fbb88e23a9cc1bbd366c7d6d3780fd0251",
-        "version" : "0.2.1"
+        "revision" : "c4f1cb75c02f4a4fdefcef2e5c5c4388c7cf9389",
+        "version" : "0.2.2"
       }
     },
     {
@@ -150,8 +150,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/furbytm/SwiftLabGL.git",
       "state" : {
-        "revision" : "034ec6b12a9141996d1e78fa820219ceb2fd19a8",
-        "version" : "0.1.5"
+        "revision" : "4d61b68c2b59ef31dabd9f3ab3f0a5bf60ea62e0",
+        "version" : "0.1.6"
       }
     },
     {

@@ -41,23 +41,35 @@
 import AkariCore
 import HdAkari
 
-public extension Akari
+public extension Akari.GPU
 {
   /// The Hgi handed to Akari by Hydra, used only to
   /// wrap LabGL's final color texture into the color
   /// AOV for presentation.
-  final class GpuContext
+  final class HydraContext
   {
-    public let backend: GpuBackend
+    public let backend: Akari.GPU.Backend
     public let hgi: UnsafeMutableRawPointer?
 
-    public init(hgi: UnsafeMutableRawPointer?, backend: GpuBackend)
+    public init(hgi: UnsafeMutableRawPointer?, backend: Akari.GPU.Backend)
     {
       self.hgi = hgi
       self.backend = backend
     }
   }
 
+  /// The AOV render buffers Hydra wants Akari to fill.
+  struct HydraTarget
+  {
+    public var color: UnsafeMutableRawPointer?
+    public var depth: UnsafeMutableRawPointer?
+    public var width: Int
+    public var height: Int
+  }
+}
+
+public extension Akari
+{
   /// The view the frame is rendered from.
   struct Camera: Sendable
   {
@@ -72,23 +84,19 @@ public extension Akari
       self.projection = projection
     }
   }
+}
 
-  /// The AOV render buffers Hydra wants Akari to fill.
-  struct FrameTarget
-  {
-    public var color: UnsafeMutableRawPointer?
-    public var depth: UnsafeMutableRawPointer?
-    public var width: Int
-    public var height: Int
-  }
-
+public extension Akari.GPU
+{
   /// Immutable per frame data for a pass.
   struct FrameContext: @unchecked Sendable
   {
-    public let gpu: GpuContext
+    public let gpu: Akari.GPU.HydraContext
     public let labfx: Akari.LabFXEngine
-    public let camera: Camera
-    public let target: FrameTarget
+    public let camera: Akari.Camera
+    /// `camera` without the TAA sub pixel jitter, for reprojection.
+    public let unjitteredCamera: Akari.Camera
+    public let target: Akari.GPU.HydraTarget
     public let settings: RenderSettings
     public let frameIndex: UInt64
     /// True when the camera moved since the last frame
@@ -103,15 +111,15 @@ public extension Akari
   /// Mutable per frame state.
   struct FrameState
   {
-    public var target: FrameTarget
+    public var target: Akari.GPU.HydraTarget
     public var resources: [RenderTargetID: RenderTargetDesc] = [:]
 
-    public init(target: FrameTarget)
+    public init(target: Akari.GPU.HydraTarget)
     {
       self.target = target
     }
 
-    public mutating func declare(_ id: RenderTargetID, _ desc: RenderTargetDesc)
+    public mutating func declare(_ id: Akari.GPU.RenderTargetID, _ desc: Akari.GPU.RenderTargetDesc)
     {
       resources[id] = desc
     }
@@ -121,10 +129,10 @@ public extension Akari
   enum RenderTargetID: String, Sendable
   {
     case gbufferAlbedo, gbufferNormal, gbufferMaterial, depth
-    case shadowAtlas
     case ambientOcclusion
     case sceneColorHDR
     case screenSpaceGI
+    case volumeScatter, volumeIntegrated
     case reflections
     case history
     case bloomChain
@@ -134,9 +142,9 @@ public extension Akari
   {
     public var width: Int
     public var height: Int
-    public var format: TargetFormat
+    public var format: Akari.GPU.RenderTargetFormat
     public var scale: Float
-    public init(width: Int, height: Int, format: TargetFormat, scale: Float = 1)
+    public init(width: Int, height: Int, format: Akari.GPU.RenderTargetFormat, scale: Float = 1)
     {
       self.width = width
       self.height = height
@@ -145,7 +153,7 @@ public extension Akari
     }
   }
 
-  enum TargetFormat: Sendable
+  enum RenderTargetFormat: Sendable
   {
     case rgba8, rgba16f, rgba32f, r16f, rg16f, depth32f
   }
@@ -155,11 +163,11 @@ public extension Akari
   {
     var id: RenderPassID { get }
     func isEnabled(for settings: RenderSettings) -> Bool
-    func execute(_ state: inout FrameState, _ ctx: FrameContext)
+    func execute(_ state: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
   }
 }
 
-public extension Akari.RenderPassNode
+public extension Akari.GPU.RenderPassNode
 {
   func isEnabled(for _: RenderSettings) -> Bool
   {

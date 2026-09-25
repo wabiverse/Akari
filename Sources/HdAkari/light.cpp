@@ -37,55 +37,96 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
+#include "pxr/pxrns.h"
 
-import AkariCore
+#include "HdAkari/light.h"
+#include "HdAkari/renderParam.h"
+#include "HdAkari/scene.h"
 
-/// Resolves a set of ``RenderSettings`` into the
-/// ordered list of passes that actually run this
-/// frame, the assembled frame graph.
-public struct RenderPipeline: Sendable
+#include <Hd/changeTracker.h>
+#include <Hd/light.h>
+#include <Hd/sceneDelegate.h>
+#include <Hd/tokens.h>
+
+#include <Vt/value.h>
+
+PXR_NAMESPACE_OPEN_SCOPE
+
+HdAkariLight::HdAkariLight(SdfPath const &id)
+  : HdLight(id)
+{}
+
+HdAkariLight::~HdAkariLight() = default;
+
+HdDirtyBits
+HdAkariLight::GetInitialDirtyBitsMask() const
 {
-  public var settings: RenderSettings
+  return HdLight::AllDirty;
+}
 
-  public init(settings: RenderSettings)
+void
+HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
+                   HdRenderParam   *renderParam,
+                   HdDirtyBits     *dirtyBits)
+{
+  const SdfPath &id = GetId();
+  auto *param = static_cast<HdAkariRenderParam *>(renderParam);
+  HdAkariScene *scene = param ? param->GetScene() : nullptr;
+  if (!scene || id.IsEmpty())
   {
-    self.settings = settings
+    *dirtyBits = HdChangeTracker::Clean;
+    return;
   }
 
-  /// The passes that run for the current settings, in execution order.
-  public var activePasses: [RenderPassID]
+  HdAkariLightData data;
+  data.id = id;
+  data.transform = sceneDelegate->GetTransform(id);
+  data.visible = sceneDelegate->GetVisible(id);
+
+  const VtValue intensityVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->intensity);
+  if (intensityVal.IsHolding<float>())
   {
-    let f = settings.features
+    data.intensity = intensityVal.UncheckedGet<float>();
+  }
 
-    var passes: [RenderPassID] = [.depthPrepass, .geometry]
+  const VtValue exposureVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->exposure);
+  if (exposureVal.IsHolding<float>())
+  {
+    data.exposure = exposureVal.UncheckedGet<float>();
+  }
 
-    if f.contains(.volumetrics) { passes.append(.volumetrics) }
+  const VtValue colorVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->color);
+  if (colorVal.IsHolding<GfVec3f>())
+  {
+    const GfVec3f color = colorVal.UncheckedGet<GfVec3f>();
+    data.colorR = color[0];
+    data.colorG = color[1];
+    data.colorB = color[2];
+  }
 
-    // shadows replay the geometry capture the geometry pass
-    // records, so they can only be drawn once it has run.
-    if f.contains(.shadowMaps) { passes.append(.shadow) }
+  const VtValue radiusVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->radius);
+  if (radiusVal.IsHolding<float>())
+  {
+    data.radius = radiusVal.UncheckedGet<float>();
+  }
 
-    if f.contains(.ambientOcclusion) { passes.append(.ambientOcclusion) }
+  data.dataRevision = ++_dataGeneration;
 
-    passes.append(.lighting)
+  scene->UpdateLight(std::move(data));
 
-    if f.contains(.screenSpaceGI) { passes.append(.screenSpaceGI) }
-    // reflections run when either screen space or hardware RT is on.
-    if f.contains(.screenSpaceReflections) || f.contains(.hardwareRayTracing)
+  *dirtyBits = HdChangeTracker::Clean;
+}
+
+void
+HdAkariLight::Finalize(HdRenderParam *renderParam)
+{
+  if (auto *param = static_cast<HdAkariRenderParam *>(renderParam))
+  {
+    if (HdAkariScene *scene = param->GetScene())
     {
-      passes.append(.reflections)
+      scene->RemoveLight(GetId());
     }
-
-    passes.append(.transparency)
-
-    if f.contains(.temporalAA) { passes.append(.temporalResolve) }
-    if f.contains(.bloom) { passes.append(.bloom) }
-    if f.contains(.depthOfField) { passes.append(.depthOfField) }
-
-    // the color pipeline.
-    passes.append(.tonemap)
-    passes.append(.present)
-
-    return passes
   }
 }
+
+PXR_NAMESPACE_CLOSE_SCOPE

@@ -15,9 +15,9 @@ let package = Package(
     .executable(name: "AkariDemo", targets: ["AkariDemo"])
   ],
   dependencies: [
-    .package(url: "https://github.com/wabiverse/swift-usd.git", branch: "dev"),
+    .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.8.4"),
     .package(url: "https://github.com/wabiverse/Lattice.git", branch: "main"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.1.5"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.1.6"),
   ],
   targets: [
     // TODO: support externally provided openusd builds.

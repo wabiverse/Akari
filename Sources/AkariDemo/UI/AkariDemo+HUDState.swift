@@ -48,13 +48,20 @@ extension AkariDemo
   @MainActor
   final class HUDState: ObservableObject
   {
-    @Published var viewTransform: ViewTransform?
+    @Published var viewTransform: Akari.Color.ViewTransform?
     @Published var quality: RenderQuality?
     @Published var exposure: Double
     @Published var gamma: Double
     @Published var samples: Double
     @Published var renderSamples: Double
     @Published var environmentSunHeight: Double
+    @Published var environmentSunAngle: Double
+    @Published var shadowMaxDistance: Double
+    @Published var shadowLevelLodBias: Double
+    @Published var volumeDensity: Double
+    @Published var volumeAnisotropy: Double
+    @Published var volumeMaxDistance: Double
+    @Published var volumeShadows: Bool
     @Published var features: RenderFeatures
 
     private let engine: Akari.RenderEngine
@@ -70,6 +77,13 @@ extension AkariDemo
       samples = Double(s.samples)
       renderSamples = Double(s.renderSamples)
       environmentSunHeight = Double(s.light.sunHeight)
+      environmentSunAngle = Double(s.light.sunAngle) * 180 / .pi
+      shadowMaxDistance = Double(s.light.shadow.maxDistance)
+      shadowLevelLodBias = Double(s.light.shadow.levelLodBias)
+      volumeDensity = Double(s.volume.density)
+      volumeAnisotropy = Double(s.volume.anisotropy)
+      volumeMaxDistance = Double(s.volume.maxDistance)
+      volumeShadows = s.volume.shadows
       features = s.features
     }
 
@@ -91,6 +105,13 @@ extension AkariDemo
       settings.samples = Int(samples)
       settings.renderSamples = Int(renderSamples)
       settings.light.sunHeight = Float(environmentSunHeight)
+      settings.light.sunAngle = Float(environmentSunAngle * .pi / 180)
+      settings.light.shadow.maxDistance = Float(shadowMaxDistance)
+      settings.light.shadow.levelLodBias = Float(shadowLevelLodBias)
+      settings.volume.density = Float(volumeDensity)
+      settings.volume.anisotropy = Float(volumeAnisotropy)
+      settings.volume.maxDistance = Float(volumeMaxDistance)
+      settings.volume.shadows = volumeShadows
       engine.settings = settings
     }
 
@@ -99,6 +120,19 @@ extension AkariDemo
     {
       quality = q
       features = RenderSettings.features(for: q)
+    }
+
+    /// Volume shadows only tune the fog.
+    var volumeShadowsBinding: Binding<Bool>
+    {
+      Binding(
+        get: { self.volumeShadows },
+        set: { on in
+          self.volumeShadows = on
+          if on { self.features.insert(.volumetrics) }
+          self.apply()
+        }
+      )
     }
 
     /// A binding the HUD toggles write through for one feature.

@@ -58,23 +58,34 @@ public extension Akari
     /// Parsed `.labfx` tree.
     private var graph: LabFXGraph?
     /// Buffer the scene geometry is recorded into.
-    private var captureBuffer: LabGLCaptureBuffer?
+    var captureBuffer: LabGLCaptureBuffer?
     /// The LabFX runtime driving the graph.
-    private var runtime = lab.fx.Runtime()
-    private var lastWidth = 0
-    private var lastHeight = 0
+    var runtime = lab.fx.Runtime()
+    var lastWidth = 0
+    var lastHeight = 0
 
     /// Cached scene revision, skips capture when geometry is unchanged.
-    private var lastGeometryRevision: UInt64 = 0
+    var lastGeometryRevision: UInt64 = 0
 
     private let materialAtlas = Akari.MaterialAtlas()
     private let recorder = Akari.Geom.Recorder()
-    private let shadowAtlas = Akari.ShadowAtlas()
+    let shadowAtlas = Akari.ShadowAtlas()
+    private let fireflies = Fireflies()
+    var boundShadowAtlas: GLuint = 0
 
     /// World bounds of the last recorded geometry.
-    private var sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
+    var sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
+    /// Per caster world AABBs for the shadow tilemap's own GPU tagging.
+    var casterBounds: [Float] = []
     /// Set once the atlas has tiles the deferred pass can sample.
-    private var shadowsReady = false
+    var shadowsReady = false
+    private var temporal = Temporal()
+    private var ssgi = ScreenSpaceGI()
+    var volumetrics = Volumetrics()
+    /// Froxel depth reduction + column integration.
+    let froxelVolume = Akari.FroxelVolume()
+
+    var syncedPointLights: [Akari.Lux.PointLight] = []
 
     /// This is `true` when the opened usd stage's upAxis is "Z".
     private var stageIsZUp = false
@@ -86,7 +97,7 @@ public extension Akari
     }
 
     /// Compute sun direction based on the opened usd stages's upAxis.
-    private func worldSpaceSunDirection(_ light: LightSettings) -> SIMD3<Float>
+    func worldSpaceSunDirection(_ light: LightSettings) -> SIMD3<Float>
     {
       let sky = light.sunDirection
       return stageIsZUp ? SIMD3(sky.x, -sky.z, sky.y) : sky
@@ -107,9 +118,25 @@ public extension Akari
 
         // when sunHeight changes the sky cubemap changes,
         // so the prefiltered IBL maps must be regenerated.
-        setIblPasses(active: true)
+        setPasses(Self.iblPassNames, active: true)
         iblNeedsBake = true
       }
+    }
+
+    private struct Temporal
+    {
+      /// Unjittered view projection the last temporal resolve ran with.
+      var prevViewProjection: Matrix4?
+      var thisFrame = false
+      /// Frames of history behind the current pixel.
+      var samples = 0
+    }
+
+    private struct ScreenSpaceGI
+    {
+      var thisFrame = false
+      var passesActive = true
+      var needsReset = true
     }
 
     private static let iblPassNames = [
@@ -119,10 +146,26 @@ public extension Akari
       "dfg"
     ]
 
+    private static let ssgiPassNames = [
+      "ssgi prep",
+      "ssgi pyramid",
+      "ssgi",
+      "ssgi temporal",
+      "ssgi history"
+    ]
+
+    private static let gbufferPassNames = [
+      "clear gbuffer",
+      "geometry"
+    ]
+
     init()
     {}
 
-    deinit { teardown() }
+    deinit
+    {
+      teardown()
+    }
 
     /// Starts a new frame through LabGL. Ensures the engine and the deferred
     /// graph exist, resizes to the target, and opens the frame.
@@ -144,11 +187,23 @@ public extension Akari
         // so rerun the IBL passes on the next frame to
         // rebake, then disable them again.
         iblNeedsBake = true
+        temporal.prevViewProjection = nil
+        ssgi.needsReset = true
         lastWidth = width
         lastHeight = height
       }
 
-      if iblNeedsBake { setIblPasses(active: true) }
+      if iblNeedsBake { setPasses(Self.iblPassNames, active: true) }
+
+      if !temporal.thisFrame { temporal.prevViewProjection = nil }
+      temporal.thisFrame = false
+      setVector("u_taa", SIMD4(0, 1, 1, 0))
+
+      ssgi.thisFrame = false
+      setVector("u_ssgi", SIMD4(0, 0, 0, 0))
+
+      volumetrics.thisFrame = false
+      volumetrics.froxels = nil
 
       labgl.beginFrame(windowHandle)
     }
@@ -184,12 +239,32 @@ public extension Akari
         setSampler("u_color_atlas", colorTex)
       }
 
+      let lights = scene.LightSnapshot().prefix(4)
+
+      syncedPointLights = lights.map
+      { light in
+        let mat = Pixar.GfMatrix4f(light.transform)
+        let position: SIMD3<Float> = if let mPtr = mat.GetArray()
+        {
+          SIMD3(mPtr[12], mPtr[13], mPtr[14])
+        }
+        else
+        {
+          .zero
+        }
+        return Akari.Lux.PointLight(position: position,
+                                    color: SIMD3(light.colorR, light.colorG, light.colorB),
+                                    intensity: light.intensity * exp2(light.exposure),
+                                    radius: light.radius)
+      }
+
       // only capture when geometry has changed.
       let rev = scene.Revision()
       guard rev != lastGeometryRevision else { return }
       lastGeometryRevision = rev
 
       let meshes = scene.Snapshot()
+
       var triangleEstimate = 0
       var rawMeshes: [Akari.Geom.Recorder.RawMesh] = []
       rawMeshes.reserveCapacity(meshes.count)
@@ -202,18 +277,26 @@ public extension Akari
 
         let mat = Pixar.GfMatrix4f(mesh.transform)
         guard let mPtr = mat.GetArray() else { continue }
+
         let worldMatrix = Array(UnsafeBufferPointer(start: mPtr, count: 16))
         let normalMatrix = Matrix.normalMatrix3x3(mPtr)
         let flipWinding = Matrix.determinant3x3(mPtr) < 0
 
-        rawMeshes.append(Akari.Geom.Recorder.RawMesh(id: mesh.id.string, dataRevision: mesh.dataRevision,
-                                                     flipWinding: flipWinding, points: mesh.points,
-                                                     tris: mesh.triangleIndices, uvs: mesh.uvs,
-                                                     worldMatrix: worldMatrix, normalMatrix: normalMatrix))
+        rawMeshes.append(Akari.Geom.Recorder.RawMesh(id: mesh.id.string,
+                                                     dataRevision: mesh.dataRevision,
+                                                     flipWinding: flipWinding,
+                                                     points: mesh.points,
+                                                     tris: mesh.triangleIndices,
+                                                     uvs: mesh.uvs,
+                                                     worldMatrix: worldMatrix,
+                                                     normalMatrix: normalMatrix))
       }
+
+      rawMeshes.sort { Self.mortonKey($0.worldMatrix) < Self.mortonKey($1.worldMatrix) }
 
       let items = recorder.record(rawMeshes)
 
+      gl.bindTexture(target: GL_TEXTURE_2D, texture: 0)
       labgl.captureClear(captureBuffer)
       labgl.captureStart(captureBuffer)
 
@@ -237,77 +320,22 @@ public extension Akari
       labgl.captureStop()
 
       sceneBounds = batch.worldBounds
+      casterBounds = batch.casterBounds
     }
 
-    /// Fits the sun cascades into the shadow atlas and redraws whichever
-    /// tiles went stale, then binds them for the deferred resolve.
-    ///
-    /// - Parameters:
-    ///   - renderParam: hydra render param.
-    ///   - camera: the view the cascades are fitted to.
-    ///   - settings: the frame's render settings.
-    ///   - frameIndex: per frame counter, drives atlas eviction.
-    public func renderShadows(renderParam: Pixar.HdAkariRenderParam,
-                              camera: Akari.Camera,
-                              settings: RenderSettings,
-                              frameIndex: UInt64)
+    /// Rasterizes the G-buffer now instead of waiting
+    /// for `present()`'s final `runtime.render()`.
+    public func renderGbufferEarly()
     {
-      shadowsReady = false
-      guard
-        let captureBuffer,
-        let sceneBounds,
-        let scene = renderParam.GetScene()
-      else { return }
+      guard windowHandle != nil else { return }
 
-      let shadow = settings.light.shadow
-      let views = shadowAtlas.render(capture: captureBuffer,
-                                     camera: camera,
-                                     lightDirection: worldSpaceSunDirection(settings.light),
-                                     sceneBounds: sceneBounds,
-                                     sceneRevision: scene.Revision(),
-                                     frameIndex: frameIndex,
-                                     settings: shadow)
-      guard !views.isEmpty else { return }
+      ensureShadowBindings()
 
-      bindShadowViews(views, settings: shadow)
-      shadowsReady = true
-
-      // the atlas draws left the light's matrices on the stack,
-      // so put the camera back before the captured replay.
-      gl.matrixMode(GL_PROJECTION)
-      gl.loadMatrix(camera.projection.m)
-      gl.matrixMode(GL_MODELVIEW)
-      gl.loadMatrix(camera.view.m)
-    }
-
-    private func bindShadowViews(_ views: [Akari.ShadowAtlas.View], settings: ShadowSettings)
-    {
-      setSampler("u_shadow_atlas", shadowAtlas.texture)
-
-      // the shader carries a fixed set of cascade slots, so the unused
-      // tail repeats the last view rather than sampling stale matrices.
-      for slot in 0 ..< ShadowSettings.maxCascades
+      for name in Self.gbufferPassNames
       {
-        let view = views[min(slot, views.count - 1)]
-        setMatrix("u_shadowMatrix\(slot)", view.matrix)
-        setVector("u_shadowRect\(slot)", view.rect)
+        runtime.renderPass(name)
+        runtime.setPassActive(name, active: false)
       }
-
-      var splits = SIMD4<Float>(repeating: .greatestFiniteMagnitude)
-      for (i, view) in views.prefix(4).enumerated()
-      {
-        splits[i] = view.splitFar
-      }
-      setVector("u_shadowSplits", splits)
-
-      setVector("u_shadowParams", SIMD4(1 / Float(max(settings.atlasSize, 1)),
-                                        settings.depthBias,
-                                        settings.normalBias,
-                                        Float(views.count)))
-
-      let far = views.last?.splitFar ?? settings.maxDistance
-      let fade = max(far * min(max(settings.fadeRatio, 0.001), 1), 1e-3)
-      setVector("u_shadowFilter", SIMD4(settings.filterRadius, far - fade, 1 / fade, 0))
     }
 
     /// Sets the deferred lighting stage state: the split sum IBL toggle,
@@ -318,20 +346,75 @@ public extension Akari
     ///   - projection: 16 row-major floats, view->clip.
     ///   - light: sun height and shadow configuration.
     ///   - shadowsEnabled: gates the cascade lookup.
-    public func setLighting(iblEnabled: Bool, projection: Matrix4,
-                            light: LightSettings, shadowsEnabled: Bool)
+    public func setLighting(iblEnabled: Bool,
+                            projection: Matrix4,
+                            light: LightSettings,
+                            shadowsEnabled: Bool)
     {
       setFloat("u_iblEnabled", iblEnabled ? 1 : 0)
+      setMatrix("u_proj", projection)
       setMatrix("u_invProj", projection.inverse())
 
       setFloat("sunHeight", light.sunHeight)
       lastSunHeight = light.sunHeight // handles IBL rebaking, if changed.
 
       let sun = worldSpaceSunDirection(light)
-      setVector("u_sunDirection", SIMD4(sun.x, sun.y, sun.z, 0))
+      setVector("u_sunDirection", SIMD4(sun.x, sun.y, sun.z, light.sunAngle * 0.5))
 
       setFloat("u_shadowEnabled", shadowsEnabled && shadowsReady ? 1 : 0)
       setFloat("u_zUp", stageIsZUp ? 1 : 0)
+
+      setFloat("u_punctualShadowEnabled", shadowsEnabled && shadowsReady ? 1 : 0)
+      setFloat("u_pointLightCount", Float(syncedPointLights.count))
+      for slot in 0 ..< 4
+      {
+        let p = slot < syncedPointLights.count ? syncedPointLights[slot] : nil
+        setVector("u_pointLightPosIntensity\(slot)",
+                  SIMD4(p?.position.x ?? 0,
+                        p?.position.y ?? 0,
+                        p?.position.z ?? 0,
+                        p?.intensity ?? 0))
+        setVector("u_pointLightColorRadius\(slot)",
+                  SIMD4(p?.color.x ?? 0,
+                        p?.color.y ?? 0,
+                        p?.color.z ?? 0,
+                        p?.radius ?? 1))
+      }
+    }
+
+    /// Turns the temporal resolve on for this frame.
+    ///
+    /// - Parameters:
+    ///   - camera: this frame's unjittered camera.
+    ///   - samples: the viewport sample count.
+    ///   - moving: whether the camera moved since last frame.
+    public func setTemporal(camera: Akari.Camera, samples: Int, moving: Bool)
+    {
+      let viewProjection = camera.projection * camera.view
+      let limit = max(samples, 1)
+      let previous = temporal.prevViewProjection
+      temporal.samples = previous == nil ? 1
+        : moving ? min(10, limit)
+        : min(temporal.samples + 1, limit)
+
+      setMatrix("u_prevViewProj", previous ?? viewProjection)
+      setMatrix("u_currViewProj", viewProjection)
+      setVector("u_taa", SIMD4(1, previous == nil ? 1 : 0, 1 / Float(temporal.samples), 0))
+      temporal.prevViewProjection = viewProjection
+      temporal.thisFrame = true
+    }
+
+    /// Turns on screen space GI for this frame.
+    public func setScreenSpaceGI()
+    {
+      let diagonal = sceneBounds.map { $0.max - $0.min } ?? SIMD3(repeating: 1)
+      let radius = max((diagonal * diagonal).sum().squareRoot() * 0.15, 1e-3)
+      setVector("u_ssgi", SIMD4(radius, radius * 0.2, 1, ssgi.needsReset || !ssgi.passesActive ? 1 : 0))
+
+      let size = SIMD2<Float>(Float(max(lastWidth, 1)), Float(max(lastHeight, 1)))
+      setVector("u_ssgiSize", SIMD4(size.x, size.y, 1 / size.x, 1 / size.y))
+      ssgi.needsReset = false
+      ssgi.thisFrame = true
     }
 
     /// Sets the tonemap stage state: exposure, gamma,
@@ -344,7 +427,7 @@ public extension Akari
     ///   - frameIndex: per frame counter to seed the dither.
     public func setTonemap(exposure: Float,
                            gamma: Float,
-                           viewTransform: ViewTransform,
+                           viewTransform: Akari.Color.ViewTransform,
                            frameIndex: UInt64)
     {
       setFloat("exposure", exposure)
@@ -365,16 +448,30 @@ public extension Akari
     /// - Parameters:
     ///   - color: opaque `HdAkariRenderBuffer` for the color AOV.
     ///   - hgi: opaque `Hgi` shared with Hydra.
-    public func present(color: UnsafeMutableRawPointer?, hgi: UnsafeMutableRawPointer?)
+    public func present(color: UnsafeMutableRawPointer?,
+                        hgi: UnsafeMutableRawPointer?,
+                        fireflies enableFireflies: Bool = false)
     {
       guard let windowHandle else { return }
+
+      fireflies.update(enabled: enableFireflies)
+
+      ensureShadowBindings()
+
+      if ssgi.thisFrame != ssgi.passesActive
+      {
+        setPasses(Self.ssgiPassNames, active: ssgi.thisFrame)
+        ssgi.passesActive = ssgi.thisFrame
+      }
+
+      syncVolumetrics()
 
       runtime.render()
 
       // bake the IBL once.
       if iblNeedsBake
       {
-        setIblPasses(active: false)
+        setPasses(Self.iblPassNames, active: false)
         iblNeedsBake = false
       }
       labgl.present(windowHandle)
@@ -393,38 +490,63 @@ public extension Akari
 
     /// `runtime.setUniform` takes a pointer, so each of
     /// these binds an addressable value for the caller.
-    private func setFloat(_ name: String, _ value: Float)
+    func setFloat(_ name: String, _ value: Float)
     {
       var value = value
       runtime.setUniform(name, type: GL_FLOAT, data: &value)
     }
 
-    private func setInt(_ name: String, _ value: Int32)
+    func setInt(_ name: String, _ value: Int32)
     {
       var value = value
       runtime.setUniform(name, type: GL_INT, data: &value)
     }
 
     /// Skips texture names LabGL hasn't uploaded yet.
-    private func setSampler(_ name: String, _ texture: GLuint)
+    func setSampler(_ name: String, _ texture: GLuint)
     {
       guard texture != 0 else { return }
       var texture = texture
       runtime.setUniform(name, type: GL_SAMPLER_2D, data: &texture)
     }
 
-    private func setVector(_ name: String, _ value: SIMD4<Float>)
+    func setVector(_ name: String, _ value: SIMD4<Float>)
     {
       var value = value
-      runtime.setUniform(name, type: GLenum(GL_FLOAT_VEC4), data: &value)
+      runtime.setUniform(name, type: GL_FLOAT_VEC4, data: &value)
     }
 
-    private func setMatrix(_ name: String, _ matrix: Matrix4)
+    func setMatrix(_ name: String, _ matrix: Matrix4)
     {
-      matrix.m.withUnsafeBufferPointer
+      matrix.withUnsafeFloats
       { buf in
         runtime.setUniform(name, type: GL_FLOAT_MAT4, data: buf.baseAddress)
       }
+    }
+
+    /// Toggles a set of graph passes on/off.
+    func setPasses(_ names: [String], active: Bool)
+    {
+      for name in names
+      {
+        runtime.setPassActive(name, active: active)
+      }
+    }
+
+    /// Morton code of a mesh's world position, quantized against a fixed grid (in meters).
+    private static func mortonKey(_ worldMatrix: [Float]) -> UInt64
+    {
+      func part(_ v: Float) -> UInt64
+      {
+        var x = UInt64(UInt32(bitPattern: Int32(max(-1_048_576, min(1_048_575, (v * 8).rounded())) + 1_048_576)) & 0x1FFFFF)
+        x = (x | (x << 32)) & 0x1F_0000_0000_FFFF
+        x = (x | (x << 16)) & 0x1F_0000_FF00_00FF
+        x = (x | (x << 8)) & 0x100F_00F0_0F00_F00F
+        x = (x | (x << 4)) & 0x10C3_0C30_C30C_30C3
+        x = (x | (x << 2)) & 0x1249_2492_4924_9249
+        return x
+      }
+      return part(worldMatrix[12]) | (part(worldMatrix[13]) << 1) | (part(worldMatrix[14]) << 2)
     }
 
     private func ensureEngine(width: Int, height: Int)
@@ -467,6 +589,10 @@ public extension Akari
       // roughness reached at the prefilter's last mip.
       setFloat("roughnessScale", 1.0)
 
+      fireflies.attach(to: &runtime)
+
+      attachVolumetrics()
+
       // capture buffer the geometry pass replays each frame.
       guard let cap = labgl.captureCreate()
       else
@@ -483,7 +609,12 @@ public extension Akari
 
     private func teardown()
     {
+      fireflies.release()
+
       shadowAtlas.release()
+
+      froxelVolume.release()
+
       runtime.destroy()
       if let captureBuffer
       {
@@ -499,15 +630,6 @@ public extension Akari
       {
         labgl.destroyWindow(windowHandle)
         self.windowHandle = nil
-      }
-    }
-
-    /// Toggles the IBL generation passes on/off.
-    private func setIblPasses(active: Bool)
-    {
-      for name in Self.iblPassNames
-      {
-        runtime.setPassActive(name, active: active)
       }
     }
   }

@@ -44,6 +44,7 @@
 #include "HdAkari/mesh.h"
 #include "HdAkari/sphere.h"
 #include "HdAkari/cube.h"
+#include "HdAkari/light.h"
 #include "HdAkari/scene.h"
 #include "HdAkari/textureAtlas.h"
 #include "HdAkari/akariBridge.h"
@@ -234,6 +235,9 @@ HdAkariRenderDelegate::CreateSprim(TfToken const &typeId, SdfPath const &sprimId
       ? AKRenderDelegateSprimClassName(_swiftDelegate, typeId.GetText())
       : nullptr;
 
+  if (className && strcmp(className, "sphereLight") == 0) {
+    return new HdAkariLight(sprimId);
+  }
   if (className && strcmp(className, "camera") == 0) {
     return new HdCamera(sprimId);
   }
@@ -248,6 +252,9 @@ HdAkariRenderDelegate::CreateFallbackSprim(TfToken const &typeId)
       ? AKRenderDelegateSprimClassName(_swiftDelegate, typeId.GetText())
       : nullptr;
 
+  if (className && strcmp(className, "sphereLight") == 0) {
+    return new HdAkariLight(SdfPath::EmptyPath());
+  }
   if (className && strcmp(className, "camera") == 0) {
     return new HdCamera(SdfPath::EmptyPath());
   }
