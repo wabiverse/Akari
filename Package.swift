@@ -15,7 +15,7 @@ let package = Package(
     .executable(name: "AkariDemo", targets: ["AkariDemo"])
   ],
   dependencies: [
-    .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.8.6"),
+    .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.8.7"),
     .package(url: "https://github.com/wabiverse/Lattice.git", branch: "main"),
     .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.1.6"),
   ],

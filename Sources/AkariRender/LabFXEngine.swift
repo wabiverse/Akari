@@ -564,7 +564,7 @@ public extension Akari
 
       // parse + build the deferred graph once.
       guard
-        let url = Bundle.module.url(forResource: "DeferredGraph", withExtension: "labfx"),
+        let url = Bundle.akari.url(forResource: "DeferredGraph", withExtension: "labfx"),
         let graphSource = try? String(contentsOf: url, encoding: .utf8)
       else
       {

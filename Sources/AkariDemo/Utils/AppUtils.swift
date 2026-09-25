@@ -68,7 +68,7 @@ public enum AppUtils
 {
   public static func registerAkariPlugin()
   {
-    guard let url = Bundle.module.url(forResource: "plugInfo", withExtension: "json")
+    guard let url = Bundle.hdAkari.url(forResource: "plugInfo", withExtension: "json")
     else
     {
       print("[akari] WARNING: plugInfo.json missing from bundle - 'Akari' will not register")

@@ -107,7 +107,7 @@ extension Akari.LabFXEngine
       if graph != nil { return true }
 
       guard
-        let url = Bundle.module.url(forResource: "Fireflies", withExtension: "labfx"),
+        let url = Bundle.akari.url(forResource: "Fireflies", withExtension: "labfx"),
         let source = try? String(contentsOf: url, encoding: .utf8)
       else
       {

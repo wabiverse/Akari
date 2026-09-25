@@ -1,5 +1,5 @@
 {
-  "originHash" : "e3641200a5095d6639a1d14f1a875b4dde3d7831e310706e3a6a431c93ee2a4d",
+  "originHash" : "ce206c6700e3678ec9b57f2df5891409d66a3507e04fbf151168daa01cb80d64",
   "pins" : [
     {
       "identity" : "imgui",
@@ -132,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/wabiverse/swift-usd.git",
       "state" : {
-        "revision" : "77b08ac210a434061024ff1332028d4a970e464e",
-        "version" : "26.8.6"
+        "revision" : "5df70ae23ee6a8a3b812e0c3bde33a079db5a99f",
+        "version" : "26.8.7"
       }
     },
     {
