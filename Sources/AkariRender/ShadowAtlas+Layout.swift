@@ -72,8 +72,6 @@ extension Akari.ShadowAtlas
     return 2
   }()
 
-  static let maxShadowViews = 512
-
   /// Bound by the deferred shader's fixed `u_pointLight*` slot count.
   static let maxPunctualLights = 4
   static let facesPerLight = 6

@@ -163,6 +163,27 @@ public extension Akari
         SIMD4(origin.x + 0.5 * size.x, origin.y + 0.5 * size.y, 0.5, 1)
       )))
     }
+    
+    /// Remaps projection depth so the depth buffer's
+    /// precision stays near uniform with distance.
+    public static func reversedDepth(_ projection: Matrix4) -> Matrix4
+    {
+      var p = projection.simd
+      let a = p[2][2], b = p[3][2]
+      p[0][2] = 0
+      p[1][2] = 0
+      if abs(p[2][3]) > 0.5
+      {
+        p[2][2] = 0
+        p[3][2] = b / (a - 1)
+      }
+      else
+      {
+        p[2][2] = -a / 2
+        p[3][2] = (1 - b) / 2
+      }
+      return Matrix4(p)
+    }
   }
 }
 

@@ -193,7 +193,7 @@ public extension Akari
                                  lightCount: lightCount)
       }
 
-      dispatchPageAllocation(lightCount: lightCount)
+      dispatchPageAllocation()
     }
 
     /// Fits every active tilemap and draws its stale views.

@@ -96,7 +96,7 @@ pass: sky
 pass: geometry
   draw: opaque geometry
   clear depth: no
-  depth test: less
+  depth test: greater
   write depth: yes
   use shader: mesh
   outputs: gbuffer [diffuse, position, normal, material]

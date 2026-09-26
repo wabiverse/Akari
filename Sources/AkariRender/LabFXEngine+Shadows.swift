@@ -105,7 +105,7 @@ public extension Akari.LabFXEngine
     // the atlas draws left the light's matrices on the stack,
     // so put the camera back before the captured replay.
     gl.matrixMode(GL_PROJECTION)
-    gl.loadMatrix(camera.projection.m)
+    gl.loadMatrix(Akari.Matrix4.reversedDepth(camera.projection).m)
     gl.matrixMode(GL_MODELVIEW)
     gl.loadMatrix(camera.view.m)
   }

@@ -205,6 +205,7 @@ public extension Akari
       volumetrics.thisFrame = false
       volumetrics.froxels = nil
 
+      gl.clearDepth(0)
       labgl.beginFrame(windowHandle)
     }
 
@@ -225,7 +226,7 @@ public extension Akari
       else { return }
 
       gl.matrixMode(GL_PROJECTION)
-      gl.loadMatrix(projection.m)
+      gl.loadMatrix(Matrix4.reversedDepth(projection).m)
       gl.matrixMode(GL_MODELVIEW)
       gl.loadMatrix(view.m)
 
@@ -301,7 +302,7 @@ public extension Akari
       labgl.captureStart(captureBuffer)
 
       gl.enable(GL_DEPTH_TEST)
-      gl.depthFunc(GL_LESS)
+      gl.depthFunc(GLenum(GL_GREATER))
 
       gl.enable(GL_CULL_FACE)
       gl.cullFace(GL_BACK)

@@ -186,13 +186,11 @@ extension Akari.ShadowAtlas
                        groupsZ: 1)
   }
 
-  /// Caps each tilemap's LODs to the `maxShadowViews`, then frees, defrags and allocates pages.
-  func dispatchPageAllocation(lightCount: Int)
+  /// Masks LODs covered by finer ones, then frees, defrags and allocates pages.
+  func dispatchPageAllocation()
   {
     gl.setComputeShaderBuffer(kernels.maskLod, binding: 0, buffer: buffers.tiles)
-    let potentialViewCount = max(lightCount * Self.facesPerLight * Self.lodMax + directionalHistory.slots.count, 1)
-    setUniform(kernels.maskLod, "u_max_view_per_tilemap", GL_INT,
-               Int32((Self.maxShadowViews + potentialViewCount - 1) / potentialViewCount))
+    setUniform(kernels.maskLod, "u_max_view_per_tilemap", GL_INT, Int32(Self.lodCount))
     gl.dispatchCompute(kernels.maskLod,
                        groupsX: GLuint(Self.maxPunctualTilemaps),
                        groupsY: 1,

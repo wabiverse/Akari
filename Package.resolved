@@ -123,8 +123,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-syntax",
       "state" : {
-        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
-        "version" : "603.0.2"
+        "revision" : "2b59c0c741e9184ab057fd22950b491076d42e91",
+        "version" : "603.0.0"
       }
     },
     {
@@ -152,6 +152,15 @@
       "state" : {
         "revision" : "4d61b68c2b59ef31dabd9f3ab3f0a5bf60ea62e0",
         "version" : "0.1.6"
+      }
+    },
+    {
+      "identity" : "swiftusd",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/SwiftUsd.git",
+      "state" : {
+        "revision" : "203b5eb270db1616c3c129c8fe2a07ef3ad7f83a",
+        "version" : "8.1.0"
       }
     },
     {
