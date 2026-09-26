@@ -547,18 +547,22 @@ shader: deferred-shade
         float jitter = fract(noise.x + noise.y + 0.5698403 * float(r));
         float plane = dot(planeSlope, disk) * aa;
         float visible = 1.0;
+        bool covered = false;
         for (int k = 0; k < 6; ++k) {
           float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 5.0;
           float t = reach * f * f;
           float fNext = (float(k) + jitter) / 5.0;
           float span = k == 5 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
           vec2 offset = disk * (aa + tanHalf * t);
-          float behind = compareDepth + plane - t * depthPerWorld
-                       - directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage);
-          if (behind > 0.0 && behind < span) {
+          float occluder = directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage);
+          float behind = compareDepth + plane - t * depthPerWorld - occluder;
+          float lift = compareDepth + dot(planeSlope, offset) - occluder;
+          if ((behind > 0.0 && behind < span)
+              || (covered && behind <= 0.0 && lift > (2.0 * aa + 0.05 * t) * depthPerWorld)) {
             visible = 0.0;
             break;
           }
+          covered = covered || behind >= span;
         }
         lit += visible;
       }
@@ -1110,19 +1114,23 @@ shader: deferred-shade
         float jitter = fract(noise.x + noise.y + 0.5698403 * float(r));
         float plane = dot(planeSlope, disk) * aa;
         float visible = 1.0;
+        bool covered = false;
         for (int k = 0; k < 6; ++k) {
           float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 5.0;
           float t = reach * f * f;
           float fNext = (float(k) + jitter) / 5.0;
           float span = k == 5 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
           float2 offset = disk * (aa + tanHalf * t);
-          float behind = compareDepth + plane - t * depthPerWorld
-                       - directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage,
-                                        atlasTex, pageTableTex);
-          if (behind > 0.0 && behind < span) {
+          float occluder = directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage,
+                                          atlasTex, pageTableTex);
+          float behind = compareDepth + plane - t * depthPerWorld - occluder;
+          float lift = compareDepth + dot(planeSlope, offset) - occluder;
+          if ((behind > 0.0 && behind < span)
+              || (covered && behind <= 0.0 && lift > (2.0 * aa + 0.05 * t) * depthPerWorld)) {
             visible = 0.0;
             break;
           }
+          covered = covered || behind >= span;
         }
         lit += visible;
       }
