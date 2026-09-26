@@ -141,7 +141,7 @@ public extension Akari
                     Akari.GPU.RenderTargetDesc(width: ctx.target.width,
                                                height: ctx.target.height,
                                                format: .rgba16f, scale: 0.5))
-      ctx.labfx.setScreenSpaceGI()
+      ctx.labfx.setScreenSpaceGI(maxRoughness: ctx.settings.reflection.maxRoughness)
     }
   }
 
@@ -160,9 +160,12 @@ public extension Akari
       state.declare(.reflections,
                     Akari.GPU.RenderTargetDesc(width: ctx.target.width,
                                                height: ctx.target.height,
-                                               format: .rgba16f))
-      // TODO: SSR march in HDR color, RT fill on miss when enabled,
-      // resolve against roughness, composite into sceneColorHDR.
+                                               format: .rgba16f, scale: 0.5))
+      if ctx.settings.features.contains(.screenSpaceReflections)
+      {
+        ctx.labfx.setScreenSpaceReflections(maxRoughness: ctx.settings.reflection.maxRoughness)
+      }
+      // TODO: hardware RT fill on miss.
     }
   }
 

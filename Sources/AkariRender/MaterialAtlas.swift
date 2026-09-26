@@ -44,17 +44,19 @@ import LabGL
 
 public extension Akari
 {
-  /// Uploads the shared material + color texture atlases to the GPU.
+  /// Uploads the shared material, color, normal and emissive texture atlases to the GPU.
   final class MaterialAtlas
   {
     private var materialTexture: GLuint = 0
     private var colorTexture: GLuint = 0
+    private var normalTexture: GLuint = 0
+    private var emissiveTexture: GLuint = 0
 
     public init() {}
 
-    /// Reuploads when the atlas is dirty, returns both
-    /// texture names (0 until the first upload).
-    public func uploadIfNeeded(_ atlas: Pixar.HdAkariTextureAtlas) -> (material: GLuint, color: GLuint)
+    /// Reuploads when the atlas is dirty, returns every
+    /// texture name (0 until the first upload).
+    public func uploadIfNeeded(_ atlas: Pixar.HdAkariTextureAtlas) -> (material: GLuint, color: GLuint, normal: GLuint, emissive: GLuint)
     {
       if atlas.ConsumeDirty()
       {
@@ -68,8 +70,16 @@ public extension Akari
         {
           upload(&colorTexture, pixels: colorPixels, width: width, height: height)
         }
+        if let normalPixels = atlas.NormalPixelData()
+        {
+          upload(&normalTexture, pixels: normalPixels, width: width, height: height)
+        }
+        if let emissivePixels = atlas.EmissivePixelData()
+        {
+          upload(&emissiveTexture, pixels: emissivePixels, width: width, height: height)
+        }
       }
-      return (materialTexture, colorTexture)
+      return (materialTexture, colorTexture, normalTexture, emissiveTexture)
     }
 
     /// Uploads a texture atlas's pixels to `texture`.

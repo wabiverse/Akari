@@ -61,7 +61,7 @@ public class Atlas
   @inline(__always)
   public static func quantize(_ v: Float) -> UInt8
   {
-    UInt8(min(max(v, 0), 1) * 255 + 0.5)
+    UInt8(min(max(v.isNaN ? 0 : v, 0), 1) * 255 + 0.5)
   }
 
   /// Averages one destination texel's footprint in source space.

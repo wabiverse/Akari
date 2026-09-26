@@ -41,18 +41,21 @@ buffer: ssgiPyramid
 buffer: ssgi
   has depth: no
   textures:
-    [ ssgiRaw, f16x4, scale: 0.5 ]
+    [ ssgiRaw, f16x4, scale: 0.5
+      ssgiSpecRaw, f16x4, scale: 0.5 ]
 
 buffer: ssgiAccum
   has depth: no
   textures:
-    [ ssgiAccum, f16x4, scale: 0.5 ]
+    [ ssgiAccum, f16x4, scale: 0.5
+      ssgiSpecAccum, f16x4, scale: 0.5 ]
 
 buffer: ssgiHistory
   has depth: no
   latency: ring 2
   textures:
-    [ ssgiHistory, f16x4, scale: 0.5 ]
+    [ ssgiHistory, f16x4, scale: 0.5
+      ssgiSpecHistory, f16x4, scale: 0.5 ]
 
 buffer: volumeScatter
   has depth: no
@@ -63,6 +66,23 @@ buffer: volumeIntegrated
   has depth: no
   textures:
     [ volumeIntegrated, f16x4, scale: 0.5 ]
+
+buffer: ssr
+  has depth: no
+  textures:
+    [ ssrRadiance, f16x4, scale: 0.5
+      ssrGuide, f16x4, scale: 0.5 ]
+
+buffer: ssrAccum
+  has depth: no
+  textures:
+    [ ssrAccum, f16x4, scale: 0.5 ]
+
+buffer: ssrHistory
+  has depth: no
+  latency: ring 2
+  textures:
+    [ ssrHistory, f16x4, scale: 0.5 ]
 
 buffer: taa
   has depth: no
@@ -106,7 +126,7 @@ pass: ssgi prep
   depth test: never
   write depth: no
   use shader: ssgi-prep
-  inputs: [gbuffer.position, gbuffer.normal, history.history]
+  inputs: [gbuffer.position, gbuffer.normal, gbuffer.material, history.history]
   outputs: ssgiPrep [ssgiDepth, ssgiNormal, ssgiRadiance]
 
 pass: ssgi pyramid
@@ -124,23 +144,24 @@ pass: ssgi
   use shader: ssgi
   inputs: [ssgiPrep.ssgiDepth, ssgiPrep.ssgiNormal, ssgiPrep.ssgiRadiance,
            ssgiPyramid.ssgiPyramidDepth, ssgiPyramid.ssgiPyramidNormal, ssgiPyramid.ssgiPyramidRadiance]
-  outputs: ssgi [ ssgiRaw ]
+  outputs: ssgi [ ssgiRaw, ssgiSpecRaw ]
 
 pass: ssgi temporal
   draw: quad
   depth test: never
   write depth: no
   use shader: ssgi-temporal
-  inputs: [ssgi.ssgiRaw, ssgiHistory.ssgiHistory, ssgiPrep.ssgiDepth, ssgiPrep.ssgiNormal]
-  outputs: ssgiAccum [ ssgiAccum ]
+  inputs: [ssgi.ssgiRaw, ssgi.ssgiSpecRaw, ssgiHistory.ssgiHistory, ssgiHistory.ssgiSpecHistory,
+           ssgiPrep.ssgiDepth, ssgiPrep.ssgiNormal]
+  outputs: ssgiAccum [ ssgiAccum, ssgiSpecAccum ]
 
 pass: ssgi history
   draw: quad
   depth test: never
   write depth: no
   use shader: ssgi-copy
-  inputs: [ssgiAccum.ssgiAccum]
-  outputs: ssgiHistory [ ssgiHistory ]
+  inputs: [ssgiAccum.ssgiAccum, ssgiAccum.ssgiSpecAccum]
+  outputs: ssgiHistory [ ssgiHistory, ssgiSpecHistory ]
 
 pass: volume scatter
   draw: quad
@@ -153,6 +174,30 @@ pass: volume scatter
 pass: volume integrate
   callback: volume-integrate
 
+pass: ssr
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: ssr
+  inputs: [gbuffer.position, gbuffer.normal, gbuffer.material, history.history]
+  outputs: ssr [ssrRadiance, ssrGuide]
+
+pass: ssr temporal
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: ssr-temporal
+  inputs: [ssr.ssrRadiance, ssr.ssrGuide, ssrHistory.ssrHistory, gbuffer.position, gbuffer.material]
+  outputs: ssrAccum [ ssrAccum ]
+
+pass: ssr history
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: ssr-copy
+  inputs: [ssrAccum.ssrAccum]
+  outputs: ssrHistory [ ssrHistory ]
+
 pass: resolve
   draw: quad
   depth test: never
@@ -160,8 +205,9 @@ pass: resolve
   use shader: deferred-shade
   inputs: [gbuffer.diffuse, gbuffer.position, gbuffer.normal, gbuffer.material,
            envCube.envCube, prefiltered.prefiltered,
-           irradiance.irradiance, dfg.dfg, ssgiAccum.ssgiAccum,
-           ssgiPrep.ssgiDepth, ssgiPrep.ssgiNormal, volumeIntegrated.volumeIntegrated]
+           irradiance.irradiance, dfg.dfg, ssgiAccum.ssgiAccum, ssgiAccum.ssgiSpecAccum,
+           ssgiPrep.ssgiDepth, ssgiPrep.ssgiNormal, volumeIntegrated.volumeIntegrated,
+           ssrAccum.ssrAccum, ssr.ssrGuide]
   outputs: color [ final ]
 
 pass: taa
@@ -199,7 +245,8 @@ pass: blit
   outputs: visible
 
 shader: mesh
-  uniforms: [ u_material_atlas: sampler2d, u_color_atlas: sampler2d ]
+  uniforms: [ u_material_atlas: sampler2d, u_color_atlas: sampler2d,
+              u_normal_atlas: sampler2d, u_emissive_atlas: sampler2d ]
   varying:  [ posEye: vec3, normalEye: vec3, uv: vec2 ]
 
   vsh:
@@ -234,25 +281,53 @@ shader: mesh
     ```glsl
     void main()
     {
+      vec3 dp1 = dFdx(var.posEye);
+      vec3 dp2 = dFdy(var.posEye);
+      vec2 duv1 = dFdx(var.uv);
+      vec2 duv2 = dFdy(var.uv);
       vec4 mat = texture(u_material_atlas, var.uv);
       if (mat.a > 0.0 && mat.b < mat.a) discard;
       vec3 albedo = texture(u_color_atlas, var.uv).rgb;
+      vec3 N = normalize(var.normalEye);
+      vec3 tn = texture(u_normal_atlas, var.uv).rgb * 2.0 - 1.0;
+      float handedness = sign(duv1.x * duv2.y - duv2.x * duv1.y);
+      vec3 T = (dp1 * duv2.y - dp2 * duv1.y) * handedness;
+      vec3 B = (dp2 * duv1.x - dp1 * duv2.x) * handedness;
+      T -= N * dot(N, T);
+      B -= N * dot(N, B);
+      float frame = max(dot(T, T), dot(B, B));
+      vec3 normalEye = frame > 1e-30 ? normalize((T * tn.x + B * tn.y) * inversesqrt(frame) + N * tn.z) : N;
+      vec3 emission = texture(u_emissive_atlas, var.uv).rgb;
       o_diffuse_texture = vec4(albedo, mat.b);
-      o_position_texture = vec4(var.posEye, 1.0);
-      o_normal_texture = vec4(var.normalEye, 1.0);
-      o_material_texture = vec4(mat.r, mat.g, 0.0, 1.0);
+      o_position_texture = vec4(var.posEye, emission.b);
+      o_normal_texture = vec4(normalEye, 1.0);
+      o_material_texture = vec4(mat.r, mat.g, emission.r, emission.g);
     }
     ```
 
     source msl:
     ```msl
+    float3 dp1 = dfdx(var.posEye);
+    float3 dp2 = dfdy(var.posEye);
+    float2 duv1 = dfdx(var.uv);
+    float2 duv2 = dfdy(var.uv);
     float4 mat = texture(u_material_atlas, var.uv);
     if (mat.a > 0.0 && mat.b < mat.a) discard_fragment();
     float3 albedo = texture(u_color_atlas, var.uv).rgb;
+    float3 N = normalize(var.normalEye);
+    float3 tn = texture(u_normal_atlas, var.uv).rgb * 2.0 - 1.0;
+    float handedness = sign(duv1.x * duv2.y - duv2.x * duv1.y);
+    float3 T = (dp1 * duv2.y - dp2 * duv1.y) * handedness;
+    float3 B = (dp2 * duv1.x - dp1 * duv2.x) * handedness;
+    T -= N * dot(N, T);
+    B -= N * dot(N, B);
+    float frame = max(dot(T, T), dot(B, B));
+    float3 normalEye = frame > 1e-30 ? normalize((T * tn.x + B * tn.y) * rsqrt(frame) + N * tn.z) : N;
+    float3 emission = texture(u_emissive_atlas, var.uv).rgb;
     o_diffuse_texture = float4(albedo, mat.b);
-    o_position_texture = float4(var.posEye, 1.0);
-    o_normal_texture = float4(var.normalEye, 1.0);
-    o_material_texture = float4(mat.r, mat.g, 0.0, 1.0);
+    o_position_texture = float4(var.posEye, emission.b);
+    o_normal_texture = float4(normalEye, 1.0);
+    o_material_texture = float4(mat.r, mat.g, emission.r, emission.g);
     ```
 
 shader: deferred-shade
@@ -290,12 +365,17 @@ shader: deferred-shade
               u_pointLightColorRadius2: vec4,
               u_pointLightColorRadius3: vec4,
               u_ssgiAccum_texture: sampler2d,
+              u_ssgiSpecAccum_texture: sampler2d,
               u_ssgiDepth_texture: sampler2d,
               u_ssgiNormal_texture: sampler2d,
               u_ssgi: vec4,
               u_volumeIntegrated_texture: sampler2d,
               u_volume: vec4,
               u_volumeRange: vec4,
+              u_ssrAccum_texture: sampler2d,
+              u_ssrGuide_texture: sampler2d,
+              u_ssr: vec4,
+              u_horizonScan: vec4,
               frameIndex: int ]
   varying:  [ texCoord: vec2 ]
 
@@ -470,9 +550,12 @@ shader: deferred-shade
         for (int k = 0; k < 6; ++k) {
           float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 5.0;
           float t = reach * f * f;
+          float fNext = (float(k) + jitter) / 5.0;
+          float span = k == 5 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
           vec2 offset = disk * (aa + tanHalf * t);
-          if (directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage)
-              < compareDepth + plane - t * depthPerWorld) {
+          float behind = compareDepth + plane - t * depthPerWorld
+                       - directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage);
+          if (behind > 0.0 && behind < span) {
             visible = 0.0;
             break;
           }
@@ -666,10 +749,10 @@ shader: deferred-shade
       return mix(volumeBoundary(b, f, grid, atlasSize), volumeBoundary(b + 1, f, grid, atlasSize), u - float(b));
     }
 
-    vec4 ssgiUpsample(ivec2 pixel, vec3 posEye, vec3 normalEye)
+    vec4 ssgiUpsample(sampler2D accum, ivec2 pixel, vec3 posEye, vec3 normalEye)
     {
       if (u_ssgi.z < 0.5) return vec4(0.0, 0.0, 0.0, 1.0);
-      ivec2 halfSize = textureSize(u_ssgiAccum_texture, 0);
+      ivec2 halfSize = textureSize(accum, 0);
       vec2 hc = (vec2(pixel) + 0.5) * 0.5 - 0.5;
       ivec2 base = ivec2(floor(hc));
       vec2 f = hc - vec2(base);
@@ -682,10 +765,33 @@ shader: deferred-shade
         float dz = abs(texelFetch(u_ssgiDepth_texture, h, 0).x - posEye.z);
         float w = bilinear * exp(-dz / max(0.02 * abs(posEye.z), 1e-3))
                 * pow(max(dot(texelFetch(u_ssgiNormal_texture, h, 0).xyz, normalEye), 0.0), 8.0) + 1e-4 * bilinear;
-        sum += texelFetch(u_ssgiAccum_texture, h, 0) * w;
+        sum += texelFetch(accum, h, 0) * w;
         weight += w;
       }
       return sum / weight;
+    }
+
+    vec4 ssrUpsample(ivec2 pixel, vec3 posEye, vec3 normalEye)
+    {
+      if (u_ssr.z < 0.5) return vec4(0.0);
+      ivec2 halfSize = textureSize(u_ssrAccum_texture, 0);
+      vec2 hc = (vec2(pixel) + 0.5) * 0.5 - 0.5;
+      ivec2 base = ivec2(floor(hc));
+      vec2 f = hc - vec2(base);
+      vec4 sum = vec4(0.0);
+      float weight = 0.0;
+      for (int i = 0; i < 4; ++i) {
+        ivec2 o = ivec2(i & 1, i >> 1);
+        ivec2 h = clamp(base + o, ivec2(0), halfSize - 1);
+        vec4 guide = texelFetch(u_ssrGuide_texture, h, 0);
+        float bilinear = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+        float w = bilinear * exp(-abs(guide.w - posEye.z) / max(0.02 * abs(posEye.z), 1e-3))
+                * pow(max(dot(guide.xyz, normalEye), 0.0), 8.0);
+        sum += texelFetch(u_ssrAccum_texture, h, 0) * w;
+        weight += w;
+      }
+      if (weight < 1e-4 || sum.a < 1e-4) return vec4(0.0);
+      return vec4(sum.rgb / sum.a, sum.a / weight * clamp(weight * 10.0, 0.0, 1.0));
     }
 
     vec3 pointLightRadiance(vec3 worldPos, vec3 N, vec3 V, float NoV,
@@ -815,10 +921,10 @@ shader: deferred-shade
       float filmFootprint = abs(posEye.z) * 2.0 * u_invProj[1][1] / float(textureSize(u_position_texture, 0).y);
       color += pointLightRadiance(worldPos, N, V, NoV, roughness, f0, diffuseColor, noise, filmFootprint);
 
-      vec3 dfg = texture(u_dfg_texture, vec2(NoV, perceptualRoughness)).rgb;
-      vec3 E = mix(dfg.yyy, dfg.xxx, f0);
-      vec3 energyCompensation =
-          1.0 + f0 * (1.0 / max(mix(vec3(1.0), dfg.yyy, f0), 1e-4) - 1.0);
+      vec2 dfgTexel = 0.5 / vec2(textureSize(u_dfg_texture, 0));
+      vec3 dfg = texture(u_dfg_texture, clamp(vec2(NoV, perceptualRoughness), dfgTexel, 1.0 - dfgTexel)).rgb;
+      vec3 E = f0 * dfg.x + dfg.y;
+      vec3 energyCompensation = 1.0 + f0 * (1.0 / max(dfg.x + dfg.y, 1e-4) - 1.0);
 
       vec3 r = reflect(-V, N);
       r = mix(r, N, roughness * roughness);
@@ -827,14 +933,23 @@ shader: deferred-shade
       lod = clamp(lod, 0.0, 5.0);
 
       vec3 prefilteredRadiance = textureLod(u_prefiltered_texture, toSkySpace(r), lod).rgb;
-      vec3 Fr = E * prefilteredRadiance * energyCompensation;
 
-      vec4 gi = ssgiUpsample(gbufferPixel, posEye, normalEye);
+      vec4 gi = ssgiUpsample(u_ssgiAccum_texture, gbufferPixel, posEye, normalEye);
       float specularOcclusion = clamp(pow(NoV + gi.a, exp2(-16.0 * roughness - 1.0)) - 1.0 + gi.a, 0.0, 1.0);
       vec3 irradiance = texture(u_irradiance_texture, toSkySpace(N)).rgb;
       vec3 Fd = diffuseColor * irradiance * gi.a * (1.0 - E);
 
-      color += (Fd + Fr * specularOcclusion) * u_iblEnabled + diffuseColor * gi.rgb * (1.0 - E);
+      vec4 reflection = ssrUpsample(gbufferPixel, posEye, normalEye);
+      vec3 traced = mix(prefilteredRadiance * specularOcclusion * u_iblEnabled, reflection.rgb, reflection.a);
+      vec4 horizon = ssgiUpsample(u_ssgiSpecAccum_texture, gbufferPixel, posEye, normalEye);
+      float horizonMix = u_horizonScan.y * clamp((perceptualRoughness - u_horizonScan.x) / 0.2, 0.0, 1.0);
+      vec3 Fr = E * energyCompensation
+              * mix(traced, horizon.rgb + prefilteredRadiance * horizon.a * u_iblEnabled, horizonMix);
+
+      color += Fd * u_iblEnabled + Fr + diffuseColor * gi.rgb * (1.0 - E);
+
+      color += vec3(texelFetch(u_material_texture, gbufferPixel, 0).ba,
+                    texelFetch(u_position_texture, gbufferPixel, 0).w);
 
       vec4 fog = volumeFog(gl_FragCoord.xy, -posEye.z);
       color = color * fog.a + fog.rgb;
@@ -998,10 +1113,13 @@ shader: deferred-shade
         for (int k = 0; k < 6; ++k) {
           float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 5.0;
           float t = reach * f * f;
+          float fNext = (float(k) + jitter) / 5.0;
+          float span = k == 5 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
           float2 offset = disk * (aa + tanHalf * t);
-          if (directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage,
-                             atlasTex, pageTableTex)
-              < compareDepth + plane - t * depthPerWorld) {
+          float behind = compareDepth + plane - t * depthPerWorld
+                       - directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage,
+                                        atlasTex, pageTableTex);
+          if (behind > 0.0 && behind < span) {
             visible = 0.0;
             break;
           }
@@ -1226,6 +1344,30 @@ shader: deferred-shade
       return sum / weight;
     }
 
+    float4 ssrUpsample(uint2 pixel, float3 posEye, float3 normalEye,
+                       texture2d<float> radianceTex, texture2d<float> guideTex, constant Uniforms& u)
+    {
+      if (u.u_ssr.z < 0.5) return float4(0.0);
+      int2 halfSize = int2(radianceTex.get_width(), radianceTex.get_height());
+      float2 hc = (float2(pixel) + 0.5) * 0.5 - 0.5;
+      int2 base = int2(floor(hc));
+      float2 f = hc - float2(base);
+      float4 sum = float4(0.0);
+      float weight = 0.0;
+      for (int i = 0; i < 4; ++i) {
+        int2 o = int2(i & 1, i >> 1);
+        uint2 h = uint2(clamp(base + o, int2(0), halfSize - 1));
+        float4 guide = guideTex.read(h);
+        float bilinear = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+        float w = bilinear * exp(-abs(guide.w - posEye.z) / max(0.02 * abs(posEye.z), 1e-3))
+                * pow(max(dot(guide.xyz, normalEye), 0.0), 8.0);
+        sum += radianceTex.read(h) * w;
+        weight += w;
+      }
+      if (weight < 1e-4 || sum.a < 1e-4) return float4(0.0);
+      return float4(sum.rgb / sum.a, sum.a / weight * saturate(weight * 10.0));
+    }
+
     float3 pointLightRadiance(float3 worldPos, float3 N, float3 V, float NoV,
                               float roughness, float3 f0, float3 diffuseColor,
                               texture2d_array<uint> punctualAtlas, sampler punctualAtlasSmp,
@@ -1364,10 +1506,10 @@ shader: deferred-shade
                                     u_shadow_atlas, u_shadow_atlas_smp,
                                     u_shadow_data, u_shadow_pagetable, noise, filmFootprint, _u);
 
-        float3 dfg = texture(u_dfg_texture, float2(NoV, perceptualRoughness)).rgb;
-        float3 E = mix(dfg.yyy, dfg.xxx, f0);
-        float3 energyCompensation =
-            1.0 + f0 * (1.0 / max(mix(float3(1.0), dfg.yyy, f0), 1e-4) - 1.0);
+        float2 dfgTexel = 0.5 / float2(u_dfg_texture.get_width(), u_dfg_texture.get_height());
+        float3 dfg = texture(u_dfg_texture, clamp(float2(NoV, perceptualRoughness), dfgTexel, 1.0 - dfgTexel)).rgb;
+        float3 E = f0 * dfg.x + dfg.y;
+        float3 energyCompensation = 1.0 + f0 * (1.0 / max(dfg.x + dfg.y, 1e-4) - 1.0);
 
         float3 r = reflect(-V, N);
         r = mix(r, N, roughness * roughness);
@@ -1376,7 +1518,6 @@ shader: deferred-shade
         lod = clamp(lod, 0.0, 5.0);
 
         float3 prefilteredRadiance = textureLod(u_prefiltered_texture, toSkySpace(r, u_zUp), lod).rgb;
-        float3 Fr = E * prefilteredRadiance * energyCompensation;
 
         float4 gi = ssgiUpsample(gbufferPixel, posEye, normalEye, u_ssgiAccum_texture,
                                  u_ssgiDepth_texture, u_ssgiNormal_texture, _u);
@@ -1384,7 +1525,18 @@ shader: deferred-shade
         float3 irradiance = texture(u_irradiance_texture, toSkySpace(N, u_zUp)).rgb;
         float3 Fd = diffuseColor * irradiance * gi.a * (1.0 - E);
 
-        color += (Fd + Fr * specularOcclusion) * u_iblEnabled + diffuseColor * gi.rgb * (1.0 - E);
+        float4 reflection = ssrUpsample(gbufferPixel, posEye, normalEye,
+                                        u_ssrAccum_texture, u_ssrGuide_texture, _u);
+        float3 traced = mix(prefilteredRadiance * specularOcclusion * u_iblEnabled, reflection.rgb, reflection.a);
+        float4 horizon = ssgiUpsample(gbufferPixel, posEye, normalEye, u_ssgiSpecAccum_texture,
+                                      u_ssgiDepth_texture, u_ssgiNormal_texture, _u);
+        float horizonMix = u_horizonScan.y * saturate((perceptualRoughness - u_horizonScan.x) / 0.2);
+        float3 Fr = E * energyCompensation
+                  * mix(traced, horizon.rgb + prefilteredRadiance * horizon.a * u_iblEnabled, horizonMix);
+
+        color += Fd * u_iblEnabled + Fr + diffuseColor * gi.rgb * (1.0 - E);
+
+        color += float3(u_material_texture.read(gbufferPixel).ba, u_position_texture.read(gbufferPixel).w);
 
         float4 fog = volumeFog(gl_FragCoord.xy, -posEye.z,
                                u_volumeIntegrated_texture, u_volumeIntegrated_texture_smp, _u);
@@ -1642,6 +1794,7 @@ shader: taa-copy
 shader: ssgi-prep
   uniforms: [ u_position_texture: sampler2d,
               u_normal_texture: sampler2d,
+              u_material_texture: sampler2d,
               u_history_texture: sampler2d,
               u_view: mat4 <- auto-view-matrix,
               u_prevViewProj: mat4,
@@ -1696,7 +1849,7 @@ shader: ssgi-prep
       vec3 radiance = finiteColor(texture(u_history_texture, clamp(prevUV, 0.0, 1.0)).rgb);
       radiance *= min(1.0, 16.0 / max(max(radiance.r, max(radiance.g, radiance.b)), 1e-4));
       o_ssgiDepth_texture = vec4(P.z, 0.0, 0.0, 0.0);
-      o_ssgiNormal_texture = vec4(normalize(n.xyz), 0.0);
+      o_ssgiNormal_texture = vec4(normalize(n.xyz), texelFetch(u_material_texture, fp, 0).r);
       o_ssgiRadiance_texture = vec4(radiance, 1.0);
     }
     ```
@@ -1732,7 +1885,7 @@ shader: ssgi-prep
         float3 radiance = finiteColor(texture(u_history_texture, clamp(prevUV, 0.0, 1.0)).rgb);
         radiance *= min(1.0, 16.0 / max(max(radiance.r, max(radiance.g, radiance.b)), 1e-4));
         o_ssgiDepth_texture = float4(P.z, 0.0, 0.0, 0.0);
-        o_ssgiNormal_texture = float4(normalize(n.xyz), 0.0);
+        o_ssgiNormal_texture = float4(normalize(n.xyz), u_material_texture.read(fp).r);
         o_ssgiRadiance_texture = float4(radiance, 1.0);
       }
     }
@@ -1940,12 +2093,17 @@ shader: ssgi
       float zc = texelFetch(u_ssgiDepth_texture, hp, 0).x;
       if (u_ssgi.z < 0.5 || zc >= 0.0) {
         o_ssgiRaw_texture = vec4(0.0, 0.0, 0.0, 1.0);
+        o_ssgiSpecRaw_texture = vec4(0.0, 0.0, 0.0, 1.0);
         return;
       }
       vec2 uv = (vec2(hp * 2) + 0.5) * u_ssgiSize.zw;
       vec3 P = viewPosition(uv, zc);
-      vec3 N = texelFetch(u_ssgiNormal_texture, hp, 0).xyz;
+      vec4 normalRoughness = texelFetch(u_ssgiNormal_texture, hp, 0);
+      vec3 N = normalRoughness.xyz;
       vec3 V = normalize(-P);
+      float alpha = clamp(normalRoughness.w, 0.045, 1.0);
+      alpha *= alpha;
+      vec3 Rd = normalize(mix(reflect(-V, N), N, alpha * alpha));
       vec2 noisePixel = gl_FragCoord.xy + 5.588238 * float(frameIndex % 64);
       float noise = fract(52.9829189 * fract(dot(noisePixel, vec2(0.06711056, 0.00583715))));
       vec2 scale = vec2(u_proj[0][0], u_proj[1][1]) * 0.5 * u_ssgi.x / max(-P.z, 1e-3);
@@ -1953,6 +2111,8 @@ shader: ssgi
 
       vec3 lighting = vec3(0.0);
       float visibility = 0.0;
+      vec3 specLighting = vec3(0.0);
+      float specVisibility = 0.0;
       for (int slice = 0; slice < 2; ++slice) {
         float phi = (float(slice) + noise) * (PI / 2.0);
         vec2 omega = vec2(cos(phi), sin(phi));
@@ -1962,6 +2122,12 @@ shader: ssgi
         vec3 projN = N - axis * dot(N, axis);
         float n = sign(dot(ortho, projN)) * fastAcos(clamp(dot(projN, V) / max(length(projN), 1e-4), -1.0, 1.0));
         uint mask = 0u;
+        vec3 projR = Rd - axis * dot(Rd, axis);
+        float nr = sign(dot(ortho, projR)) * fastAcos(clamp(dot(projR, V) / max(length(projR), 1e-4), -1.0, 1.0));
+        vec2 below = 0.5 + 0.5 * sin(clamp(vec2(n - 0.5 * PI, n + 0.5 * PI) - nr, -0.5 * PI, 0.5 * PI));
+        uint belowR = ssgiSectors(0.0, below.x) | ssgiSectors(below.y, 1.0);
+        uint maskR = belowR;
+        vec3 specSlice = vec3(0.0);
         for (int side = 0; side < 2; ++side) {
           float s = side == 0 ? 1.0 : -1.0;
           for (int k = 0; k < 8; ++k) {
@@ -1987,17 +2153,26 @@ shader: ssgi
             uint bits = ssgiSectors(min(sectors.x, sectors.y), max(sectors.x, sectors.y));
             uint fresh = bits & ~mask;
             mask |= bits;
-            if (fresh == 0u) continue;
+            vec2 sectorsR = 0.5 + 0.5 * sin(clamp(angles - nr, -0.5 * PI, 0.5 * PI));
+            uint freshR = ssgiSectors(min(sectorsR.x, sectorsR.y), max(sectorsR.x, sectorsR.y)) & ~maskR;
+            maskR |= freshR;
+            if (fresh == 0u && freshR == 0u) continue;
             vec3 ns = lod == 0 ? texelFetch(u_ssgiNormal_texture, sp, 0).xyz
                                : texelFetch(u_ssgiPyramidNormal_texture, ap, 0).xyz;
             vec3 radiance = lod == 0 ? texelFetch(u_ssgiRadiance_texture, sp, 0).rgb
                                      : texelFetch(u_ssgiPyramidRadiance_texture, ap, 0).rgb;
-            lighting += float(bitCount(fresh)) / 32.0 * clamp(dot(ns, -h) * 4.0, 0.0, 1.0) * radiance;
+            radiance *= clamp(dot(ns, -h) * 4.0, 0.0, 1.0);
+            lighting += float(bitCount(fresh)) / 32.0 * radiance;
+            specSlice += float(bitCount(freshR)) / 32.0 * radiance;
           }
         }
         visibility += 1.0 - float(bitCount(mask)) / 32.0;
+        float validR = max(32.0 - float(bitCount(belowR)), 1.0);
+        specLighting += specSlice * (32.0 / validR);
+        specVisibility += (32.0 - float(bitCount(maskR))) / validR;
       }
       o_ssgiRaw_texture = vec4(lighting * 0.5, visibility * 0.5);
+      o_ssgiSpecRaw_texture = vec4(specLighting * 0.5, specVisibility * 0.5);
     }
     ```
 
@@ -2040,11 +2215,16 @@ shader: ssgi
       float zc = u_ssgiDepth_texture.read(uint2(hp)).x;
       if (u_ssgi.z < 0.5 || zc >= 0.0) {
         o_ssgiRaw_texture = float4(0.0, 0.0, 0.0, 1.0);
+        o_ssgiSpecRaw_texture = float4(0.0, 0.0, 0.0, 1.0);
       } else {
         float2 uv = (float2(hp * 2) + 0.5) * u_ssgiSize.zw;
         float3 P = viewPosition(uv, zc, u_proj);
-        float3 N = u_ssgiNormal_texture.read(uint2(hp)).xyz;
+        float4 normalRoughness = u_ssgiNormal_texture.read(uint2(hp));
+        float3 N = normalRoughness.xyz;
         float3 V = normalize(-P);
+        float alpha = clamp(normalRoughness.w, 0.045, 1.0);
+        alpha *= alpha;
+        float3 Rd = normalize(mix(reflect(-V, N), N, alpha * alpha));
         float2 noisePixel = gl_FragCoord.xy + 5.588238 * float(frameIndex % 64);
         float noise = fract(52.9829189 * fract(dot(noisePixel, float2(0.06711056, 0.00583715))));
         float2 scale = float2(u_proj[0][0], u_proj[1][1]) * 0.5 * u_ssgi.x / max(-P.z, 1e-3);
@@ -2052,6 +2232,8 @@ shader: ssgi
 
         float3 lighting = float3(0.0);
         float visibility = 0.0;
+        float3 specLighting = float3(0.0);
+        float specVisibility = 0.0;
         for (int slice = 0; slice < 2; ++slice) {
           float phi = (float(slice) + noise) * (PI / 2.0);
           float2 omega = float2(cos(phi), sin(phi));
@@ -2061,6 +2243,12 @@ shader: ssgi
           float3 projN = N - axis * dot(N, axis);
           float n = sign(dot(ortho, projN)) * fastAcos(clamp(dot(projN, V) / max(length(projN), 1e-4), -1.0, 1.0));
           uint mask = 0u;
+          float3 projR = Rd - axis * dot(Rd, axis);
+          float nr = sign(dot(ortho, projR)) * fastAcos(clamp(dot(projR, V) / max(length(projR), 1e-4), -1.0, 1.0));
+          float2 below = 0.5 + 0.5 * sin(clamp(float2(n - 0.5 * PI, n + 0.5 * PI) - nr, -0.5 * PI, 0.5 * PI));
+          uint belowR = ssgiSectors(0.0, below.x) | ssgiSectors(below.y, 1.0);
+          uint maskR = belowR;
+          float3 specSlice = float3(0.0);
           for (int side = 0; side < 2; ++side) {
             float s = side == 0 ? 1.0 : -1.0;
             for (int k = 0; k < 8; ++k) {
@@ -2086,24 +2274,35 @@ shader: ssgi
               uint bits = ssgiSectors(min(sectors.x, sectors.y), max(sectors.x, sectors.y));
               uint fresh = bits & ~mask;
               mask |= bits;
-              if (fresh == 0u) continue;
+              float2 sectorsR = 0.5 + 0.5 * sin(clamp(angles - nr, -0.5 * PI, 0.5 * PI));
+              uint freshR = ssgiSectors(min(sectorsR.x, sectorsR.y), max(sectorsR.x, sectorsR.y)) & ~maskR;
+              maskR |= freshR;
+              if (fresh == 0u && freshR == 0u) continue;
               float3 ns = lod == 0 ? u_ssgiNormal_texture.read(uint2(sp)).xyz
                                    : u_ssgiPyramidNormal_texture.read(ap).xyz;
               float3 radiance = lod == 0 ? u_ssgiRadiance_texture.read(uint2(sp)).rgb
                                          : u_ssgiPyramidRadiance_texture.read(ap).rgb;
-              lighting += float(popcount(fresh)) / 32.0 * clamp(dot(ns, -h) * 4.0, 0.0, 1.0) * radiance;
+              radiance *= clamp(dot(ns, -h) * 4.0, 0.0, 1.0);
+              lighting += float(popcount(fresh)) / 32.0 * radiance;
+              specSlice += float(popcount(freshR)) / 32.0 * radiance;
             }
           }
           visibility += 1.0 - float(popcount(mask)) / 32.0;
+          float validR = max(32.0 - float(popcount(belowR)), 1.0);
+          specLighting += specSlice * (32.0 / validR);
+          specVisibility += (32.0 - float(popcount(maskR))) / validR;
         }
         o_ssgiRaw_texture = float4(lighting * 0.5, visibility * 0.5);
+        o_ssgiSpecRaw_texture = float4(specLighting * 0.5, specVisibility * 0.5);
       }
     }
     ```
 
 shader: ssgi-temporal
   uniforms: [ u_ssgiRaw_texture: sampler2d,
+              u_ssgiSpecRaw_texture: sampler2d,
               u_ssgiHistory_texture: sampler2d,
+              u_ssgiSpecHistory_texture: sampler2d,
               u_ssgiDepth_texture: sampler2d,
               u_ssgiNormal_texture: sampler2d,
               u_view: mat4 <- auto-view-matrix,
@@ -2159,12 +2358,13 @@ shader: ssgi-temporal
       float zc = texelFetch(u_ssgiDepth_texture, hp, 0).x;
       if (u_ssgi.z < 0.5 || zc >= 0.0) {
         o_ssgiAccum_texture = vec4(0.0, 0.0, 0.0, 1.0);
+        o_ssgiSpecAccum_texture = vec4(0.0, 0.0, 0.0, 1.0);
         return;
       }
       vec3 pc = viewPosition((vec2(hp * 2) + 0.5) * u_ssgiSize.zw, zc);
       vec3 nc = texelFetch(u_ssgiNormal_texture, hp, 0).xyz;
       float planeScale = 1.0 / max(0.01 * abs(zc), 1e-3);
-      vec4 m1 = vec4(0.0), m2 = vec4(0.0);
+      vec4 m1 = vec4(0.0), m2 = vec4(0.0), s1 = vec4(0.0), s2 = vec4(0.0);
       float wsum = 0.0;
       for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
@@ -2175,16 +2375,22 @@ shader: ssgi-temporal
           float plane = abs(dot(nc, ps - pc)) * planeScale;
           float w = exp(-plane) * pow(max(dot(nc, texelFetch(u_ssgiNormal_texture, h, 0).xyz), 0.0), 8.0);
           vec4 c = texelFetch(u_ssgiRaw_texture, h, 0);
+          vec4 cs = texelFetch(u_ssgiSpecRaw_texture, h, 0);
           m1 += c * w;
           m2 += c * c * w;
+          s1 += cs * w;
+          s2 += cs * cs * w;
           wsum += w;
         }
       }
       vec4 mean = m1 / max(wsum, 1e-4);
       vec4 sigma = sqrt(max(m2 / max(wsum, 1e-4) - mean * mean, 0.0));
+      vec4 specMean = s1 / max(wsum, 1e-4);
+      vec4 specSigma = sqrt(max(s2 / max(wsum, 1e-4) - specMean * specMean, 0.0));
       vec4 current = mean;
       if (u_taa.x < 0.5) {
         o_ssgiAccum_texture = current;
+        o_ssgiSpecAccum_texture = specMean;
         return;
       }
       vec4 world = inverse(u_view) * vec4(pc, 1.0);
@@ -2196,7 +2402,12 @@ shader: ssgi-temporal
       vec4 history = texture(u_ssgiHistory_texture, clamp(prevUV, 0.0, 1.0));
       history = clamp(vec4(finiteColor(history.rgb), finiteColor(history.aaa).x),
                       mean - 1.5 * sigma, mean + 1.5 * sigma);
-      o_ssgiAccum_texture = mix(history, current, (u_taa.y > 0.5 || u_ssgi.w > 0.5 || offscreen) ? 1.0 : 0.1);
+      vec4 specHistory = texture(u_ssgiSpecHistory_texture, clamp(prevUV, 0.0, 1.0));
+      specHistory = clamp(vec4(finiteColor(specHistory.rgb), finiteColor(specHistory.aaa).x),
+                          specMean - 1.5 * specSigma, specMean + 1.5 * specSigma);
+      float blend = (u_taa.y > 0.5 || u_ssgi.w > 0.5 || offscreen) ? 1.0 : 0.1;
+      o_ssgiAccum_texture = mix(history, current, blend);
+      o_ssgiSpecAccum_texture = mix(specHistory, specMean, blend);
     }
     ```
 
@@ -2223,11 +2434,12 @@ shader: ssgi-temporal
       float zc = u_ssgiDepth_texture.read(uint2(hp)).x;
       if (u_ssgi.z < 0.5 || zc >= 0.0) {
         o_ssgiAccum_texture = float4(0.0, 0.0, 0.0, 1.0);
+        o_ssgiSpecAccum_texture = float4(0.0, 0.0, 0.0, 1.0);
       } else {
         float3 pc = viewPosition((float2(hp * 2) + 0.5) * u_ssgiSize.zw, zc, u_proj);
         float3 nc = u_ssgiNormal_texture.read(uint2(hp)).xyz;
         float planeScale = 1.0 / max(0.01 * abs(zc), 1e-3);
-        float4 m1 = float4(0.0), m2 = float4(0.0);
+        float4 m1 = float4(0.0), m2 = float4(0.0), s1 = float4(0.0), s2 = float4(0.0);
         float wsum = 0.0;
         for (int y = -1; y <= 1; ++y) {
           for (int x = -1; x <= 1; ++x) {
@@ -2238,16 +2450,22 @@ shader: ssgi-temporal
             float plane = abs(dot(nc, ps - pc)) * planeScale;
             float w = exp(-plane) * pow(max(dot(nc, u_ssgiNormal_texture.read(uint2(h)).xyz), 0.0), 8.0);
             float4 c = u_ssgiRaw_texture.read(uint2(h));
+            float4 cs = u_ssgiSpecRaw_texture.read(uint2(h));
             m1 += c * w;
             m2 += c * c * w;
+            s1 += cs * w;
+            s2 += cs * cs * w;
             wsum += w;
           }
         }
         float4 mean = m1 / max(wsum, 1e-4);
         float4 sigma = sqrt(max(m2 / max(wsum, 1e-4) - mean * mean, 0.0));
+        float4 specMean = s1 / max(wsum, 1e-4);
+        float4 specSigma = sqrt(max(s2 / max(wsum, 1e-4) - specMean * specMean, 0.0));
         float4 current = mean;
         if (u_taa.x < 0.5) {
           o_ssgiAccum_texture = current;
+          o_ssgiSpecAccum_texture = specMean;
         } else {
           float3x3 invRot = float3x3(
             float3(u_view[0][0], u_view[1][0], u_view[2][0]),
@@ -2263,14 +2481,20 @@ shader: ssgi-temporal
           float4 history = texture(u_ssgiHistory_texture, clamp(prevUV, 0.0, 1.0));
           history = clamp(float4(finiteColor(history.rgb), finiteColor(history.aaa).x),
                           mean - 1.5 * sigma, mean + 1.5 * sigma);
-          o_ssgiAccum_texture = mix(history, current, (u_taa.y > 0.5 || u_ssgi.w > 0.5 || offscreen) ? 1.0 : 0.1);
+          float4 specHistory = texture(u_ssgiSpecHistory_texture, clamp(prevUV, 0.0, 1.0));
+          specHistory = clamp(float4(finiteColor(specHistory.rgb), finiteColor(specHistory.aaa).x),
+                              specMean - 1.5 * specSigma, specMean + 1.5 * specSigma);
+          float blend = (u_taa.y > 0.5 || u_ssgi.w > 0.5 || offscreen) ? 1.0 : 0.1;
+          o_ssgiAccum_texture = mix(history, current, blend);
+          o_ssgiSpecAccum_texture = mix(specHistory, specMean, blend);
         }
       }
     }
     ```
 
 shader: ssgi-copy
-  uniforms: [ u_ssgiAccum_texture: sampler2d ]
+  uniforms: [ u_ssgiAccum_texture: sampler2d,
+              u_ssgiSpecAccum_texture: sampler2d ]
   varying:  [ texCoord: vec2 ]
 
   vsh:
@@ -2299,12 +2523,14 @@ shader: ssgi-copy
     void main()
     {
       o_ssgiHistory_texture = texelFetch(u_ssgiAccum_texture, ivec2(gl_FragCoord.xy), 0);
+      o_ssgiSpecHistory_texture = texelFetch(u_ssgiSpecAccum_texture, ivec2(gl_FragCoord.xy), 0);
     }
     ```
 
     source msl:
     ```msl
     o_ssgiHistory_texture = u_ssgiAccum_texture.read(uint2(gl_FragCoord.xy));
+    o_ssgiSpecHistory_texture = u_ssgiSpecAccum_texture.read(uint2(gl_FragCoord.xy));
     ```
 
 shader: volume-scatter
@@ -2701,4 +2927,472 @@ shader: volume-scatter
         o_volumeScatter_texture = float4(light * (1.0 - slab), slab);
       }
     }
+    ```
+
+shader: ssr
+  uniforms: [ u_position_texture: sampler2d,
+              u_normal_texture: sampler2d,
+              u_material_texture: sampler2d,
+              u_history_texture: sampler2d,
+              u_view: mat4 <- auto-view-matrix,
+              u_proj: mat4,
+              u_prevViewProj: mat4,
+              u_taa: vec4,
+              u_ssr: vec4,
+              frameIndex: int ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    const float PI = 3.14159265358979;
+
+    vec3 finiteColor(vec3 c)
+    {
+      bvec3 bad = equal(floatBitsToUint(c) & 0x7F800000u, uvec3(0x7F800000u));
+      return mix(clamp(c, 0.0, 65000.0), vec3(0.0), bad);
+    }
+
+    vec3 sampleGGXVisible(vec3 N, vec3 V, float a, vec2 xi)
+    {
+      vec3 T = normalize(cross(abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0), N));
+      vec3 B = cross(N, T);
+      vec3 Vt = vec3(dot(V, T), dot(V, B), dot(V, N));
+      vec3 Vh = normalize(vec3(a * Vt.x, a * Vt.y, Vt.z));
+      float lensq = dot(Vh.xy, Vh.xy);
+      vec3 T1 = lensq > 0.0 ? vec3(-Vh.y, Vh.x, 0.0) * inversesqrt(lensq) : vec3(1.0, 0.0, 0.0);
+      vec3 T2 = cross(Vh, T1);
+      float r = sqrt(xi.x);
+      float phi = 2.0 * PI * xi.y;
+      float t1 = r * cos(phi);
+      float s = 0.5 * (1.0 + Vh.z);
+      float t2 = (1.0 - s) * sqrt(1.0 - t1 * t1) + s * r * sin(phi);
+      vec3 Nh = t1 * T1 + t2 * T2 + sqrt(max(1.0 - t1 * t1 - t2 * t2, 0.0)) * Vh;
+      vec3 Ht = normalize(vec3(a * Nh.x, a * Nh.y, max(Nh.z, 0.0)));
+      return T * Ht.x + B * Ht.y + N * Ht.z;
+    }
+
+    float sceneDepth(vec2 uv, ivec2 size)
+    {
+      vec3 p = texelFetch(u_position_texture, clamp(ivec2(uv * vec2(size)), ivec2(0), size - 1), 0).xyz;
+      return p == vec3(0.0) ? 1e30 : -p.z;
+    }
+
+    void main()
+    {
+      ivec2 size = textureSize(u_position_texture, 0);
+      ivec2 fp = min(ivec2(gl_FragCoord.xy) * 2, size - 1);
+      vec4 n = texelFetch(u_normal_texture, fp, 0);
+      vec3 P = texelFetch(u_position_texture, fp, 0).xyz;
+      float roughness = clamp(texelFetch(u_material_texture, fp, 0).r, 0.045, 1.0);
+      o_ssrGuide_texture = vec4(n.a < 0.5 ? vec3(0.0) : normalize(n.xyz), P.z);
+      o_ssrRadiance_texture = vec4(0.0);
+      if (u_ssr.z < 0.5 || n.a < 0.5 || roughness >= u_ssr.x + 0.2) return;
+
+      vec2 noisePixel = gl_FragCoord.xy + 5.588238 * float(frameIndex % 64);
+      float noise = fract(52.9829189 * fract(dot(noisePixel, vec2(0.06711056, 0.00583715))));
+      float noiseB = fract(52.9829189 * fract(dot(noisePixel.yx, vec2(0.06711056, 0.00583715))));
+
+      vec3 N = normalize(n.xyz);
+      vec3 V = normalize(-P);
+      vec3 R = reflect(-V, sampleGGXVisible(N, V, roughness * roughness, vec2(noise, noiseB)));
+      if (dot(R, N) <= 0.0) R = reflect(-V, N);
+
+      vec3 origin = P + N * (0.002 * -P.z);
+      float nearPlane = u_proj[3][2] / (u_proj[2][2] - 1.0);
+      float dist = u_ssr.y;
+      if (R.z > 0.0) dist = min(dist, 0.99 * (-nearPlane - origin.z) / R.z);
+      if (dist <= 0.0) return;
+
+      vec4 h0 = u_proj * vec4(origin, 1.0);
+      vec4 h1 = u_proj * vec4(origin + R * dist, 1.0);
+      float k0 = 1.0 / h0.w;
+      float k1 = 1.0 / h1.w;
+      vec2 s0 = h0.xy * k0 * 0.5 + 0.5;
+      vec2 s1 = h1.xy * k1 * 0.5 + 0.5;
+      vec2 d = s1 - s0;
+      float tMax = 1.0;
+      if (abs(d.x) > 1e-6) tMax = min(tMax, max(-s0.x / d.x, (1.0 - s0.x) / d.x));
+      if (abs(d.y) > 1e-6) tMax = min(tMax, max(-s0.y / d.y, (1.0 - s0.y) / d.y));
+      float minT = 1.5 / max(length(d * vec2(size)), 1e-4);
+      if (tMax <= minT) return;
+
+      float jitter = fract(noise + noiseB);
+      float tPrev = 0.0;
+      float depthPrev = 1.0 / k0;
+      float tHit = -1.0;
+      for (int i = 0; i < 32; ++i) {
+        float t = tMax * (float(i) + jitter) / 32.0;
+        float rayDepth = 1.0 / mix(k0, k1, t);
+        float scene = sceneDepth(mix(s0, s1, t), size);
+        if (t > minT && rayDepth > scene && rayDepth - scene < abs(rayDepth - depthPrev) + 0.02 * scene) {
+          tHit = t;
+          break;
+        }
+        tPrev = t;
+        depthPrev = rayDepth;
+      }
+      if (tHit < 0.0) return;
+      for (int i = 0; i < 4; ++i) {
+        float t = 0.5 * (tPrev + tHit);
+        if (1.0 / mix(k0, k1, t) > sceneDepth(mix(s0, s1, t), size)) tHit = t; else tPrev = t;
+      }
+
+      vec2 hitUV = mix(s0, s1, tHit);
+      ivec2 hitPixel = clamp(ivec2(hitUV * vec2(size)), ivec2(0), size - 1);
+      vec4 hitNormal = texelFetch(u_normal_texture, hitPixel, 0);
+      if (hitNormal.a < 0.5 || dot(hitNormal.xyz, R) > 0.0) return;
+
+      vec3 hitPos = texelFetch(u_position_texture, hitPixel, 0).xyz;
+      vec4 prevClip = u_prevViewProj * vec4(transpose(mat3(u_view)) * (hitPos - u_view[3].xyz), 1.0);
+      vec2 prevUV = u_taa.x > 0.5 && prevClip.w > 0.0 ? prevClip.xy / prevClip.w * 0.5 + 0.5 : hitUV;
+      if (any(lessThan(prevUV, vec2(0.0))) || any(greaterThan(prevUV, vec2(1.0)))) return;
+
+      vec2 edge = min(hitUV, 1.0 - hitUV);
+      float confidence = clamp(min(edge.x, edge.y) * 10.0, 0.0, 1.0)
+                       * (1.0 - clamp((roughness - u_ssr.x) / 0.2, 0.0, 1.0));
+      vec3 hit = finiteColor(texture(u_history_texture, prevUV).rgb);
+      hit *= min(1.0, 10.0 / max(max(hit.r, max(hit.g, hit.b)), 1e-6));
+      o_ssrRadiance_texture = vec4(hit, confidence);
+    }
+    ```
+
+    source msl:
+    ```msl
+    constexpr constant float PI = 3.14159265358979;
+
+    float3 finiteColor(float3 c)
+    {
+      bool3 bad = (as_type<uint3>(c) & 0x7F800000u) == 0x7F800000u;
+      return select(clamp(c, 0.0, 65000.0), float3(0.0), bad);
+    }
+
+    float3 sampleGGXVisible(float3 N, float3 V, float a, float2 xi)
+    {
+      float3 T = normalize(cross(abs(N.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0), N));
+      float3 B = cross(N, T);
+      float3 Vt = float3(dot(V, T), dot(V, B), dot(V, N));
+      float3 Vh = normalize(float3(a * Vt.x, a * Vt.y, Vt.z));
+      float lensq = dot(Vh.xy, Vh.xy);
+      float3 T1 = lensq > 0.0 ? float3(-Vh.y, Vh.x, 0.0) * rsqrt(lensq) : float3(1.0, 0.0, 0.0);
+      float3 T2 = cross(Vh, T1);
+      float r = sqrt(xi.x);
+      float phi = 2.0 * PI * xi.y;
+      float t1 = r * cos(phi);
+      float s = 0.5 * (1.0 + Vh.z);
+      float t2 = (1.0 - s) * sqrt(1.0 - t1 * t1) + s * r * sin(phi);
+      float3 Nh = t1 * T1 + t2 * T2 + sqrt(max(1.0 - t1 * t1 - t2 * t2, 0.0)) * Vh;
+      float3 Ht = normalize(float3(a * Nh.x, a * Nh.y, max(Nh.z, 0.0)));
+      return T * Ht.x + B * Ht.y + N * Ht.z;
+    }
+
+    float sceneDepth(float2 uv, int2 size, texture2d<float> positionTex)
+    {
+      float3 p = positionTex.read(uint2(clamp(int2(uv * float2(size)), int2(0), size - 1))).xyz;
+      return all(p == float3(0.0)) ? 1e30 : -p.z;
+    }
+
+    float4 ssrTrace(float2 fragCoord, uint2 fp, int2 size, float4 n, float3 P,
+                    texture2d<float> positionTex, texture2d<float> normalTex, texture2d<float> materialTex,
+                    texture2d<float> historyTex, sampler historySmp, constant Uniforms& u)
+    {
+      float roughness = clamp(materialTex.read(fp).r, 0.045, 1.0);
+      if (u.u_ssr.z < 0.5 || n.a < 0.5 || roughness >= u.u_ssr.x + 0.2) return float4(0.0);
+
+      float2 noisePixel = fragCoord + 5.588238 * float(u.frameIndex % 64);
+      float noise = fract(52.9829189 * fract(dot(noisePixel, float2(0.06711056, 0.00583715))));
+      float noiseB = fract(52.9829189 * fract(dot(noisePixel.yx, float2(0.06711056, 0.00583715))));
+
+      float3 N = normalize(n.xyz);
+      float3 V = normalize(-P);
+      float3 R = reflect(-V, sampleGGXVisible(N, V, roughness * roughness, float2(noise, noiseB)));
+      if (dot(R, N) <= 0.0) R = reflect(-V, N);
+
+      float3 origin = P + N * (0.002 * -P.z);
+      float nearPlane = u.u_proj[3][2] / (u.u_proj[2][2] - 1.0);
+      float dist = u.u_ssr.y;
+      if (R.z > 0.0) dist = min(dist, 0.99 * (-nearPlane - origin.z) / R.z);
+      if (dist <= 0.0) return float4(0.0);
+
+      float4 h0 = u.u_proj * float4(origin, 1.0);
+      float4 h1 = u.u_proj * float4(origin + R * dist, 1.0);
+      float k0 = 1.0 / h0.w;
+      float k1 = 1.0 / h1.w;
+      float2 s0 = h0.xy * k0 * 0.5 + 0.5;
+      float2 s1 = h1.xy * k1 * 0.5 + 0.5;
+      float2 d = s1 - s0;
+      float tMax = 1.0;
+      if (abs(d.x) > 1e-6) tMax = min(tMax, max(-s0.x / d.x, (1.0 - s0.x) / d.x));
+      if (abs(d.y) > 1e-6) tMax = min(tMax, max(-s0.y / d.y, (1.0 - s0.y) / d.y));
+      float minT = 1.5 / max(length(d * float2(size)), 1e-4);
+      if (tMax <= minT) return float4(0.0);
+
+      float jitter = fract(noise + noiseB);
+      float tPrev = 0.0;
+      float depthPrev = 1.0 / k0;
+      float tHit = -1.0;
+      for (int i = 0; i < 32; ++i) {
+        float t = tMax * (float(i) + jitter) / 32.0;
+        float rayDepth = 1.0 / mix(k0, k1, t);
+        float scene = sceneDepth(mix(s0, s1, t), size, positionTex);
+        if (t > minT && rayDepth > scene && rayDepth - scene < abs(rayDepth - depthPrev) + 0.02 * scene) {
+          tHit = t;
+          break;
+        }
+        tPrev = t;
+        depthPrev = rayDepth;
+      }
+      if (tHit < 0.0) return float4(0.0);
+      for (int i = 0; i < 4; ++i) {
+        float t = 0.5 * (tPrev + tHit);
+        if (1.0 / mix(k0, k1, t) > sceneDepth(mix(s0, s1, t), size, positionTex)) tHit = t; else tPrev = t;
+      }
+
+      float2 hitUV = mix(s0, s1, tHit);
+      uint2 hitPixel = uint2(clamp(int2(hitUV * float2(size)), int2(0), size - 1));
+      float4 hitNormal = normalTex.read(hitPixel);
+      if (hitNormal.a < 0.5 || dot(hitNormal.xyz, R) > 0.0) return float4(0.0);
+
+      float3 hitPos = positionTex.read(hitPixel).xyz;
+      float3x3 invRot = transpose(float3x3(u.u_view[0].xyz, u.u_view[1].xyz, u.u_view[2].xyz));
+      float4 prevClip = u.u_prevViewProj * float4(invRot * (hitPos - u.u_view[3].xyz), 1.0);
+      float2 prevUV = u.u_taa.x > 0.5 && prevClip.w > 0.0 ? prevClip.xy / prevClip.w * 0.5 + 0.5 : hitUV;
+      if (any(prevUV < float2(0.0)) || any(prevUV > float2(1.0))) return float4(0.0);
+
+      float2 edge = min(hitUV, 1.0 - hitUV);
+      float confidence = saturate(min(edge.x, edge.y) * 10.0)
+                       * (1.0 - saturate((roughness - u.u_ssr.x) / 0.2));
+      float3 hit = finiteColor(historyTex.sample(historySmp, prevUV).rgb);
+      hit *= min(1.0, 10.0 / max(max(hit.r, max(hit.g, hit.b)), 1e-6));
+      return float4(hit, confidence);
+    }
+
+    //@main
+    {
+      int2 size = int2(u_position_texture.get_width(), u_position_texture.get_height());
+      uint2 fp = uint2(min(int2(gl_FragCoord.xy) * 2, size - 1));
+      float4 n = u_normal_texture.read(fp);
+      float3 P = u_position_texture.read(fp).xyz;
+      o_ssrGuide_texture = float4(n.a < 0.5 ? float3(0.0) : normalize(n.xyz), P.z);
+      o_ssrRadiance_texture = ssrTrace(gl_FragCoord.xy, fp, size, n, P,
+                                       u_position_texture, u_normal_texture, u_material_texture,
+                                       u_history_texture, u_history_texture_smp, _u);
+    }
+    ```
+
+shader: ssr-temporal
+  uniforms: [ u_ssrRadiance_texture: sampler2d,
+              u_ssrGuide_texture: sampler2d,
+              u_ssrHistory_texture: sampler2d,
+              u_position_texture: sampler2d,
+              u_material_texture: sampler2d,
+              u_view: mat4 <- auto-view-matrix,
+              u_prevViewProj: mat4,
+              u_currViewProj: mat4,
+              u_taa: vec4,
+              u_ssr: vec4 ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    vec3 finiteColor(vec3 c)
+    {
+      bvec3 bad = equal(floatBitsToUint(c) & 0x7F800000u, uvec3(0x7F800000u));
+      return mix(clamp(c, 0.0, 65000.0), vec3(0.0), bad);
+    }
+
+    void main()
+    {
+      ivec2 hp = ivec2(gl_FragCoord.xy);
+      ivec2 halfSize = textureSize(u_ssrRadiance_texture, 0);
+      ivec2 fullSize = textureSize(u_position_texture, 0);
+      vec4 gc = texelFetch(u_ssrGuide_texture, hp, 0);
+      if (u_ssr.z < 0.5 || gc.xyz == vec3(0.0)) {
+        o_ssrAccum_texture = vec4(0.0);
+        return;
+      }
+      ivec2 fp = min(hp * 2, fullSize - 1);
+      float roughness = texelFetch(u_material_texture, fp, 0).r;
+      float spread = clamp(4.0 * roughness, 0.0, 1.0);
+      float depthScale = 1.0 / max(0.01 * abs(gc.w), 1e-3);
+      vec4 m1 = vec4(0.0), m2 = vec4(0.0), blurred = vec4(0.0);
+      float wsum = 0.0, bsum = 0.0;
+      for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+          ivec2 h = clamp(hp + ivec2(x, y), ivec2(0), halfSize - 1);
+          vec4 gs = texelFetch(u_ssrGuide_texture, h, 0);
+          if (gs.xyz == vec3(0.0)) continue;
+          float w = exp(-abs(gs.w - gc.w) * depthScale) * pow(max(dot(gc.xyz, gs.xyz), 0.0), 8.0);
+          vec4 r = texelFetch(u_ssrRadiance_texture, h, 0);
+          vec4 c = vec4(finiteColor(r.rgb) * r.a, r.a);
+          m1 += c * w;
+          m2 += c * c * w;
+          wsum += w;
+          float b = x == 0 && y == 0 ? 1.0 : w * spread;
+          blurred += c * b;
+          bsum += b;
+        }
+      }
+      vec4 mean = m1 / max(wsum, 1e-4);
+      vec4 sigma = sqrt(max(m2 / max(wsum, 1e-4) - mean * mean, 0.0));
+      vec4 current = blurred / max(bsum, 1e-4);
+      if (u_taa.x < 0.5) {
+        o_ssrAccum_texture = current;
+        return;
+      }
+      vec3 pc = texelFetch(u_position_texture, fp, 0).xyz;
+      vec4 world = inverse(u_view) * vec4(pc, 1.0);
+      vec4 prevClip = u_prevViewProj * world;
+      vec4 currClip = u_currViewProj * world;
+      vec2 prevUV = (vec2(hp) + 0.5) / vec2(halfSize)
+                  + (prevClip.xy / prevClip.w - currClip.xy / currClip.w) * 0.5;
+      bool offscreen = prevClip.w <= 0.0 || any(lessThan(prevUV, vec2(0.0))) || any(greaterThan(prevUV, vec2(1.0)));
+      vec4 history = texture(u_ssrHistory_texture, clamp(prevUV, 0.0, 1.0));
+      history = clamp(vec4(finiteColor(history.rgb), finiteColor(history.aaa).x),
+                      mean - 1.5 * sigma, mean + 1.5 * sigma);
+      o_ssrAccum_texture = mix(history, current,
+                               (u_taa.y > 0.5 || u_ssr.w > 0.5 || offscreen) ? 1.0 : max(u_taa.z, 0.05));
+    }
+    ```
+
+    source msl:
+    ```msl
+    float3 finiteColor(float3 c)
+    {
+      bool3 bad = (as_type<uint3>(c) & 0x7F800000u) == 0x7F800000u;
+      return select(clamp(c, 0.0, 65000.0), float3(0.0), bad);
+    }
+
+    //@main
+    {
+      int2 hp = int2(gl_FragCoord.xy);
+      int2 halfSize = int2(u_ssrRadiance_texture.get_width(), u_ssrRadiance_texture.get_height());
+      int2 fullSize = int2(u_position_texture.get_width(), u_position_texture.get_height());
+      float4 gc = u_ssrGuide_texture.read(uint2(hp));
+      if (u_ssr.z < 0.5 || all(gc.xyz == float3(0.0))) {
+        o_ssrAccum_texture = float4(0.0);
+      } else {
+        uint2 fp = uint2(min(hp * 2, fullSize - 1));
+        float roughness = u_material_texture.read(fp).r;
+        float spread = saturate(4.0 * roughness);
+        float depthScale = 1.0 / max(0.01 * abs(gc.w), 1e-3);
+        float4 m1 = float4(0.0), m2 = float4(0.0), blurred = float4(0.0);
+        float wsum = 0.0, bsum = 0.0;
+        for (int y = -1; y <= 1; ++y) {
+          for (int x = -1; x <= 1; ++x) {
+            uint2 h = uint2(clamp(hp + int2(x, y), int2(0), halfSize - 1));
+            float4 gs = u_ssrGuide_texture.read(h);
+            if (all(gs.xyz == float3(0.0))) continue;
+            float w = exp(-abs(gs.w - gc.w) * depthScale) * pow(max(dot(gc.xyz, gs.xyz), 0.0), 8.0);
+            float4 r = u_ssrRadiance_texture.read(h);
+            float4 c = float4(finiteColor(r.rgb) * r.a, r.a);
+            m1 += c * w;
+            m2 += c * c * w;
+            wsum += w;
+            float b = x == 0 && y == 0 ? 1.0 : w * spread;
+            blurred += c * b;
+            bsum += b;
+          }
+        }
+        float4 mean = m1 / max(wsum, 1e-4);
+        float4 sigma = sqrt(max(m2 / max(wsum, 1e-4) - mean * mean, 0.0));
+        float4 current = blurred / max(bsum, 1e-4);
+        if (u_taa.x < 0.5) {
+          o_ssrAccum_texture = current;
+        } else {
+          float3 pc = u_position_texture.read(fp).xyz;
+          float3x3 invRot = transpose(float3x3(u_view[0].xyz, u_view[1].xyz, u_view[2].xyz));
+          float3 world = invRot * (pc - u_view[3].xyz);
+          float4 prevClip = u_prevViewProj * float4(world, 1.0);
+          float4 currClip = u_currViewProj * float4(world, 1.0);
+          float2 prevUV = (float2(hp) + 0.5) / float2(halfSize)
+                        + (prevClip.xy / prevClip.w - currClip.xy / currClip.w) * 0.5;
+          bool offscreen = prevClip.w <= 0.0 || any(prevUV < float2(0.0)) || any(prevUV > float2(1.0));
+          float4 history = texture(u_ssrHistory_texture, clamp(prevUV, 0.0, 1.0));
+          history = clamp(float4(finiteColor(history.rgb), finiteColor(history.aaa).x),
+                          mean - 1.5 * sigma, mean + 1.5 * sigma);
+          o_ssrAccum_texture = mix(history, current,
+                                   (u_taa.y > 0.5 || u_ssr.w > 0.5 || offscreen) ? 1.0 : max(u_taa.z, 0.05));
+        }
+      }
+    }
+    ```
+
+shader: ssr-copy
+  uniforms: [ u_ssrAccum_texture: sampler2d ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    void main()
+    {
+      o_ssrHistory_texture = texelFetch(u_ssrAccum_texture, ivec2(gl_FragCoord.xy), 0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    o_ssrHistory_texture = u_ssrAccum_texture.read(uint2(gl_FragCoord.xy));
     ```

@@ -90,16 +90,20 @@ public enum AppUtils
 
       def Xform "World"
       {
-          def Sphere "Ball"
+          def Sphere "Ball" (
+              prepend apiSchemas = ["MaterialBindingAPI"]
+          )
           {
+              rel material:binding = </Materials/DefaultMaterial>
               double radius = 1
-              color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)]
           }
 
-          def Cube "Cube"
+          def Cube "Cube" (
+              prepend apiSchemas = ["MaterialBindingAPI"]
+          )
           {
+              rel material:binding = </Materials/DefaultMaterial>
               double size = 2
-              color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)]
               double3 xformOp:translate = (3, 0, 0)
               uniform token[] xformOpOrder = ["xformOp:translate"]
           }
@@ -108,6 +112,23 @@ public enum AppUtils
           {
               float inputs:intensity = 3
               float inputs:angle = 0.53
+          }
+      }
+      
+      def "Materials"
+      {
+          def Material "DefaultMaterial"
+          {
+              token outputs:surface.connect = </Materials/DefaultMaterial/PBRShader.outputs:surface>
+
+              def Shader "PBRShader"
+              {
+                  uniform token info:id = "UsdPreviewSurface"
+                  color3f inputs:diffuseColor = (0.8, 0.8, 0.8)
+                  float inputs:metallic = 0
+                  float inputs:roughness = 0.2
+                  token outputs:surface
+              }
           }
       }
       """

@@ -66,6 +66,8 @@ public struct RenderSettings: Sendable
   public var light: LightSettings = .init()
   /// Scene volume settings.
   public var volume: VolumeSettings = .init()
+  /// Screen space reflection settings.
+  public var reflection: ReflectionSettings = .init()
   /// Frame rate the interactive pipeline budgets toward.
   public var targetFrameRate: Int = 60
   /// Viewport sample count (defaults to 16).
@@ -83,6 +85,7 @@ public struct RenderSettings: Sendable
               color: Akari.Color.Pipeline = Akari.Color.Pipeline(),
               light: LightSettings = LightSettings(),
               volume: VolumeSettings = VolumeSettings(),
+              reflection: ReflectionSettings = ReflectionSettings(),
               targetFrameRate: Int = 60,
               samples: Int = 16,
               renderSamples: Int = 64,
@@ -93,6 +96,7 @@ public struct RenderSettings: Sendable
     self.color = color
     self.light = light
     self.volume = volume
+    self.reflection = reflection
     self.targetFrameRate = targetFrameRate
     self.samples = samples
     self.renderSamples = renderSamples

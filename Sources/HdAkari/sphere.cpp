@@ -40,7 +40,9 @@
 #include "pxr/pxrns.h"
 
 #include "HdAkari/sphere.h"
+#include "HdAkari/materialBinding.h"
 #include "HdAkari/renderParam.h"
+#include "HdAkari/textureAtlas.h"
 #include "HdAkari/scene.h"
 
 #include <Hd/bufferSource.h>
@@ -87,7 +89,8 @@ HdAkariSphere::GetInitialDirtyBitsMask() const
     | HdChangeTracker::DirtyTransform
     | HdChangeTracker::DirtyVisibility
     | HdChangeTracker::DirtyPrimvar
-    | HdChangeTracker::DirtyDisplayStyle;
+    | HdChangeTracker::DirtyDisplayStyle
+    | HdChangeTracker::DirtyMaterialId;
   
   return mask;
 }
@@ -156,6 +159,10 @@ HdAkariSphere::Sync(HdSceneDelegate *sceneDelegate,
     }
   }
   
+  HdAkariTextureAtlas *atlas = param->GetTextureAtlas();
+  if (atlas) atlas->EnsureGridSized(sceneDelegate);
+  HdAkariSyncMaterial(sceneDelegate, id, atlas, meshUtil, data);
+
   // bump revision so the GPU buffer cache knows to rebuild.
   data.dataRevision = ++_dataGeneration;
   

@@ -81,6 +81,7 @@ public extension Akari
     var shadowsReady = false
     private var temporal = Temporal()
     private var ssgi = ScreenSpaceGI()
+    private var ssr = ScreenSpaceReflections()
     var volumetrics = Volumetrics()
     /// Froxel depth reduction + column integration.
     let froxelVolume = Akari.FroxelVolume()
@@ -139,6 +140,13 @@ public extension Akari
       var needsReset = true
     }
 
+    private struct ScreenSpaceReflections
+    {
+      var thisFrame = false
+      var passesActive = true
+      var needsReset = true
+    }
+
     private static let iblPassNames = [
       "sky",
       "prefilter",
@@ -152,6 +160,12 @@ public extension Akari
       "ssgi",
       "ssgi temporal",
       "ssgi history"
+    ]
+
+    private static let ssrPassNames = [
+      "ssr",
+      "ssr temporal",
+      "ssr history"
     ]
 
     private static let gbufferPassNames = [
@@ -189,6 +203,7 @@ public extension Akari
         iblNeedsBake = true
         temporal.prevViewProjection = nil
         ssgi.needsReset = true
+        ssr.needsReset = true
         lastWidth = width
         lastHeight = height
       }
@@ -201,6 +216,10 @@ public extension Akari
 
       ssgi.thisFrame = false
       setVector("u_ssgi", SIMD4(0, 0, 0, 0))
+      setVector("u_horizonScan", SIMD4(0, 0, 0, 0))
+
+      ssr.thisFrame = false
+      setVector("u_ssr", SIMD4(0, 0, 0, 0))
 
       volumetrics.thisFrame = false
       volumetrics.froxels = nil
@@ -235,9 +254,11 @@ public extension Akari
       // the shared roughness/metallic/opacity texture atlas.
       if let atlas = renderParam.GetTextureAtlas()
       {
-        let (materialTex, colorTex) = materialAtlas.uploadIfNeeded(atlas)
+        let (materialTex, colorTex, normalTex, emissiveTex) = materialAtlas.uploadIfNeeded(atlas)
         setSampler("u_material_atlas", materialTex)
         setSampler("u_color_atlas", colorTex)
+        setSampler("u_normal_atlas", normalTex)
+        setSampler("u_emissive_atlas", emissiveTex)
       }
 
       let lights = scene.LightSnapshot().prefix(4)
@@ -406,7 +427,7 @@ public extension Akari
     }
 
     /// Turns on screen space GI for this frame.
-    public func setScreenSpaceGI()
+    public func setScreenSpaceGI(maxRoughness: Float = 0.5)
     {
       let diagonal = sceneBounds.map { $0.max - $0.min } ?? SIMD3(repeating: 1)
       let radius = max((diagonal * diagonal).sum().squareRoot() * 0.15, 1e-3)
@@ -414,8 +435,19 @@ public extension Akari
 
       let size = SIMD2<Float>(Float(max(lastWidth, 1)), Float(max(lastHeight, 1)))
       setVector("u_ssgiSize", SIMD4(size.x, size.y, 1 / size.x, 1 / size.y))
+      setVector("u_horizonScan", SIMD4(maxRoughness, 1, 0, 0))
       ssgi.needsReset = false
       ssgi.thisFrame = true
+    }
+
+    /// Turns on screen space reflections for this frame.
+    public func setScreenSpaceReflections(maxRoughness: Float = 0.5)
+    {
+      let diagonal = sceneBounds.map { $0.max - $0.min } ?? SIMD3(repeating: 1)
+      let distance = max((diagonal * diagonal).sum().squareRoot(), 1e-3)
+      setVector("u_ssr", SIMD4(maxRoughness, distance, 1, ssr.needsReset || !ssr.passesActive ? 1 : 0))
+      ssr.needsReset = false
+      ssr.thisFrame = true
     }
 
     /// Sets the tonemap stage state: exposure, gamma,
@@ -463,6 +495,12 @@ public extension Akari
       {
         setPasses(Self.ssgiPassNames, active: ssgi.thisFrame)
         ssgi.passesActive = ssgi.thisFrame
+      }
+
+      if ssr.thisFrame != ssr.passesActive
+      {
+        setPasses(Self.ssrPassNames, active: ssr.thisFrame)
+        ssr.passesActive = ssr.thisFrame
       }
 
       syncVolumetrics()

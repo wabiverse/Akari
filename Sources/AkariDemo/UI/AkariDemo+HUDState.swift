@@ -62,7 +62,9 @@ extension AkariDemo
     @Published var volumeAnisotropy: Double
     @Published var volumeMaxDistance: Double
     @Published var volumeShadows: Bool
+    @Published var reflectionMaxRoughness: Double
     @Published var features: RenderFeatures
+    @Published var stats = Akari.RenderStats()
 
     private let engine: Akari.RenderEngine
 
@@ -84,7 +86,18 @@ extension AkariDemo
       volumeAnisotropy = Double(s.volume.anisotropy)
       volumeMaxDistance = Double(s.volume.maxDistance)
       volumeShadows = s.volume.shadows
+      reflectionMaxRoughness = Double(s.reflection.maxRoughness)
       features = s.features
+
+      Task
+      { @MainActor [weak self] in
+        while !Task.isCancelled
+        {
+          try? await Task.sleep(nanoseconds: 500_000_000)
+          guard let self else { return }
+          stats = engine.stats
+        }
+      }
     }
 
     /// How many frame graph passes the engine currently runs.
@@ -112,6 +125,7 @@ extension AkariDemo
       settings.volume.anisotropy = Float(volumeAnisotropy)
       settings.volume.maxDistance = Float(volumeMaxDistance)
       settings.volume.shadows = volumeShadows
+      settings.reflection.maxRoughness = Float(reflectionMaxRoughness)
       engine.settings = settings
     }
 

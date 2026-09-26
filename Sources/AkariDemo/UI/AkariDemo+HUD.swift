@@ -58,65 +58,79 @@ extension AkariDemo
 
     var body: some View
     {
-      ScrollView
+      VStack(alignment: .leading)
       {
-        VStack(alignment: .leading, spacing: 3)
+        Text("AKARI 灯り")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundColor(Color(white: 0.62))
+        Text("\(String(format: "%.0f", state.stats.framesPerSecond)) fps")
+          .font(.system(size: 30, weight: .bold).monospaced())
+        
+        ScrollView
         {
-          Text("AKARI 灯り")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(Color(white: 0.62))
-          Text("\(state.activePassCount)")
-            .font(.system(size: 30, weight: .bold).monospaced())
-          Text("frame graph passes active")
-            .font(.system(size: 12))
-            .foregroundColor(Color(white: 0.62))
-
-          sectionHeader("COLOR PIPELINE")
-          viewTransformRow
-          qualityRow
-          sliderRow("Exposure", String(format: "%+.1f EV", state.exposure),
-                    state.$exposure, in: -4 ... 4)
-          sliderRow("Gamma", String(format: "%.2f", state.gamma),
-                    state.$gamma, in: 0.4 ... 2.5)
-
-          sectionHeader("SAMPLING")
-          sliderRow("Samples", String(format: "%d", Int(state.samples)),
-                    state.$samples, in: 1 ... 64)
-          sliderRow("Render Samples", String(format: "%d", Int(state.renderSamples)),
-                    state.$renderSamples, in: 1 ... 128)
-
-          sectionHeader("LIGHTING")
-          sliderRow("Environment Sun Height", String(format: "%.2f", state.environmentSunHeight),
-                    state.$environmentSunHeight, in: -1 ... 1)
-          sliderRow("Sun Angle", String(format: "%.2f°", state.environmentSunAngle),
-                    state.$environmentSunAngle, in: 0 ... 20)
-          Group
+          VStack(alignment: .leading, spacing: 3)
           {
-            sliderRow("Clipmap LOD Bias", String(format: "%+.0f", state.shadowLevelLodBias),
-                      state.$shadowLevelLodBias, in: -4 ... 4)
-            sliderRow("Max Shadow Distance", String(format: "%.0f", state.shadowMaxDistance),
-                      state.$shadowMaxDistance, in: 2 ... 200)
+            sectionHeader("COLOR PIPELINE")
+            viewTransformRow
+            qualityRow
+            sliderRow("Exposure", String(format: "%+.1f EV", state.exposure),
+                      state.$exposure, in: -4 ... 4)
+            sliderRow("Gamma", String(format: "%.2f", state.gamma),
+                      state.$gamma, in: 0.4 ... 2.5)
+
+            sectionHeader("SAMPLING")
+            sliderRow("Samples", String(format: "%d", Int(state.samples)),
+                      state.$samples, in: 1 ... 64)
+            sliderRow("Render Samples", String(format: "%d", Int(state.renderSamples)),
+                      state.$renderSamples, in: 1 ... 128)
+
+            Group
+            {
+              sectionHeader("LIGHTING")
+              sliderRow("Environment Sun Height", String(format: "%.2f", state.environmentSunHeight),
+                        state.$environmentSunHeight, in: -1 ... 1)
+              sliderRow("Sun Angle", String(format: "%.2f°", state.environmentSunAngle),
+                        state.$environmentSunAngle, in: 0 ... 20)
+              sliderRow("Clipmap LOD Bias", String(format: "%+.0f", state.shadowLevelLodBias),
+                        state.$shadowLevelLodBias, in: -4 ... 4)
+              sliderRow("Max Shadow Distance", String(format: "%.0f", state.shadowMaxDistance),
+                        state.$shadowMaxDistance, in: 2 ... 200)
+            }
+
+            sectionHeader("REFLECTIONS")
+            sliderRow("Max Roughness", String(format: "%.2f", state.reflectionMaxRoughness),
+                      state.$reflectionMaxRoughness, in: 0 ... 1)
+
+            Group
+            {
+              sectionHeader("VOLUMETRICS")
+              sliderRow("Fog Density", String(format: "%.3f", state.volumeDensity),
+                        state.$volumeDensity, in: 0 ... 0.2)
+              sliderRow("Fog Anisotropy", String(format: "%+.2f", state.volumeAnisotropy),
+                        state.$volumeAnisotropy, in: -0.9 ... 0.9)
+              sliderRow("Fog Distance", String(format: "%.0f", state.volumeMaxDistance),
+                        state.$volumeMaxDistance, in: 5 ... 500)
+              Toggle("Volume shadows", isOn: state.volumeShadowsBinding)
+                .toggleStyle(.switch)
+            }
+
+            Group
+            {
+              sectionHeader("FEATURES")
+              
+              Text("\(state.activePassCount)")
+                .font(.system(size: 30, weight: .bold).monospaced())
+              Text("frame graph passes active")
+                .font(.system(size: 12))
+                .foregroundColor(Color(white: 0.62))
+              
+              featuresSection
+              
+              Text("edits rebuild the frame graph live")
+                .font(.system(size: 10))
+                .foregroundColor(Color(white: 0.5))
+            }
           }
-
-          Group
-          {
-            sectionHeader("VOLUMETRICS")
-            sliderRow("Fog Density", String(format: "%.3f", state.volumeDensity),
-                      state.$volumeDensity, in: 0 ... 0.2)
-            sliderRow("Fog Anisotropy", String(format: "%+.2f", state.volumeAnisotropy),
-                      state.$volumeAnisotropy, in: -0.9 ... 0.9)
-            sliderRow("Fog Distance", String(format: "%.0f", state.volumeMaxDistance),
-                      state.$volumeMaxDistance, in: 5 ... 500)
-            Toggle("Volume shadows", isOn: state.volumeShadowsBinding)
-              .toggleStyle(.switch)
-          }
-
-          sectionHeader("FEATURES")
-          featuresSection
-
-          Text("edits rebuild the frame graph live")
-            .font(.system(size: 10))
-            .foregroundColor(Color(white: 0.5))
         }
       }
       .padding(14)

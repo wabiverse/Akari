@@ -77,8 +77,10 @@ class SWIFT_SHARED_REFERENCE(HdAkariTextureAtlasRetain, HdAkariTextureAtlasRelea
 HdAkariTextureAtlas
 {
 public:
-  static constexpr int kCellPixels = 256;     // resolution per cell.
-  static constexpr int kDefaultGridSize = 4;  // fallback if never sized.
+  static constexpr int kCellPixels = 256;      // minimum resolution per cell.
+  static constexpr int kMaxCellPixels = 2048;  // cells grow up to this when few materials.
+  static constexpr int kMaxAtlasPixels = 4096; // largest atlas grown cells may fill.
+  static constexpr int kDefaultGridSize = 4;   // fallback if never sized.
 
   // Border reserved inside each cell so mip
   // levels only sample individual cells.
@@ -101,7 +103,9 @@ public:
                                  std::string const &metallicPath, float metallicConst,
                                  std::string const &opacityPath, float opacityConst,
                                  float opacityThreshold,
-                                 std::string const &colorPath, GfVec3f const &colorConst);
+                                 std::string const &colorPath, GfVec3f const &colorConst,
+                                 std::string const &normalPath,
+                                 std::string const &emissivePath, GfVec3f const &emissiveConst);
 
   /// True once new cells have been baked since the last call.
   bool ConsumeDirty() { return _dirty.exchange(false, std::memory_order_acq_rel); }
@@ -112,8 +116,8 @@ public:
     std::lock_guard<std::mutex> lock(_mutex);
     return _pixels.empty() ? nullptr : _pixels.data();
   }
-  int Width() const { return _gridSize * kCellPixels; }
-  int Height() const { return _gridSize * kCellPixels; }
+  int Width() const { return _gridSize * _cellPixels; }
+  int Height() const { return _gridSize * _cellPixels; }
 
   /// Raw pointer to the diffuseColor RGBA8 pixel buffer.
   uint8_t const SWIFT_RETURNS_INDEPENDENT_VALUE *ColorPixelData() const
@@ -122,11 +126,26 @@ public:
     return _colorPixels.empty() ? nullptr : _colorPixels.data();
   }
 
+  /// Raw pointer to the tangent space normal RGBA8 pixel buffer.
+  uint8_t const SWIFT_RETURNS_INDEPENDENT_VALUE *NormalPixelData() const
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _normalPixels.empty() ? nullptr : _normalPixels.data();
+  }
+
+  /// Raw pointer to the emissiveColor RGBA8 pixel buffer.
+  uint8_t const SWIFT_RETURNS_INDEPENDENT_VALUE *EmissivePixelData() const
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _emissivePixels.empty() ? nullptr : _emissivePixels.data();
+  }
+
 private:
   void BakeChannel(int px0, int py0, int regionSize, int channelIndex,
                     std::string const &texPath, float fallbackConst,
                     int tileMinU, int tileMinV, int tileMaxU, int tileMaxV);
-  void BakeColorChannel(int px0, int py0, int regionSize,
+  void BakeColorChannel(std::vector<uint8_t> &target, bool decodeSRGB,
+                         int px0, int py0, int regionSize,
                          std::string const &texPath, GfVec3f const &fallbackConst,
                          int tileMinU, int tileMinV, int tileMaxU, int tileMaxV);
 
@@ -140,9 +159,12 @@ private:
   bool _warnedOverflow = false;      // guards a one-time stderr warning if cells wrap.
   std::vector<uint8_t> _pixels;      // lazily sized to Width()*Height()*4 on first bake.
   std::vector<uint8_t> _colorPixels; // same thing, for diffuseColor.
+  std::vector<uint8_t> _normalPixels;   // tangent space normal, flat where untextured.
+  std::vector<uint8_t> _emissivePixels; // emissiveColor.
   std::atomic<bool> _dirty{false};
   std::once_flag _sizeOnce;
   std::atomic<int> _gridSize{kDefaultGridSize};
+  std::atomic<int> _cellPixels{kCellPixels};
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE
