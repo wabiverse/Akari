@@ -623,6 +623,7 @@ extension Akari.ShadowAtlas
     {
       int i = pickLevelIndex(fitEye, u_params.w > 0.5, int(u_lodRange.x), int(u_lodRange.y));
       if (i < 0 || i >= int(u_params.z)) return;
+      i = min(i + int(u_lodRange.z), int(u_params.z) - 1);
       vec4 clip = levelMatrix(i) * vec4(fitEye, 1.0);
       if (clip.w <= 0.0) return;
       vec3 ndc = clip.xyz / clip.w;
@@ -735,6 +736,7 @@ extension Akari.ShadowAtlas
     {
       int i = pickLevelIndex(fitEye, u.params.w > 0.5, int(u.lodRange.x), int(u.lodRange.y), u);
       if (i < 0 || i >= int(u.params.z)) return;
+      i = min(i + int(u.lodRange.z), int(u.params.z) - 1);
       float4 clip = levelMatrix(i, dataTex) * float4(fitEye, 1.0);
       if (clip.w <= 0.0) return;
       float3 ndc = clip.xyz / clip.w;
@@ -900,8 +902,7 @@ extension Akari.ShadowAtlas
 
       if (local_tile_index == 0u)
       {
-        bool is_render = u_max_view_per_tilemap == \(lodMax);
-        if ((force_base_page != 0u) && (levels_rendered == 0u || is_render))
+        if (force_base_page != 0u)
         {
           int tile_offset = tileOffsetLds(ivec2(0), \(lodMax));
           tiles_local[tile_offset] |= 0x40000000u;
@@ -1037,8 +1038,7 @@ extension Akari.ShadowAtlas
 
       if (local_tile_index == 0u)
       {
-        bool is_render = U_.max_view_per_tilemap == \(lodMax);
-        if ((force_base_page != 0u) && (levels_rendered_val == 0u || is_render))
+        if (force_base_page != 0u)
         {
           int tile_offset = tileOffsetLds(int2(0), \(lodMax));
           tiles_local[tile_offset] |= 0x40000000u;

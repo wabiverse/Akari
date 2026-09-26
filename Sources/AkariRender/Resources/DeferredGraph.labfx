@@ -418,7 +418,7 @@ shader: deferred-shade
       int lodMin = int(u_shadowLodRange.x);
       int lodMax = int(u_shadowLodRange.y);
       float scale = clamp(length(lightDelta) * 2.0, exp2(float(lodMin)), exp2(float(lodMax)));
-      float slopeScale = 1.0 + (1.0 - NoL) * 2.0;
+      float sinTheta = sqrt(max(1.0 - NoL * NoL, 0.0));
       float levelSize;
       vec3 biasedPosEye;
       vec2 tileFloat;
@@ -429,7 +429,7 @@ shader: deferred-shade
         if (i >= levelCount) return 1.0;
         levelSize = exp2(u_shadowLodRange.x + float(i));
         float texelWorldSize = 1.41421356 / 8192.0 * levelSize;
-        biasedPosEye = posEye + normalEye * (u_shadowBias.y * slopeScale * texelWorldSize);
+        biasedPosEye = posEye + normalEye * (texelWorldSize * (sinTheta + u_shadowBias.y));
         float radius = levelSize * 0.5;
         vec3 lightRel = (u_eyeToLightRotation * vec4(biasedPosEye, 0.0)).xyz;
         vec2 lightXY = lightRel.xy + shadowLevelTileOffset(i);
@@ -455,6 +455,9 @@ shader: deferred-shade
       float depthPerWorld = abs(0.5 * levelDepth.y);
       float reach = tileWorld / max(tanHalf, 1e-3);
       float aa = tileTexelStep * tileWorld;
+      vec3 normalLight = (u_eyeToLightRotation * vec4(normalEye, 0.0)).xyz;
+      float nz = normalLight.z < 0.0 ? min(normalLight.z, -0.05) : max(normalLight.z, 0.05);
+      vec2 planeSlope = normalLight.xy * (-0.5 * levelDepth.y / nz);
       float lit = 0.0;
       ivec2 cacheTile = tile;
       vec4 cachePage = pageInfo;
@@ -462,13 +465,14 @@ shader: deferred-shade
         float phi = 6.2831853 * fract(noise.x + 0.618034 * float(r));
         vec2 disk = vec2(cos(phi), sin(phi)) * sqrt(fract(noise.y + 0.754877 * float(r)));
         float jitter = fract(noise.x + noise.y + 0.5698403 * float(r));
+        float plane = dot(planeSlope, disk) * aa;
         float visible = 1.0;
         for (int k = 0; k < 6; ++k) {
-          float f = (float(k) + jitter) / 6.0;
+          float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 5.0;
           float t = reach * f * f;
           vec2 offset = disk * (aa + tanHalf * t);
           if (directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage)
-              < compareDepth - t * depthPerWorld) {
+              < compareDepth + plane - t * depthPerWorld) {
             visible = 0.0;
             break;
           }
@@ -575,18 +579,20 @@ shader: deferred-shade
       vec2 nearFar = texelFetch(u_shadow_data, ivec2(5, tilemapIndex), 0).xy;
 
       float ratio = clamp(2.0 * 1.4142135 / 8192.0 / max(filmFootprint / distanceToLight, 1e-8), 1e-8, 1.0);
-      int lod = int(clamp(-log2(ratio), 0.0, 5.0));
+      int start = int(clamp(-log2(ratio), 0.0, 5.0));
+      int lod = -1;
       int tilesPerSide = 32;
       int cacheKey = -1;
       vec4 cacheSlot = vec4(0.0);
-      for (; lod <= 5; ++lod) {
-        tilesPerSide = 32 >> lod;
+      for (int i = 0; i <= 5; ++i) {
+        int l = i <= start ? start - i : i;
+        tilesPerSide = 32 >> l;
         ivec2 tile = clamp(ivec2(uvBase * float(tilesPerSide)), ivec2(0), ivec2(tilesPerSide - 1));
-        cacheKey = face * 2048 + punctualTileOffset(tile, lod);
+        cacheKey = face * 2048 + punctualTileOffset(tile, l);
         cacheSlot = texelFetch(u_shadow_pagetable, ivec2(cacheKey - face * 2048, tilemapIndex), 0);
-        if (cacheSlot.z > 0.5) break;
+        if (cacheSlot.z > 0.5) { lod = l; break; }
       }
-      if (lod > 5) return 1.0;
+      if (lod < 0) return 1.0;
 
       float worldPerTile = 2.0 * receiverZ / float(tilesPerSide);
       float texelWorld = worldPerTile / 256.0;
@@ -940,7 +946,7 @@ shader: deferred-shade
       int lodMin = int(u.u_shadowLodRange.x);
       int lodMax = int(u.u_shadowLodRange.y);
       float scale = clamp(length(lightDelta) * 2.0, exp2(float(lodMin)), exp2(float(lodMax)));
-      float slopeScale = 1.0 + (1.0 - NoL) * 2.0;
+      float sinTheta = sqrt(max(1.0 - NoL * NoL, 0.0));
       float levelSize;
       float3 biasedPosEye;
       float2 tileFloat;
@@ -951,7 +957,7 @@ shader: deferred-shade
         if (i >= levelCount) return 1.0;
         levelSize = exp2(u.u_shadowLodRange.x + float(i));
         float texelWorldSize = 1.41421356 / 8192.0 * levelSize;
-        biasedPosEye = posEye + normalEye * (u.u_shadowBias.y * slopeScale * texelWorldSize);
+        biasedPosEye = posEye + normalEye * (texelWorldSize * (sinTheta + u.u_shadowBias.y));
         float radius = levelSize * 0.5;
         float3 lightRel = (u.u_eyeToLightRotation * float4(biasedPosEye, 0.0)).xyz;
         float2 lightXY = lightRel.xy + shadowLevelTileOffset(i, dataTex);
@@ -977,6 +983,9 @@ shader: deferred-shade
       float depthPerWorld = abs(0.5 * levelDepth.y);
       float reach = tileWorld / max(tanHalf, 1e-3);
       float aa = tileTexelStep * tileWorld;
+      float3 normalLight = (u.u_eyeToLightRotation * float4(normalEye, 0.0)).xyz;
+      float nz = normalLight.z < 0.0 ? min(normalLight.z, -0.05) : max(normalLight.z, 0.05);
+      float2 planeSlope = normalLight.xy * (-0.5 * levelDepth.y / nz);
       float lit = 0.0;
       int2 cacheTile = tile;
       float4 cachePage = pageInfo;
@@ -984,14 +993,15 @@ shader: deferred-shade
         float phi = 6.2831853 * fract(noise.x + 0.618034 * float(r));
         float2 disk = float2(cos(phi), sin(phi)) * sqrt(fract(noise.y + 0.754877 * float(r)));
         float jitter = fract(noise.x + noise.y + 0.5698403 * float(r));
+        float plane = dot(planeSlope, disk) * aa;
         float visible = 1.0;
         for (int k = 0; k < 6; ++k) {
-          float f = (float(k) + jitter) / 6.0;
+          float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 5.0;
           float t = reach * f * f;
           float2 offset = disk * (aa + tanHalf * t);
           if (directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage,
                              atlasTex, pageTableTex)
-              < compareDepth - t * depthPerWorld) {
+              < compareDepth + plane - t * depthPerWorld) {
             visible = 0.0;
             break;
           }
@@ -1102,18 +1112,20 @@ shader: deferred-shade
       float2 nearFar = dataTex.read(uint2(5, tilemapIndex)).xy;
 
       float ratio = clamp(2.0 * 1.4142135 / 8192.0 / max(filmFootprint / distanceToLight, 1e-8), 1e-8, 1.0);
-      int lod = int(clamp(-log2(ratio), 0.0, 5.0));
+      int start = int(clamp(-log2(ratio), 0.0, 5.0));
+      int lod = -1;
       int tilesPerSide = 32;
       int cacheKey = -1;
       float4 cacheSlot = float4(0.0);
-      for (; lod <= 5; ++lod) {
-        tilesPerSide = 32 >> lod;
+      for (int i = 0; i <= 5; ++i) {
+        int l = i <= start ? start - i : i;
+        tilesPerSide = 32 >> l;
         int2 tile = clamp(int2(uvBase * float(tilesPerSide)), int2(0), int2(tilesPerSide - 1));
-        cacheKey = face * 2048 + punctualTileOffset(tile, lod);
+        cacheKey = face * 2048 + punctualTileOffset(tile, l);
         cacheSlot = pageTableTex.read(uint2(cacheKey - face * 2048, tilemapIndex));
-        if (cacheSlot.z > 0.5) break;
+        if (cacheSlot.z > 0.5) { lod = l; break; }
       }
-      if (lod > 5) return 1.0;
+      if (lod < 0) return 1.0;
 
       float worldPerTile = 2.0 * receiverZ / float(tilesPerSide);
       float texelWorld = worldPerTile / 256.0;
@@ -2327,6 +2339,7 @@ shader: volume-scatter
               u_pointLightColorRadius3: vec4,
               u_volume: vec4,
               u_volumeRange: vec4,
+              u_volumeSunLevelBias: float,
               frameIndex: int ]
   varying:  [ texCoord: vec2 ]
 
@@ -2404,8 +2417,8 @@ shader: volume-scatter
         ? log2(length(delta) * (32.0 / (32.0 - 1.0001)) * 2.0)
         : length(delta.xy) * (32.0 / (32.0 - 2.5001)) / exp2(float(lodMin - 1)) + float(lodMin - 1);
       int levelCount = int(u_shadowLevelCount);
-      for (int i = clamp(int(ceil(lod + u_shadowLodRange.w)), lodMin, int(u_shadowLodRange.y)) - lodMin;
-           i < levelCount; ++i) {
+      int first = clamp(int(ceil(lod + u_shadowLodRange.w)), lodMin, int(u_shadowLodRange.y)) - lodMin;
+      for (int i = max(min(first + int(u_volumeSunLevelBias), levelCount - 1), 0); i < levelCount; ++i) {
         vec4 slotOffset = texelFetch(u_shadow_data, ivec2(4, 24 + i), 0);
         float radius = exp2(u_shadowLodRange.x + float(i)) * 0.5;
         vec2 tileFloat = ((lightRel.xy + slotOffset.yz) / radius * 0.5 + 0.5) * 32.0;
@@ -2439,14 +2452,13 @@ shader: volume-scatter
       int tilemapIndex = lightIdx * 6 + face;
       vec2 nearFar = texelFetch(u_shadow_data, ivec2(5, tilemapIndex), 0).xy;
       vec2 uv = clamp(fL.xy / z * 0.5 + 0.5, 0.0, 0.999999);
-      int base = 0;
-      for (int l = 0; l < startLod; ++l) base += (32 >> l) * (32 >> l);
-      for (int lod = startLod; lod <= 5; ++lod) {
+      for (int i = 0; i <= 5; ++i) {
+        int lod = i <= startLod ? startLod - i : i;
         int size = 32 >> lod;
+        int base = (4096 - (4096 >> (2 * lod))) / 3;
         vec2 tileFloat = uv * float(size);
         ivec2 tile = ivec2(tileFloat);
         vec4 page = texelFetch(u_shadow_pagetable, ivec2(base + tile.y * size + tile.x, tilemapIndex), 0);
-        base += size * size;
         if (page.z < 0.5) continue;
         float zb = max(z - 4.0 * z / float(size * 256), nearFar.x);
         float tapDepth = nearFar.y * (zb - nearFar.x) / ((nearFar.y - nearFar.x) * zb);
@@ -2510,7 +2522,7 @@ shader: volume-scatter
         vec3 aL = abs(toLight);
         float faceDistance = max(max(aL.x, aL.y), aL.z);
         float ratio = clamp(2.0 * 1.4142135 / 8192.0 / max(froxelFootprint / max(faceDistance, 1e-6), 1e-8), 1e-8, 1.0);
-        int startLod = max(int(clamp(-log2(ratio), 0.0, 5.0)) - 1, 0);
+        int startLod = int(clamp(-log2(ratio), 0.0, 5.0));
         light += colorRadius.xyz * posIntensity.w * PI * rSqr * falloff
                * phaseHG(dot(toLight / max(d, 1e-6), rayDir), u_volume.y)
                * volumePointShadow(i, -toLight, startLod)
@@ -2564,8 +2576,8 @@ shader: volume-scatter
         ? log2(length(delta) * (32.0 / (32.0 - 1.0001)) * 2.0)
         : length(delta.xy) * (32.0 / (32.0 - 2.5001)) / exp2(float(lodMin - 1)) + float(lodMin - 1);
       int levelCount = int(u.u_shadowLevelCount);
-      for (int i = clamp(int(ceil(lod + u.u_shadowLodRange.w)), lodMin, int(u.u_shadowLodRange.y)) - lodMin;
-           i < levelCount; ++i) {
+      int first = clamp(int(ceil(lod + u.u_shadowLodRange.w)), lodMin, int(u.u_shadowLodRange.y)) - lodMin;
+      for (int i = max(min(first + int(u.u_volumeSunLevelBias), levelCount - 1), 0); i < levelCount; ++i) {
         float4 slotOffset = dataTex.read(uint2(4, 24 + i));
         float radius = exp2(u.u_shadowLodRange.x + float(i)) * 0.5;
         float2 tileFloat = ((lightRel.xy + slotOffset.yz) / radius * 0.5 + 0.5) * 32.0;
@@ -2600,14 +2612,13 @@ shader: volume-scatter
       int tilemapIndex = lightIdx * 6 + face;
       float2 nearFar = dataTex.read(uint2(5, tilemapIndex)).xy;
       float2 uv = clamp(fL.xy / z * 0.5 + 0.5, 0.0, 0.999999);
-      int base = 0;
-      for (int l = 0; l < startLod; ++l) base += (32 >> l) * (32 >> l);
-      for (int lod = startLod; lod <= 5; ++lod) {
+      for (int i = 0; i <= 5; ++i) {
+        int lod = i <= startLod ? startLod - i : i;
         int size = 32 >> lod;
+        int base = (4096 - (4096 >> (2 * lod))) / 3;
         float2 tileFloat = uv * float(size);
         int2 tile = int2(tileFloat);
         float4 page = pageTableTex.read(uint2(base + tile.y * size + tile.x, tilemapIndex));
-        base += size * size;
         if (page.z < 0.5) continue;
         float zb = max(z - 4.0 * z / float(size * 256), nearFar.x);
         float tapDepth = nearFar.y * (zb - nearFar.x) / ((nearFar.y - nearFar.x) * zb);
@@ -2679,7 +2690,7 @@ shader: volume-scatter
           float3 aL = abs(toLight);
           float faceDistance = max(max(aL.x, aL.y), aL.z);
           float ratio = clamp(2.0 * 1.4142135 / 8192.0 / max(froxelFootprint / max(faceDistance, 1e-6), 1e-8), 1e-8, 1.0);
-          int startLod = max(int(clamp(-log2(ratio), 0.0, 5.0)) - 1, 0);
+          int startLod = int(clamp(-log2(ratio), 0.0, 5.0));
           light += colorRadius.xyz * posIntensity.w * PI * rSqr * falloff
                  * phaseHG(dot(toLight / max(d, 1e-6), rayDir), u_volume.y)
                  * volumePointShadow(i, -toLight, startLod, u_shadow_atlas, u_shadow_data, u_shadow_pagetable, _u)

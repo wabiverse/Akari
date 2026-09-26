@@ -68,9 +68,11 @@ public extension Akari
       public var inverseProjection: Matrix4
       /// Farthest view depth per froxel column.
       public var depthTexture: GLuint
+      /// The sun level offset for froxels.
+      public var sunLevelBias: Int
 
       public init(gridWidth: Int, gridHeight: Int, near: Float, far: Float,
-                  inverseProjection: Matrix4, depthTexture: GLuint)
+                  inverseProjection: Matrix4, depthTexture: GLuint, sunLevelBias: Int)
       {
         self.gridWidth = gridWidth
         self.gridHeight = gridHeight
@@ -78,6 +80,7 @@ public extension Akari
         self.far = far
         self.inverseProjection = inverseProjection
         self.depthTexture = depthTexture
+        self.sunLevelBias = sunLevelBias
       }
     }
 
@@ -170,8 +173,6 @@ public extension Akari
         dispatchTagUsageVolume(volume,
                                invView: invView,
                                camera: camera,
-                               screenWidth: screenWidth,
-                               screenHeight: screenHeight,
                                lights: lights,
                                lightCount: lightCount)
       }

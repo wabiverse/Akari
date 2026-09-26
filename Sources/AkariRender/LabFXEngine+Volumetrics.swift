@@ -55,6 +55,8 @@ extension Akari.LabFXEngine
     var pendingRange = SIMD4<Float>(repeating: 0)
     var uploaded = SIMD4<Float>(repeating: .nan)
     var uploadedRange = SIMD4<Float>(repeating: .nan)
+    var pendingSunLevelBias: Float = 0
+    var uploadedSunLevelBias: Float = .nan
     var boundFroxelDepth: GLuint = 0
     /// Read by the `volume-integrate` callback.
     var grid = SIMD2<Int>(0, 0)
@@ -107,12 +109,15 @@ extension Akari.LabFXEngine
       volumetrics.boundFroxelDepth = froxelVolume.depthTexture
       setSampler("u_froxelDepth", volumetrics.boundFroxelDepth)
     }
+    
+    let sunLevelBias = max(volume.sunShadowLevelBias, 0)
 
     volumetrics.pending = SIMD4(density,
                                 min(max(volume.anisotropy, -0.95), 0.95),
                                 1,
                                 volume.shadows ? 1 : 0)
     volumetrics.pendingRange = SIMD4(clipNear, far, grid.x, grid.y)
+    volumetrics.pendingSunLevelBias = Float(sunLevelBias)
     volumetrics.grid = gridSize
     volumetrics.thisFrame = true
     volumetrics.froxels = Akari.ShadowAtlas.VolumeFroxels(gridWidth: gridSize.x,
@@ -120,7 +125,8 @@ extension Akari.LabFXEngine
                                                           near: clipNear,
                                                           far: far,
                                                           inverseProjection: camera.projection.inverse(),
-                                                          depthTexture: froxelVolume.depthTexture)
+                                                          depthTexture: froxelVolume.depthTexture,
+                                                          sunLevelBias: sunLevelBias)
   }
 
   func attachVolumetrics()
@@ -150,6 +156,11 @@ extension Akari.LabFXEngine
       {
         setVector("u_volumeRange", volumetrics.pendingRange)
         volumetrics.uploadedRange = volumetrics.pendingRange
+      }
+      if volumetrics.pendingSunLevelBias != volumetrics.uploadedSunLevelBias
+      {
+        setFloat("u_volumeSunLevelBias", volumetrics.pendingSunLevelBias)
+        volumetrics.uploadedSunLevelBias = volumetrics.pendingSunLevelBias
       }
       volumetrics.scatterTexture = runtime.texture("volumeScatter", named: "volumeScatter")
       volumetrics.integratedTexture = runtime.texture("volumeIntegrated", named: "volumeIntegrated")

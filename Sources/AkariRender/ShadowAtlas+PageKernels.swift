@@ -82,6 +82,10 @@ extension Akari.ShadowAtlas
       {
         pages_free_buf[index] = shadow_page_pack(tile.page);
       }
+      else
+      {
+        atomicAdd(pages_info_buf[0], -1);
+      }
       tile.page = uvec3(7u, 7u, 127u);
       tile.is_cached = false;
       tile.is_allocated = false;
@@ -89,6 +93,11 @@ extension Akari.ShadowAtlas
     void page_cache_append(inout Tile tile, uint tile_index)
     {
       uint index = uint(atomicAdd(pages_info_buf[2], 1)) % uint(MAX_PAGE);
+      if (pages_cached_buf[index].x != 0xFFFFFFFFu)
+      {
+        page_free(tile);
+        return;
+      }
       pages_cached_buf[index] = uvec2(shadow_page_pack(tile.page), tile_index);
       tile.page = uvec3(7u, 7u, 127u);
       tile.cache_index = index;
@@ -97,10 +106,16 @@ extension Akari.ShadowAtlas
     }
     void page_cache_remove(inout Tile tile)
     {
-      uint index = tile.cache_index;
-      tile.page = shadow_page_unpack(pages_cached_buf[index].x);
+      uint index = tile.cache_index % uint(MAX_PAGE);
+      uint entry = pages_cached_buf[index].x;
       tile.cache_index = 8191u;
       tile.is_cached = false;
+      if (entry == 0xFFFFFFFFu)
+      {
+        tile.is_allocated = false;
+        return;
+      }
+      tile.page = shadow_page_unpack(entry);
       tile.is_allocated = true;
       pages_cached_buf[index] = uvec2(0xFFFFFFFFu, 0xFFFFFFFFu);
     }
@@ -175,16 +190,16 @@ extension Akari.ShadowAtlas
           if (tile.is_used && !tile.is_allocated)
           {
             int index = atomicAdd(pages_info_buf[0], -1) - 1;
-            if (index >= 0)
+            if (index >= 0 && index < MAX_PAGE)
             {
               tile.page = shadow_page_unpack(pages_free_buf[index]);
               tile.is_allocated = true;
               tile.do_update = true;
               pages_free_buf[index] = 0xFFFFFFFFu;
             }
-            else
+            else if (index < 0)
             {
-            	atomicAdd(pages_info_buf[0], 1);
+              atomicAdd(pages_info_buf[0], 1);
             }
           }
           tiles_buf[tile_index] = shadow_tile_pack(tile);
@@ -216,7 +231,7 @@ extension Akari.ShadowAtlas
     {
       uint tile_index = pages_cached_buf[page_index].y;
       Tile tile = shadow_tile_unpack(tiles_buf[tile_index]);
-      tile.cache_index = new_page_index;
+      tile.cache_index = new_page_index % uint(MAX_PAGE);
       tiles_buf[tile_index] = shadow_tile_pack(tile);
     }
     """
@@ -247,9 +262,12 @@ extension Akari.ShadowAtlas
         }
       }
       end = uint(pages_info_buf[2]);
-      for (; additional_pages > 0 && src < end; additional_pages--, src++)
+      for (; additional_pages > 0 && src < end; src++)
       {
-        free_cached_page(src % uint(MAX_PAGE));
+        uint slot = src % uint(MAX_PAGE);
+        if (pages_cached_buf[slot].x == 0xFFFFFFFFu) continue;
+        free_cached_page(slot);
+        additional_pages--;
       }
       pages_info_buf[3] = int(src);
       pages_info_buf[4] = int(end);
@@ -301,16 +319,27 @@ extension Akari.ShadowAtlas
       int index = atomic_fetch_add_explicit(&pages_info_buf[0], 1, memory_order_relaxed);
       if (index >= 0 && index < MAX_PAGE)
       {
-        pages_free_buf[index] = shadow_page_pack(tile.page); 
+        pages_free_buf[index] = shadow_page_pack(tile.page);
+      }
+      else
+      {
+        atomic_fetch_add_explicit(&pages_info_buf[0], -1, memory_order_relaxed);
       }
       tile.page = uint3(7u, 7u, 127u);
       tile.is_cached = false;
       tile.is_allocated = false;
     }
     inline void page_cache_append(thread Tile& tile, uint tile_index,
-                                  device uint2* pages_cached_buf, device atomic_int* pages_info_buf)
+                                  device uint2* pages_cached_buf,
+                                  device uint* pages_free_buf,
+                                  device atomic_int* pages_info_buf)
     {
       uint index = uint(atomic_fetch_add_explicit(&pages_info_buf[2], 1, memory_order_relaxed)) % uint(MAX_PAGE);
+      if (pages_cached_buf[index].x != 0xFFFFFFFFu)
+      {
+        page_free(tile, pages_free_buf, pages_info_buf);
+        return;
+      }
       pages_cached_buf[index] = uint2(shadow_page_pack(tile.page), tile_index);
       tile.page = uint3(7u, 7u, 127u);
       tile.cache_index = index;
@@ -319,10 +348,16 @@ extension Akari.ShadowAtlas
     }
     inline void page_cache_remove(thread Tile& tile, device uint2* pages_cached_buf)
     {
-      uint index = tile.cache_index;
-      tile.page = shadow_page_unpack(pages_cached_buf[index].x);
+      uint index = tile.cache_index % uint(MAX_PAGE);
+      uint entry = pages_cached_buf[index].x;
       tile.cache_index = 8191u;
       tile.is_cached = false;
+      if (entry == 0xFFFFFFFFu)
+      {
+        tile.is_allocated = false;
+        return;
+      }
+      tile.page = shadow_page_unpack(entry);
       tile.is_allocated = true;
       pages_cached_buf[index] = uint2(0xFFFFFFFFu, 0xFFFFFFFFu);
     }
@@ -365,7 +400,13 @@ extension Akari.ShadowAtlas
           }
           else
           {
-            if (tile.is_allocated) { page_cache_append(tile, uint(tile_index), pages_cached_buf, pages_info_buf); }
+            if (tile.is_allocated)
+            {
+              page_cache_append(tile, uint(tile_index),
+                                pages_cached_buf,
+                                pages_free_buf,
+                                pages_info_buf);
+            }
           }
           tiles_buf[tile_index] = shadow_tile_pack(tile);
         }
@@ -396,16 +437,16 @@ extension Akari.ShadowAtlas
           if (tile.is_used && !tile.is_allocated)
           {
             int index = atomic_fetch_add_explicit(&pages_info_buf[0], -1, memory_order_relaxed) - 1;
-            if (index >= 0)
+            if (index >= 0 && index < MAX_PAGE)
             {
               tile.page = shadow_page_unpack(pages_free_buf[index]);
               tile.is_allocated = true;
               tile.do_update = true;
               pages_free_buf[index] = 0xFFFFFFFFu;
             }
-            else
+            else if (index < 0)
             {
-            	atomic_fetch_add_explicit(&pages_info_buf[0], 1, memory_order_relaxed);
+              atomic_fetch_add_explicit(&pages_info_buf[0], 1, memory_order_relaxed);
             }
           }
           tiles_buf[tile_index] = shadow_tile_pack(tile);
@@ -439,7 +480,7 @@ extension Akari.ShadowAtlas
     {
       uint tile_index = pages_cached_buf[page_index].y;
       Tile tile = shadow_tile_unpack(tiles_buf[tile_index]);
-      tile.cache_index = new_page_index;
+      tile.cache_index = new_page_index % uint(MAX_PAGE);
       tiles_buf[tile_index] = shadow_tile_pack(tile);
     }
     """
@@ -473,9 +514,12 @@ extension Akari.ShadowAtlas
         }
       }
       end = uint(atomic_load_explicit(&pages_info_buf[2], memory_order_relaxed));
-      for (; additional_pages > 0 && src < end; additional_pages--, src++)
+      for (; additional_pages > 0 && src < end; src++)
       {
-        free_cached_page(src % uint(MAX_PAGE), tiles_buf, pages_cached_buf, pages_free_buf, pages_info_buf);
+        uint slot = src % uint(MAX_PAGE);
+        if (pages_cached_buf[slot].x == 0xFFFFFFFFu) continue;
+        free_cached_page(slot, tiles_buf, pages_cached_buf, pages_free_buf, pages_info_buf);
+        additional_pages--;
       }
       atomic_store_explicit(&pages_info_buf[3], int(src), memory_order_relaxed);
       atomic_store_explicit(&pages_info_buf[4], int(end), memory_order_relaxed);

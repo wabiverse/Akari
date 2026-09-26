@@ -134,8 +134,6 @@ extension Akari.ShadowAtlas
   func dispatchTagUsageVolume(_ volume: VolumeFroxels,
                               invView: Akari.Matrix4,
                               camera: Akari.Camera,
-                              screenWidth: Int,
-                              screenHeight: Int,
                               lights: [Akari.Lux.PointLight],
                               lightCount: Int)
   {
@@ -174,8 +172,8 @@ extension Akari.ShadowAtlas
     setUniform(kernel, "u_lodRange", GL_FLOAT_VEC4,
                SIMD4<Float>(Float(sun.lodMin),
                             Float(sun.lodMax),
-                            Float(screenWidth),
-                            Float(screenHeight)))
+                            Float(max(volume.sunLevelBias, 0)),
+                            0))
 
     gl.setComputeShaderSampler(kernel, index: 0, texture: volume.depthTexture, samplerIndex: 0)
     gl.setComputeShaderSampler(kernel, index: 1, texture: data, samplerIndex: 0)

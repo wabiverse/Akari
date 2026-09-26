@@ -49,15 +49,22 @@ public struct VolumeSettings: Sendable
   public var maxDistance: Float = 100
   /// Attenuate the light reaching each froxel by the fog between it and the light.
   public var shadows = false
+  /// Coarser sun shadow levels for the fog.
+  public var sunShadowLevelBias: Int = 2
 
   public init()
   {}
 
-  public init(density: Float, anisotropy: Float = 0.3, maxDistance: Float = 100, shadows: Bool = false)
+  public init(density: Float,
+              anisotropy: Float = 0.3,
+              maxDistance: Float = 100,
+              shadows: Bool = false,
+              sunShadowLevelBias: Int = 2)
   {
     self.density = density
     self.anisotropy = anisotropy
     self.maxDistance = maxDistance
     self.shadows = shadows
+    self.sunShadowLevelBias = sunShadowLevelBias
   }
 }
