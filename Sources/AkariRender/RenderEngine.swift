@@ -63,11 +63,6 @@ public extension Akari
     private var frameIndex: UInt64 = 0
     private var lastStatsRevision: UInt64 = 0
     private var lastCamera: (view: [Float], projection: [Float])?
-    private var statsWindowStart: UInt64 = 0
-    private var statsWindowFrames = 0
-
-    /// Live render loop measurements.
-    public private(set) var stats = RenderStats()
 
     public init(settings: RenderSettings = RenderSettings())
     {
@@ -164,22 +159,6 @@ public extension Akari
       }
 
       frameIndex &+= 1
-      updateStats()
-    }
-
-    /// Averages the frame rate over half second windows.
-    private func updateStats()
-    {
-      let now = DispatchTime.now().uptimeNanoseconds
-      if statsWindowStart == 0 { statsWindowStart = now }
-      statsWindowFrames += 1
-
-      let elapsed = now - statsWindowStart
-      guard elapsed >= 500_000_000 else { return }
-
-      stats.framesPerSecond = Double(statsWindowFrames) * 1e9 / Double(elapsed)
-      statsWindowStart = now
-      statsWindowFrames = 0
     }
 
     private static func halton(_ index: UInt64, _ base: UInt64) -> Float

@@ -55,6 +55,9 @@ struct AkariDemo: App
 
   let hydra: Hydra.RenderEngine
   let engine: Akari.RenderEngine
+  
+  let driver: any Akari.HydraFrameDriver
+  @State var stats = Akari.RenderStats()
 
   init()
   {
@@ -66,10 +69,12 @@ struct AkariDemo: App
     registerAkariRenderer(engine: engine)
 
     let stage = AppUtils.openOrCreateStage()
+    driver = Akari.FrameDriver()
 
     engine.labfx.setStageUpAxis(isZUp: UsdGeom.getUpAxis(for: stage) == .z)
 
     hydra = Hydra.RenderEngine(stage: stage, rendererPluginId: Tf.Token(Akari.rendererPluginId))
+    hydra.frameDelegate = driver
 
     print("[akari] first light - renderer = \(Akari.rendererPluginId)")
   }
@@ -80,8 +85,19 @@ struct AkariDemo: App
     {
       Hydra.Viewport(engine: hydra)
         .frame(minWidth: 900, minHeight: 600)
-        .overlay(alignment: .topLeading) { HUD(engine: engine) }
+        .overlay(alignment: .topLeading) { HUD(engine: engine, stats: $stats) }
         .environment(\.colorScheme, .dark)
+        .task
+        {
+          await hydra.waitUntilSceneReady()
+
+          while !Task.isCancelled
+          {
+            stats = driver.snapshot()
+
+            try? await Task.sleep(for: .milliseconds(120))
+          }
+        }
     }
   }
 }
