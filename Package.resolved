@@ -1,5 +1,5 @@
 {
-  "originHash" : "ce206c6700e3678ec9b57f2df5891409d66a3507e04fbf151168daa01cb80d64",
+  "originHash" : "94f3b1fa6aa665e2465b676f8e32403c1f1a66d47674564839b1403d0ca4205a",
   "pins" : [
     {
       "identity" : "imgui",
@@ -152,15 +152,6 @@
       "state" : {
         "revision" : "4d61b68c2b59ef31dabd9f3ab3f0a5bf60ea62e0",
         "version" : "0.1.6"
-      }
-    },
-    {
-      "identity" : "swiftusd",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/SwiftUsd.git",
-      "state" : {
-        "revision" : "203b5eb270db1616c3c129c8fe2a07ef3ad7f83a",
-        "version" : "8.1.0"
       }
     },
     {

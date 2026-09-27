@@ -61,6 +61,7 @@ let package = Package(
         .target(name: "AkariCore"),
         .target(name: "HdAkari"),
         .product(name: "OpenUSDKit", package: "swift-usd"),
+        .product(name: "HydraKit", package: "swift-usd"),
         // TODO: support externally provided openusd builds.
         // .target(name: "OpenUSD"),
         .product(name: "LatticeCore", package: "Lattice"),
