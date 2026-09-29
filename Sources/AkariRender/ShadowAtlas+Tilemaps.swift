@@ -172,10 +172,27 @@ extension Akari.ShadowAtlas
                        groupsZ: 1)
   }
 
+  /// What a scene change left stale, uploading the moved casters boxes to this frame.
+  func findCasterRedraw(casterBounds: [Float], casterKeys: [UInt64]) -> CasterRedraw
+  {
+    guard
+      frame.movedBoxes != 0,
+      let moved = casterMotion.movedBoxes(bounds: casterBounds, keys: casterKeys, limit: Self.maxMovedCasters)
+    else { return .all }
+    guard !moved.isEmpty else { return .boxes(0) }
+
+    withMappedBuffer(frame.movedBoxes, as: Float.self)
+    { ptr in
+      moved.withUnsafeBufferPointer { ptr.update(from: $0.baseAddress!, count: $0.count) }
+    }
+    return .boxes(moved.count / 6)
+  }
+
   func dispatchTileMapMaintenance(casterBounds: [Float], slotCount: Int,
                                   lightZ: SIMD3<Float>,
                                   cameraWorld: SIMD3<Float>,
-                                  castersMoved: Bool)
+                                  castersMoved: Bool,
+                                  redraw: CasterRedraw)
   {
     guard
       kernels.clipmapClear != 0,
@@ -221,20 +238,21 @@ extension Akari.ShadowAtlas
                          groupsZ: 1)
     }
 
-    if kernels.tagUpdate != 0, castersMoved
+    // a full redraw already shifted every tile stale.
+    if kernels.tagUpdate != 0, case .boxes(let movedCount) = redraw, movedCount > 0
     {
       let kernel = kernels.tagUpdate
       let r = sun.rotation
-      setUniform(kernel, "u_casterCount", GL_INT, Int32(casterCount))
+      setUniform(kernel, "u_casterCount", GL_INT, Int32(movedCount))
       setUniform(kernel, "u_slotCount", GL_INT, Int32(slotCount))
       setUniform(kernel, "u_lightX", GLenum(GL_FLOAT_VEC3), SIMD3<Float>(r[0, 0], r[1, 0], r[2, 0]))
       setUniform(kernel, "u_lightY", GLenum(GL_FLOAT_VEC3), SIMD3<Float>(r[0, 1], r[1, 1], r[2, 1]))
       setUniform(kernel, "u_cameraWorld", GLenum(GL_FLOAT_VEC3), cameraWorld)
-      gl.setComputeShaderBuffer(kernel, binding: 0, buffer: casters.buffer)
+      gl.setComputeShaderBuffer(kernel, binding: 0, buffer: frame.movedBoxes)
       gl.setComputeShaderBuffer(kernel, binding: 1, buffer: frame.levelParams)
       gl.setComputeShaderBuffer(kernel, binding: 2, buffer: buffers.tiles)
       gl.dispatchCompute(kernel,
-                         groupsX: GLuint((casterCount * slotCount + 63) / 64),
+                         groupsX: GLuint((movedCount * slotCount + 63) / 64),
                          groupsY: 1,
                          groupsZ: 1)
     }

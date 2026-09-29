@@ -129,6 +129,12 @@ public extension Akari
     var punctualHistory = PunctualHistory()
     var lastSceneRevision: UInt64 = .max
     var lastRenderSceneRevision: UInt64 = .max
+    var casterMotion = CasterMotion()
+    /// Decided by `markPageUsage` for `casterRedrawRevision`, read by `render`.
+    var casterRedraw = CasterRedraw.none
+    var casterRedrawRevision: UInt64 = .max
+    /// Directional depth ranges follow the scene bounds, a change restales every page.
+    var lastSceneBounds: [SIMD3<Float>] = []
 
     public init()
     {}
@@ -146,6 +152,8 @@ public extension Akari
                               settings _: ShadowSettings,
                               lights: [Akari.Lux.PointLight],
                               sceneRevision: UInt64,
+                              casterBounds: [Float],
+                              casterKeys: [UInt64],
                               volume: VolumeFroxels? = nil)
     {
       guard
@@ -155,17 +163,28 @@ public extension Akari
         ensureResources()
       else { return }
 
+      ringCursor = (ringCursor + 1) % Self.bufferRing
+      let lightCount = min(lights.count, Self.maxPunctualLights)
+
       var punctualDirty = punctualHistory.pendingDirty
       punctualHistory.pendingDirty = 0
 
-      if sceneRevision != lastSceneRevision { punctualDirty = -1 }
+      let sceneChanged = sceneRevision != lastSceneRevision
       lastSceneRevision = sceneRevision
+      if sceneChanged
+      {
+        casterRedraw = findCasterRedraw(casterBounds: casterBounds, casterKeys: casterKeys)
+        casterRedrawRevision = sceneRevision
+        if casterRedraw == .all || kernels.tagUpdatePunctual == 0 { punctualDirty = -1 }
+      }
 
-      ringCursor = (ringCursor + 1) % Self.bufferRing
       dispatchBeginFrame(dirty: punctualDirty)
+      if sceneChanged, case .boxes(let count) = casterRedraw
+      {
+        dispatchTagUpdatePunctual(boxCount: count, lights: lights, lightCount: lightCount)
+      }
 
       let invView = camera.view.inverse()
-      let lightCount = min(lights.count, Self.maxPunctualLights)
       let sunActive = !directionalHistory.slots.isEmpty
 
       if let volume, sunActive || lightCount > 0
@@ -213,6 +232,13 @@ public extension Akari
 
       let castersMoved = sceneRevision != lastRenderSceneRevision
       lastRenderSceneRevision = sceneRevision
+      var redraw = castersMoved ? (casterRedrawRevision == sceneRevision ? casterRedraw : .all) : .none
+      let bounds = [sceneBounds.min, sceneBounds.max]
+      if bounds != lastSceneBounds
+      {
+        redraw = .all
+        lastSceneBounds = bounds
+      }
 
       let corners = Self.sceneCorners(sceneBounds)
       let technique = Self.resolveTechnique(camera: camera)
@@ -262,7 +288,7 @@ public extension Akari
                        inverseView: inverseView)
       punctualHistory.update(punctualFaces)
       directionalHistory.updateShifts(directional, slots: directionalSlots)
-      dispatchTilemapShift(forceFullShift: castersMoved)
+      dispatchTilemapShift(forceFullShift: redraw == .all)
 
       uploadLevelParams(directional: directional, directionalSlots: directionalSlots,
                         inverseView: inverseView)
@@ -272,13 +298,14 @@ public extension Akari
                                  cameraWorld: SIMD3(inverseView[3, 0],
                                                     inverseView[3, 1],
                                                     inverseView[3, 2]),
-                                 castersMoved: castersMoved)
+                                 castersMoved: castersMoved,
+                                 redraw: redraw)
       dispatchPageTable()
       dispatchSelectViews()
 
-      let forceDirectional = sunChanged || castersMoved
+      let forceDirectional = sunChanged || redraw.isNeeded
       let forcePunctual = camera.view.simd != directionalHistory.view.simd || punctualHistory.invalidated
-                          || castersMoved
+                          || redraw.isNeeded
       punctualHistory.invalidated = punctualHistory.pendingDirty != 0
 
       let drawn = drawViews(capture: capture, directional: directional,

@@ -264,6 +264,100 @@ extension Akari.ShadowAtlas
     }
     """
 
+  /// Marks the point light tiles a moved box covers in every LOD, one thread
+  /// per box, light and cube face. A box straddling a face's plane covers all of it.
+  static let tagUpdatePunctualBody = """
+      if (int(gid) >= u_boxCount * u_lightCount * 6) return;
+      int face = int(gid) % 6;
+      int light = (int(gid) / 6) % u_lightCount;
+      int box = int(gid) / (6 * u_lightCount);
+      vec3 lo = vec3(boxes[box * 6 + 0], boxes[box * 6 + 1], boxes[box * 6 + 2]);
+      vec3 hi = vec3(boxes[box * 6 + 3], boxes[box * 6 + 4], boxes[box * 6 + 5]);
+      vec3 center = lightPosition(light);
+
+      vec2 uvMin = vec2(1e30), uvMax = vec2(-1e30);
+      bool front = false, behind = false;
+      for (int c = 0; c < 8; ++c)
+      {
+        vec3 p = vec3((c & 1) != 0 ? hi.x : lo.x,
+                      (c & 2) != 0 ? hi.y : lo.y,
+                      (c & 4) != 0 ? hi.z : lo.z);
+        vec3 fL = akpFaceLocal(face, p - center);
+        float d = -fL.z;
+        if (d <= 1e-4) { behind = true; continue; }
+        front = true;
+        vec2 uv = fL.xy / d * 0.5 + 0.5;
+        uvMin = min(uvMin, uv);
+        uvMax = max(uvMax, uv);
+      }
+      if (!front) return;
+      if (behind) { uvMin = vec2(0.0); uvMax = vec2(1.0); }
+      if (uvMax.x < 0.0 || uvMax.y < 0.0 || uvMin.x > 1.0 || uvMin.y > 1.0) return;
+      uvMin = clamp(uvMin, vec2(0.0), vec2(1.0));
+      uvMax = clamp(uvMax, vec2(0.0), vec2(1.0));
+
+      int base = (light * 6 + face) * \(tilesPerTilemap);
+      for (int lod = 0; lod <= \(lodMax); ++lod)
+      {
+        int size = \(tilemapRes) >> lod;
+        ivec2 t0 = max(ivec2(floor(uvMin * float(size))) - ivec2(1), ivec2(0));
+        ivec2 t1 = min(ivec2(floor(uvMax * float(size))) + ivec2(1), ivec2(size - 1));
+        for (int y = t0.y; y <= t1.y; ++y)
+        {
+          for (int x = t0.x; x <= t1.x; ++x)
+          {
+            TAG_TILE(base + akpTileOffset(ivec2(x, y), lod));
+          }
+        }
+      }
+    """
+
+  static let tagUpdatePunctualGLSL = """
+    #version 430
+    layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+    layout(std430, binding = 0) buffer Boxes { float boxes[]; };
+    layout(std430, binding = 1) buffer Tiles { uint tiles_buf[]; };
+    uniform int u_boxCount;
+    uniform int u_lightCount;
+    uniform vec4 u_lightPos0;
+    uniform vec4 u_lightPos1;
+    uniform vec4 u_lightPos2;
+    uniform vec4 u_lightPos3;
+    \(tagUsagePunctualCommon)
+    vec3 lightPosition(int i)
+    {
+      return (i == 0 ? u_lightPos0 : i == 1 ? u_lightPos1 : i == 2 ? u_lightPos2 : u_lightPos3).xyz;
+    }
+    #define TAG_TILE(i) atomicOr(tiles_buf[i], \(flagDoUpdate)u)
+    void main()
+    {
+      uint gid = gl_GlobalInvocationID.x;
+      \(tagUpdatePunctualBody)
+    }
+    """
+
+  static let tagUpdatePunctualMSL = """
+    #include <metal_stdlib>
+    using namespace metal;
+    #define vec2 float2
+    #define vec3 float3
+    #define ivec2 int2
+    \(tagUsagePunctualMSLCommon)
+    struct U { int boxCount; int lightCount; float4 lightPos[4]; };
+    #define TAG_TILE(i) atomic_fetch_or_explicit(&tiles_buf[i], \(flagDoUpdate)u, memory_order_relaxed)
+    #define lightPosition(i) u.lightPos[i].xyz
+    kernel void compute_main(constant U& u [[buffer(0)]],
+                             device const float* boxes [[buffer(1)]],
+                             device atomic_uint* tiles_buf [[buffer(2)]],
+                             uint3 gid3 [[thread_position_in_grid]])
+    {
+      uint gid = gid3.x;
+      int u_boxCount = u.boxCount;
+      int u_lightCount = u.lightCount;
+      \(tagUpdatePunctualBody)
+    }
+    """
+
   /// LOD update tag pushed down the mip chain.
   static let tagPropagateBody = """
       int slot = int(gid_z);

@@ -628,16 +628,6 @@ shader: deferred-shade
       return nearFar.x * nearFar.y / (nearFar.y - depth01 * (nearFar.y - nearFar.x));
     }
 
-    vec3 punctualFaceToLight(int face, vec3 v)
-    {
-      if (face == 1) return vec3(-v.z, -v.x, v.y);
-      if (face == 2) return vec3(v.z, v.x, v.y);
-      if (face == 3) return vec3(v.x, -v.z, v.y);
-      if (face == 4) return vec3(-v.x, v.z, v.y);
-      if (face == 5) return vec3(v.x, -v.y, -v.z);
-      return v;
-    }
-
     vec2 punctualTap(vec3 lT, int lightIdx, int lod, vec2 nearFar, float biasWorld,
                      inout int cacheKey, inout vec4 cacheSlot)
     {
@@ -662,7 +652,7 @@ shader: deferred-shade
       return vec2(v == 0xFFFFFFFFu ? 1.0 : uintBitsToFloat(v), tapDepth);
     }
 
-    float punctualShadow(int lightIdx, vec3 worldPos, vec3 lightPos, float lightRadius, float NoL,
+    float punctualShadow(int lightIdx, vec3 worldPos, vec3 N, vec3 lightPos, float lightRadius, float NoL,
                          float noise, float filmFootprint)
     {
       if (u_punctualShadowEnabled < 0.5) return 1.0;
@@ -697,6 +687,9 @@ shader: deferred-shade
       float tanTheta = sqrt(max(1.0 - NoL * NoL, 0.0)) / max(NoL, 0.05);
       float biasWorld = texelWorld * (1.0 + min(tanTheta, 4.0));
 
+      vec3 tangent = normalize(cross(N, abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+      vec3 bitangent = cross(N, tangent);
+
       float blockerSum = 0.0;
       int blockers = 0;
       float searchRadius = clamp(lightRadius, texelWorld, worldPerTile);
@@ -704,7 +697,7 @@ shader: deferred-shade
       for (int i = 0; i < 8; ++i) {
         vec2 offset = spiral * sqrt((float(i) + 0.5) / 8.0) * searchRadius;
         spiral = vec2(spiral.x * -0.73736887 - spiral.y * 0.67549029, spiral.x * 0.67549029 + spiral.y * -0.73736887);
-        vec2 t = punctualTap(lL + punctualFaceToLight(face, vec3(offset, 0.0)), lightIdx, lod, nearFar, biasWorld,
+        vec2 t = punctualTap(lL + tangent * offset.x + bitangent * offset.y, lightIdx, lod, nearFar, biasWorld,
                              cacheKey, cacheSlot);
         if (t.x >= 0.0 && t.x < t.y) { blockerSum += punctualLinearDepth(t.x, nearFar); blockers++; }
       }
@@ -721,7 +714,7 @@ shader: deferred-shade
       for (int i = 0; i < 8; ++i) {
         vec2 offset = spiral * sqrt((float(i) + 0.5) / 8.0) * filterRadius;
         spiral = vec2(spiral.x * -0.73736887 - spiral.y * 0.67549029, spiral.x * 0.67549029 + spiral.y * -0.73736887);
-        vec2 t = punctualTap(lL + punctualFaceToLight(face, vec3(offset, 0.0)), lightIdx, lod, nearFar, biasWorld,
+        vec2 t = punctualTap(lL + tangent * offset.x + bitangent * offset.y, lightIdx, lod, nearFar, biasWorld,
                              cacheKey, cacheSlot);
         if (t.x < 0.0) continue;
         lit += t.y <= t.x ? 1.0 : 0.0;
@@ -846,7 +839,7 @@ shader: deferred-shade
         vec3 Fr = D * Vis * F * (PI * sinSigmaSqr * NoLs * normalization);
         vec3 Fd = (kD * diffuseColor / PI) * irradiance;
 
-        float shadow = punctualShadow(i, worldPos, posIntensity.xyz, colorRadius.w, NoL, noise, filmFootprint);
+        float shadow = punctualShadow(i, worldPos, N, posIntensity.xyz, colorRadius.w, NoL, noise, filmFootprint);
         color += (Fd + Fr) * colorRadius.xyz * posIntensity.w * shadow;
       }
       return color;
@@ -1196,16 +1189,6 @@ shader: deferred-shade
       return nearFar.x * nearFar.y / (nearFar.y - depth01 * (nearFar.y - nearFar.x));
     }
 
-    float3 punctualFaceToLight(int face, float3 v)
-    {
-      if (face == 1) return float3(-v.z, -v.x, v.y);
-      if (face == 2) return float3(v.z, v.x, v.y);
-      if (face == 3) return float3(v.x, -v.z, v.y);
-      if (face == 4) return float3(-v.x, v.z, v.y);
-      if (face == 5) return float3(v.x, -v.y, -v.z);
-      return v;
-    }
-
     float2 punctualTap(float3 lT, int lightIdx, int lod, float2 nearFar, float biasWorld,
                        thread int& cacheKey, thread float4& cacheSlot,
                        texture2d_array<uint> atlasTex, texture2d<float> pageTableTex)
@@ -1231,7 +1214,7 @@ shader: deferred-shade
       return float2(v == 0xFFFFFFFFu ? 1.0 : as_type<float>(v), tapDepth);
     }
 
-    float punctualShadow(int lightIdx, float3 worldPos, float3 lightPos, float lightRadius, float NoL,
+    float punctualShadow(int lightIdx, float3 worldPos, float3 N, float3 lightPos, float lightRadius, float NoL,
                          float noise, float filmFootprint,
                          texture2d_array<uint> atlasTex, sampler atlasSmp,
                          texture2d<float> dataTex, texture2d<float> pageTableTex,
@@ -1269,6 +1252,10 @@ shader: deferred-shade
       float tanTheta = sqrt(max(1.0 - NoL * NoL, 0.0)) / max(NoL, 0.05);
       float biasWorld = texelWorld * (1.0 + min(tanTheta, 4.0));
 
+
+      float3 tangent = normalize(cross(N, abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
+      float3 bitangent = cross(N, tangent);
+
       float blockerSum = 0.0;
       int blockers = 0;
       float searchRadius = clamp(lightRadius, texelWorld, worldPerTile);
@@ -1276,7 +1263,7 @@ shader: deferred-shade
       for (int i = 0; i < 8; ++i) {
         float2 offset = spiral * sqrt((float(i) + 0.5) / 8.0) * searchRadius;
         spiral = float2(spiral.x * -0.73736887 - spiral.y * 0.67549029, spiral.x * 0.67549029 + spiral.y * -0.73736887);
-        float2 t = punctualTap(lL + punctualFaceToLight(face, float3(offset, 0.0)), lightIdx, lod, nearFar, biasWorld,
+        float2 t = punctualTap(lL + tangent * offset.x + bitangent * offset.y, lightIdx, lod, nearFar, biasWorld,
                                cacheKey, cacheSlot, atlasTex, pageTableTex);
         if (t.x >= 0.0 && t.x < t.y) { blockerSum += punctualLinearDepth(t.x, nearFar); blockers++; }
       }
@@ -1293,7 +1280,7 @@ shader: deferred-shade
       for (int i = 0; i < 8; ++i) {
         float2 offset = spiral * sqrt((float(i) + 0.5) / 8.0) * filterRadius;
         spiral = float2(spiral.x * -0.73736887 - spiral.y * 0.67549029, spiral.x * 0.67549029 + spiral.y * -0.73736887);
-        float2 t = punctualTap(lL + punctualFaceToLight(face, float3(offset, 0.0)), lightIdx, lod, nearFar, biasWorld,
+        float2 t = punctualTap(lL + tangent * offset.x + bitangent * offset.y, lightIdx, lod, nearFar, biasWorld,
                                cacheKey, cacheSlot, atlasTex, pageTableTex);
         if (t.x < 0.0) continue;
         lit += t.y <= t.x ? 1.0 : 0.0;
@@ -1506,7 +1493,7 @@ shader: deferred-shade
         float3 Fr = D * Vis * F * (PI * sinSigmaSqr * NoLs * normalization);
         float3 Fd = (kD * diffuseColor / PI) * irradiance;
 
-        float shadow = punctualShadow(i, worldPos, posIntensity.xyz, colorRadius.w, NoL, noise, filmFootprint,
+        float shadow = punctualShadow(i, worldPos, N, posIntensity.xyz, colorRadius.w, NoL, noise, filmFootprint,
                                       punctualAtlas, punctualAtlasSmp, punctualData, punctualPageTable, u);
         color += (Fd + Fr) * colorRadius.xyz * posIntensity.w * shadow;
       }
@@ -2642,6 +2629,7 @@ shader: volume-scatter
               u_shadow_data: sampler2d,
               u_shadow_pagetable: sampler2d,
               u_froxelDepth: sampler2d,
+              u_froxelHistory: sampler2d,
               u_view: mat4 <- auto-view-matrix,
               u_proj: mat4,
               u_invProj: mat4,
@@ -2667,6 +2655,8 @@ shader: volume-scatter
               u_volume: vec4,
               u_volumeRange: vec4,
               u_volumeSunLevelBias: float,
+              u_volumePrevViewProj: mat4,
+              u_volumeHistory: float,
               frameIndex: int ]
   varying:  [ texCoord: vec2 ]
 
@@ -2797,6 +2787,33 @@ shader: volume-scatter
       return 1.0;
     }
 
+    vec3 froxelEye(vec2 uv, float t)
+    {
+      vec4 e = u_invProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+      vec3 dirEye = e.xyz / e.w;
+      return dirEye * (mix(u_volumeRange.x, u_volumeRange.y, t * t) / max(-dirEye.z, 1e-6));
+    }
+
+    vec4 volumeHistory(vec3 worldPos, ivec2 grid)
+    {
+      vec4 c = u_volumePrevViewProj * vec4(worldPos, 1.0);
+      if (u_volumeHistory < 0.5 || c.w <= u_volumeRange.x) return vec4(0.0);
+      vec3 f = vec3((c.xy / c.w * 0.5 + 0.5) * vec2(grid),
+                    sqrt((c.w - u_volumeRange.x) / (u_volumeRange.y - u_volumeRange.x)) * 64.0) - 0.5;
+      if (any(lessThan(f, vec3(-0.5))) || any(greaterThan(f, vec3(vec2(grid), 64.0) - 0.5))) return vec4(0.0);
+      ivec3 i0 = ivec3(floor(f));
+      vec3 w = f - vec3(i0);
+      vec4 sum = vec4(0.0);
+      for (int k = 0; k < 8; ++k) {
+        ivec3 o = ivec3(k & 1, (k >> 1) & 1, k >> 2);
+        ivec3 p = clamp(i0 + o, ivec3(0), ivec3(grid - 1, 63));
+        vec4 v = texelFetch(u_froxelHistory, ivec2(p.z % 8, p.z / 8) * grid + p.xy, 0);
+        vec3 ow = mix(1.0 - w, w, vec3(o));
+        sum += vec4(v.rgb, 1.0) * (ow.x * ow.y * ow.z * step(v.a, 1.0));
+      }
+      return sum;
+    }
+
     void main()
     {
       ivec2 a = ivec2(gl_FragCoord.xy);
@@ -2810,16 +2827,13 @@ shader: volume-scatter
       ivec2 froxel = a - sliceXY * grid;
       float t0 = float(s) / 64.0, t1 = float(s + 1) / 64.0;
       if (mix(u_volumeRange.x, u_volumeRange.y, t0 * t0) > texelFetch(u_froxelDepth, froxel, 0).x) {
-        o_volumeScatter_texture = vec4(0.0, 0.0, 0.0, 1.0);
+        o_volumeScatter_texture = vec4(0.0, 0.0, 0.0, 2.0);
         return;
       }
-      vec3 jitter = fract(float(frameIndex % 64) * vec3(0.7548777, 0.5698403, 0.6180340));
-      vec2 uv = (vec2(froxel) + jitter.xy) / vec2(grid);
-      float t = (float(s) + jitter.z) / 64.0;
-      float depth = mix(u_volumeRange.x, u_volumeRange.y, t * t);
-      vec4 e = u_invProj * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
-      vec3 dirEye = e.xyz / e.w;
-      vec3 posEye = dirEye * (depth / max(-dirEye.z, 1e-6));
+      float noise = fract(52.9829189 * fract(dot(vec2(a), vec2(0.06711056, 0.00583715))));
+      vec3 jitter = fract(float(frameIndex % 64) * vec3(0.7548777, 0.5698403, 0.6180340) + noise);
+      vec3 posEye = froxelEye((vec2(froxel) + jitter.xy) / vec2(grid), (float(s) + jitter.z) / 64.0);
+      float depth = -posEye.z;
       mat3 invRot = transpose(mat3(u_view));
       vec3 worldPos = invRot * (posEye - u_view[3].xyz);
       vec3 rayDir = normalize(invRot * posEye);
@@ -2845,7 +2859,8 @@ shader: volume-scatter
         float dSqr = dot(toLight, toLight);
         float d = sqrt(dSqr);
         float rSqr = colorRadius.w * colorRadius.w;
-        float falloff = 2.0 / max(dSqr + rSqr + d * sqrt(dSqr + rSqr), 1e-12);
+        float spread = max(rSqr, 0.25 * froxelFootprint * froxelFootprint);
+        float falloff = 2.0 / max(dSqr + spread + d * sqrt(dSqr + spread), 1e-12);
         vec3 aL = abs(toLight);
         float faceDistance = max(max(aL.x, aL.y), aL.z);
         float ratio = clamp(2.0 * 1.4142135 / 8192.0 / max(froxelFootprint / max(faceDistance, 1e-6), 1e-8), 1e-8, 1.0);
@@ -2855,9 +2870,13 @@ shader: volume-scatter
                * volumePointShadow(i, -toLight, startLod)
                * volumeTransmittance(d);
       }
-      float stretch = length(dirEye) / max(-dirEye.z, 1e-6) * (u_volumeRange.y - u_volumeRange.x);
+      vec3 centerEye = froxelEye((vec2(froxel) + 0.5) / vec2(grid), (float(s) + 0.5) / 64.0);
+      vec4 history = volumeHistory(invRot * (centerEye - u_view[3].xyz), grid);
+      light = mix(history.rgb / max(history.a, 1e-4), light, mix(1.0, 0.1, history.a));
+
+      float stretch = length(posEye) / depth * (u_volumeRange.y - u_volumeRange.x);
       float slab = exp(-u_volume.x * (t1 * t1 - t0 * t0) * stretch);
-      o_volumeScatter_texture = vec4(light * (1.0 - slab), slab);
+      o_volumeScatter_texture = vec4(light, slab);
     }
     ```
 
@@ -2957,6 +2976,33 @@ shader: volume-scatter
       return 1.0;
     }
 
+    float3 froxelEye(float2 uv, float t, constant Uniforms& u)
+    {
+      float4 e = u.u_invProj * float4(uv * 2.0 - 1.0, 1.0, 1.0);
+      float3 dirEye = e.xyz / e.w;
+      return dirEye * (mix(u.u_volumeRange.x, u.u_volumeRange.y, t * t) / max(-dirEye.z, 1e-6));
+    }
+
+    float4 volumeHistory(float3 worldPos, int2 grid, texture2d<float> scatterTex, constant Uniforms& u)
+    {
+      float4 c = u.u_volumePrevViewProj * float4(worldPos, 1.0);
+      if (u.u_volumeHistory < 0.5 || c.w <= u.u_volumeRange.x) return float4(0.0);
+      float3 f = float3((c.xy / c.w * 0.5 + 0.5) * float2(grid),
+                        sqrt((c.w - u.u_volumeRange.x) / (u.u_volumeRange.y - u.u_volumeRange.x)) * 64.0) - 0.5;
+      if (any(f < float3(-0.5)) || any(f > float3(float2(grid), 64.0) - 0.5)) return float4(0.0);
+      int3 i0 = int3(floor(f));
+      float3 w = f - float3(i0);
+      float4 sum = float4(0.0);
+      for (int k = 0; k < 8; ++k) {
+        int3 o = int3(k & 1, (k >> 1) & 1, k >> 2);
+        int3 p = clamp(i0 + o, int3(0), int3(grid - 1, 63));
+        float4 v = scatterTex.read(uint2(int2(p.z % 8, p.z / 8) * grid + p.xy));
+        float3 ow = mix(1.0 - w, w, float3(o));
+        sum += float4(v.rgb, 1.0) * (ow.x * ow.y * ow.z * step(v.a, 1.0));
+      }
+      return sum;
+    }
+
     //@main
     {
       int2 a = int2(gl_FragCoord.xy);
@@ -2968,15 +3014,12 @@ shader: volume-scatter
       if (u_volume.z < 0.5 || sliceXY.x >= 8 || s >= 64) {
         o_volumeScatter_texture = float4(0.0, 0.0, 0.0, 1.0);
       } else if (mix(u_volumeRange.x, u_volumeRange.y, t0 * t0) > u_froxelDepth.read(uint2(froxel)).x) {
-        o_volumeScatter_texture = float4(0.0, 0.0, 0.0, 1.0);
+        o_volumeScatter_texture = float4(0.0, 0.0, 0.0, 2.0);
       } else {
-        float3 jitter = fract(float(frameIndex % 64) * float3(0.7548777, 0.5698403, 0.6180340));
-        float2 uv = (float2(froxel) + jitter.xy) / float2(grid);
-        float t = (float(s) + jitter.z) / 64.0;
-        float depth = mix(u_volumeRange.x, u_volumeRange.y, t * t);
-        float4 e = u_invProj * float4(uv * 2.0 - 1.0, 1.0, 1.0);
-        float3 dirEye = e.xyz / e.w;
-        float3 posEye = dirEye * (depth / max(-dirEye.z, 1e-6));
+        float noise = fract(52.9829189 * fract(dot(float2(a), float2(0.06711056, 0.00583715))));
+        float3 jitter = fract(float(frameIndex % 64) * float3(0.7548777, 0.5698403, 0.6180340) + noise);
+        float3 posEye = froxelEye((float2(froxel) + jitter.xy) / float2(grid), (float(s) + jitter.z) / 64.0, _u);
+        float depth = -posEye.z;
         float3x3 invView = float3x3(
           float3(u_view[0][0], u_view[1][0], u_view[2][0]),
           float3(u_view[0][1], u_view[1][1], u_view[2][1]),
@@ -3013,7 +3056,8 @@ shader: volume-scatter
           float dSqr = dot(toLight, toLight);
           float d = sqrt(dSqr);
           float rSqr = colorRadius.w * colorRadius.w;
-          float falloff = 2.0 / max(dSqr + rSqr + d * sqrt(dSqr + rSqr), 1e-12);
+          float spread = max(rSqr, 0.25 * froxelFootprint * froxelFootprint);
+          float falloff = 2.0 / max(dSqr + spread + d * sqrt(dSqr + spread), 1e-12);
           float3 aL = abs(toLight);
           float faceDistance = max(max(aL.x, aL.y), aL.z);
           float ratio = clamp(2.0 * 1.4142135 / 8192.0 / max(froxelFootprint / max(faceDistance, 1e-6), 1e-8), 1e-8, 1.0);
@@ -3023,9 +3067,14 @@ shader: volume-scatter
                  * volumePointShadow(i, -toLight, startLod, u_shadow_atlas, u_shadow_data, u_shadow_pagetable, _u)
                  * volumeTransmittance(d, _u);
         }
-        float stretch = length(dirEye) / max(-dirEye.z, 1e-6) * (u_volumeRange.y - u_volumeRange.x);
+        float3 centerEye = froxelEye((float2(froxel) + 0.5) / float2(grid), (float(s) + 0.5) / 64.0, _u);
+        float3 centerWorld = invView * (centerEye - float3(u_view[3][0], u_view[3][1], u_view[3][2]));
+        float4 history = volumeHistory(centerWorld, grid, u_froxelHistory, _u);
+        light = mix(history.rgb / max(history.a, 1e-4), light, mix(1.0, 0.1, history.a));
+
+        float stretch = length(posEye) / depth * (u_volumeRange.y - u_volumeRange.x);
         float slab = exp(-u_volume.x * (t1 * t1 - t0 * t0) * stretch);
-        o_volumeScatter_texture = float4(light * (1.0 - slab), slab);
+        o_volumeScatter_texture = float4(light, slab);
       }
     }
     ```

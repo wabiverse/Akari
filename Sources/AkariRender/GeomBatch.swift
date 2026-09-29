@@ -65,6 +65,9 @@ public extension Akari.Geom
     private var boundsMax = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
     /// One world AABB per appended mesh, min then max, six floats each.
     public private(set) var casterBounds: [Float] = []
+    /// Per caster, a hash of its world space positions, so a mesh that
+    /// deforms inside the same bounds still reads as changed.
+    public private(set) var casterKeys: [UInt64] = []
 
     public init(estimatedTriangles: Int)
     {
@@ -117,6 +120,7 @@ public extension Akari.Geom
 
       var meshMin = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
       var meshMax = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+      var meshKey: UInt64 = 14_695_981_039_346_656_037
 
       for v in 0 ..< vertCount
       {
@@ -133,6 +137,9 @@ public extension Akari.Geom
         boundsMax = pointwiseMax(boundsMax, world)
         meshMin = pointwiseMin(meshMin, world)
         meshMax = pointwiseMax(meshMax, world)
+        meshKey = (meshKey ^ UInt64(world.x.bitPattern)) &* 1_099_511_628_211
+        meshKey = (meshKey ^ UInt64(world.y.bitPattern)) &* 1_099_511_628_211
+        meshKey = (meshKey ^ UInt64(world.z.bitPattern)) &* 1_099_511_628_211
 
         vertBuf[d + 0] = world.x
         vertBuf[d + 1] = world.y
@@ -159,6 +166,7 @@ public extension Akari.Geom
       {
         casterBounds.append(contentsOf: [meshMin.x, meshMin.y, meshMin.z,
                                          meshMax.x, meshMax.y, meshMax.z])
+        casterKeys.append(meshKey)
       }
 
       for (j, index) in localIndices.enumerated()
@@ -222,6 +230,12 @@ public extension Akari.Geom
       gl.disableClientState(GL_TEXTURE_COORD_ARRAY)
       gl.disableClientState(GL_COLOR_ARRAY)
       gl.disableClientState(GL_VERTEX_ARRAY)
+
+      // the capture keeps its own copy from unmap.
+      gl.bindBuffer(target: GL_ARRAY_BUFFER, buffer: 0)
+      gl.bindBuffer(target: GL_ELEMENT_ARRAY_BUFFER, buffer: 0)
+      gl.deleteBuffer(vb)
+      gl.deleteBuffer(ib)
 
       vOff = 0
       iOff = 0

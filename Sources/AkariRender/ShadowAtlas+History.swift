@@ -182,4 +182,52 @@ extension Akari.ShadowAtlas
       }
     }
   }
+
+  /// What a scene change left stale in the shadow pages.
+  enum CasterRedraw: Equatable
+  {
+    case none
+    /// Only around this many moved boxes, uploaded to `Frame.movedBoxes`.
+    case boxes(Int)
+    case all
+
+    var isNeeded: Bool { self != .none && self != .boxes(0) }
+  }
+
+  /// Finds the casters that moved or changed between scene revisions.
+  struct CasterMotion
+  {
+    private struct Caster: Hashable
+    {
+      var min: SIMD3<Float>
+      var max: SIMD3<Float>
+      var key: UInt64
+    }
+
+    private var previous: [Caster: Int]?
+
+    /// Old and new boxes of every changed caster, six floats each. nil when
+    /// every shadow has to redraw: the first frame, or more than `limit` changed.
+    mutating func movedBoxes(bounds: [Float], keys: [UInt64], limit: Int) -> [Float]?
+    {
+      var next: [Caster: Int] = [:]
+      next.reserveCapacity(keys.count)
+      for i in 0 ..< min(keys.count, bounds.count / 6)
+      {
+        let o = i * 6
+        let caster = Caster(min: SIMD3(bounds[o], bounds[o + 1], bounds[o + 2]),
+                            max: SIMD3(bounds[o + 3], bounds[o + 4], bounds[o + 5]),
+                            key: keys[i])
+        next[caster, default: 0] += 1
+      }
+      defer { self.previous = next }
+      guard let previous else { return nil }
+
+      var moved: [Float] = []
+      func add(_ c: Caster) { moved += [c.min.x, c.min.y, c.min.z, c.max.x, c.max.y, c.max.z] }
+      for (caster, count) in next where previous[caster] != count { add(caster) }
+      for (caster, _) in previous where next[caster] == nil { add(caster) }
+      return moved.count / 6 > limit ? nil : moved
+    }
+  }
 }

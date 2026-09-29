@@ -44,6 +44,7 @@ import LabGL
 extension Akari.ShadowAtlas
 {
   private static let lightPosRadiusNames = (0 ..< maxPunctualLights).map { "u_lightPosRadius\($0)" }
+  private static let lightPosNames = (0 ..< maxPunctualLights).map { "u_lightPos\($0)" }
 
   /// Clears whether a tile is used everywhere and forces an
   /// update for any dirty cube face's allocated tiles.
@@ -181,6 +182,27 @@ extension Akari.ShadowAtlas
     gl.dispatchCompute(kernel,
                        groupsX: GLuint(volume.gridWidth),
                        groupsY: GLuint(volume.gridHeight),
+                       groupsZ: 1)
+  }
+
+  /// Marks the point light tiles the moved casters boxes cover, so only those redraw.
+  func dispatchTagUpdatePunctual(boxCount: Int, lights: [Akari.Lux.PointLight], lightCount: Int)
+  {
+    let kernel = kernels.tagUpdatePunctual
+    guard kernel != 0, boxCount > 0, lightCount > 0 else { return }
+
+    setUniform(kernel, "u_boxCount", GL_INT, Int32(boxCount))
+    setUniform(kernel, "u_lightCount", GL_INT, Int32(lightCount))
+    for slot in 0 ..< Self.maxPunctualLights
+    {
+      let position = slot < lightCount ? SIMD4(lights[slot].position, 0) : SIMD4<Float>(repeating: 0)
+      setUniform(kernel, Self.lightPosNames[slot], GL_FLOAT_VEC4, position)
+    }
+    gl.setComputeShaderBuffer(kernel, binding: 0, buffer: frame.movedBoxes)
+    gl.setComputeShaderBuffer(kernel, binding: 1, buffer: buffers.tiles)
+    gl.dispatchCompute(kernel,
+                       groupsX: GLuint((boxCount * lightCount * 6 + 63) / 64),
+                       groupsY: 1,
                        groupsZ: 1)
   }
 

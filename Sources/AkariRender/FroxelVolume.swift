@@ -47,7 +47,11 @@ public extension Akari
   {
     /// Per froxel column, the farthest view depth it shows.
     public private(set) var depthTexture: GLuint = 0
+    /// Whether `historyTexture` holds last frame's scatter.
+    public private(set) var hasHistory = false
     private var depthSize = SIMD2<Int>(0, 0)
+    private var history: [GLuint] = [0, 0]
+    private var historyRead = 0
     private var depthShader: GLuint = 0
     private var integrateShader: GLuint = 0
     private var built = false
@@ -109,7 +113,7 @@ public extension Akari
         gbufferPosition != 0,
         gridWidth > 0,
         gridHeight > 0,
-        ensureDepthTexture(width: gridWidth, height: gridHeight)
+        ensureTextures(width: gridWidth, height: gridHeight)
       else { return false }
 
       var params = SIMD4<Float>(Float(gridWidth), Float(gridHeight), Float(screenWidth), Float(screenHeight))
@@ -124,14 +128,22 @@ public extension Akari
       return true
     }
 
+    /// Last frame's scatter atlas, which the scatter pass reprojects.
+    public var historyTexture: GLuint
+    {
+      history[historyRead]
+    }
+
     /// Composites each column's slabs front to back into the integrated atlas the deferred
-    /// resolve samples.
+    /// resolve samples, and keeps the scatter as next frame's history.
     public func integrate(scatter: GLuint, integrated: GLuint, gridWidth: Int, gridHeight: Int)
     {
+      let historyWrite = history[1 - historyRead]
       guard
         built,
         scatter != 0,
         integrated != 0,
+        historyWrite != 0,
         gridWidth > 0,
         gridHeight > 0
       else { return }
@@ -141,21 +153,20 @@ public extension Akari
       gl.setComputeShaderImage(integrateShader, index: 0, texture: integrated,
                                format: GLenum(GL_RGBA16F), level: 0)
       gl.setComputeShaderSampler(integrateShader, index: 1, texture: scatter, samplerIndex: 0)
+      gl.setComputeShaderImage(integrateShader, index: 2, texture: historyWrite,
+                               format: GLenum(GL_RGBA16F), level: 0)
       gl.dispatchCompute(integrateShader,
                          groupsX: GLuint((gridWidth + 7) / 8),
                          groupsY: GLuint((gridHeight + 7) / 8),
                          groupsZ: 1)
+
+      historyRead = 1 - historyRead
+      hasHistory = true
     }
 
     public func release()
     {
-      if depthTexture != 0
-      {
-        var tex = depthTexture
-        gl.deleteTextures(count: 1, textures: &tex)
-        depthTexture = 0
-      }
-      depthSize = .zero
+      releaseTextures()
       for shader in [depthShader, integrateShader] where shader != 0
       {
         gl.deleteComputeShader(shader)
@@ -166,19 +177,44 @@ public extension Akari
     }
 
     /// Only reallocates when the froxel grid itself changes size.
-    private func ensureDepthTexture(width: Int, height: Int) -> Bool
+    private func ensureTextures(width: Int, height: Int) -> Bool
     {
       if depthTexture != 0, depthSize == SIMD2(width, height) { return true }
-      if depthTexture != 0
+      releaseTextures()
+
+      depthTexture = makeTexture(width: width, height: height, internalFormat: GL_RGBA32F)
+      history = history.map
+      { _ in
+        makeTexture(width: width * 8, height: height * 8, internalFormat: GLint(GL_RGBA16F))
+      }
+      guard depthTexture != 0, !history.contains(0)
+      else
       {
-        var tex = depthTexture
-        gl.deleteTextures(count: 1, textures: &tex)
-        depthTexture = 0
+        releaseTextures()
+        return false
       }
 
+      depthSize = SIMD2(width, height)
+      return true
+    }
+
+    private func releaseTextures()
+    {
+      for var tex in [depthTexture] + history where tex != 0
+      {
+        gl.deleteTextures(count: 1, textures: &tex)
+      }
+      depthTexture = 0
+      history = [0, 0]
+      hasHistory = false
+      depthSize = .zero
+    }
+
+    private func makeTexture(width: Int, height: Int, internalFormat: GLint) -> GLuint
+    {
       var tex: GLuint = 0
       gl.genTextures(count: 1, textures: &tex)
-      guard tex != 0 else { return false }
+      guard tex != 0 else { return 0 }
 
       gl.bindTexture(target: GL_TEXTURE_2D, texture: tex)
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_NEAREST))
@@ -187,7 +223,7 @@ public extension Akari
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_WRAP_T, param: GLint(GL_CLAMP_TO_EDGE))
       gl.texImage2D(target: GL_TEXTURE_2D,
                     level: 0,
-                    internalFormat: GL_RGBA32F,
+                    internalFormat: internalFormat,
                     width: GLsizei(width),
                     height: GLsizei(height),
                     border: 0,
@@ -196,9 +232,7 @@ public extension Akari
                     pixels: nil)
       gl.bindTexture(target: GL_TEXTURE_2D, texture: 0)
 
-      depthTexture = tex
-      depthSize = SIMD2(width, height)
-      return true
+      return tex
     }
 
     /// Farthest view depth under each froxel column.
@@ -296,6 +330,7 @@ public extension Akari
       layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
       layout(rgba16f, binding = 0) uniform writeonly image2D o_integrated;
       layout(binding = 1) uniform sampler2D u_scatter;
+      layout(rgba16f, binding = 2) uniform writeonly image2D o_history;
       uniform vec4 u_params;
       void main()
       {
@@ -307,8 +342,10 @@ public extension Akari
         for (int k = 0; k < 64; ++k) {
           ivec2 texel = ivec2(k % 8, k / 8) * grid + froxel;
           vec4 slab = texelFetch(u_scatter, texel, 0);
-          scattered += transmittance * slab.rgb;
-          transmittance *= slab.a;
+          imageStore(o_history, texel, slab);
+          float slabTransmittance = min(slab.a, 1.0);
+          scattered += transmittance * slab.rgb * (1.0 - slabTransmittance);
+          transmittance *= slabTransmittance;
           imageStore(o_integrated, texel, vec4(scattered, transmittance));
         }
       }
@@ -322,6 +359,7 @@ public extension Akari
                                texture2d<float, access::write> o_integrated [[texture(0)]],
                                texture2d<float> scatterTex [[texture(1)]],
                                sampler scatterSampler [[sampler(0)]],
+                               texture2d<float, access::write> o_history [[texture(2)]],
                                uint2 gid [[thread_position_in_grid]])
       {
         int2 grid = int2(u.params.xy);
@@ -332,8 +370,10 @@ public extension Akari
         for (int k = 0; k < 64; ++k) {
           uint2 texel = uint2(int2(k % 8, k / 8) * grid + froxel);
           float4 slab = scatterTex.read(texel);
-          scattered += transmittance * slab.rgb;
-          transmittance *= slab.a;
+          o_history.write(slab, texel);
+          float slabTransmittance = min(slab.a, 1.0);
+          scattered += transmittance * slab.rgb * (1.0 - slabTransmittance);
+          transmittance *= slabTransmittance;
           o_integrated.write(float4(scattered, transmittance), texel);
         }
       }

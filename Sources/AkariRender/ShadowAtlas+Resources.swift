@@ -79,10 +79,13 @@ extension Akari.ShadowAtlas
     var runXf: GLuint = 0
     var punctualViews: GLuint = 0
     var viewXf: GLuint = 0
+    /// Old and new boxes of the casters that moved, six floats each.
+    var movedBoxes: GLuint = 0
 
     var buffers: [GLuint]
     {
-      [gridShift, levelParams, slotOfView, drawnView, clearList, runViews, runXf, punctualViews, viewXf]
+      [gridShift, levelParams, slotOfView, drawnView, clearList, runViews, runXf, punctualViews, viewXf,
+       movedBoxes]
     }
   }
 
@@ -149,6 +152,12 @@ extension Akari.ShadowAtlas
       print("[akari/shadow] volume usage tagging failed to compile, fog shadows fall back to surface pages")
       gl.deleteComputeShader(kernels.tagUsageVolume)
       kernels.tagUsageVolume = 0
+    }
+    if kernels.tagUpdatePunctual != 0, gl.waitComputeShader(kernels.tagUpdatePunctual) == 0
+    {
+      print("[akari/shadow] point light update tagging failed to compile, moving casters redraw every face")
+      gl.deleteComputeShader(kernels.tagUpdatePunctual)
+      kernels.tagUpdatePunctual = 0
     }
 
     guard makePagePool() else { return fail("SSBO allocation failed") }
@@ -254,6 +263,10 @@ extension Akari.ShadowAtlas
     resourcesReady = false
     lastSceneRevision = .max
     lastRenderSceneRevision = .max
+    casterMotion = CasterMotion()
+    casterRedraw = .none
+    casterRedrawRevision = .max
+    lastSceneBounds = []
     punctualHistory = PunctualHistory()
     directionalHistory = DirectionalHistory()
     sunMotion = SunMotion()
@@ -356,7 +369,8 @@ extension Akari.ShadowAtlas
                  runViews: makeBuffer(read, Int32.self, count: Self.maxRuns * Self.maxAmplificationViews),
                  runXf: makeBuffer(read, Float.self, count: Self.maxRuns * Self.maxAmplificationViews * 16),
                  punctualViews: makeBuffer(read, Int32.self, count: Self.maxPunctualViews),
-                 viewXf: makeBuffer(read, Float.self, count: Self.maxViews * 16))
+                 viewXf: makeBuffer(read, Float.self, count: Self.maxViews * 16),
+                 movedBoxes: makeBuffer(read, Float.self, count: Self.maxMovedCasters * 6))
   }
 
   private func makeTexture(width: Int, height: Int, internalFormat: GLint, format: GLenum) -> GLuint

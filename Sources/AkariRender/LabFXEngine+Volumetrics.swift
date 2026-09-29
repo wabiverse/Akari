@@ -62,6 +62,9 @@ extension Akari.LabFXEngine
     var grid = SIMD2<Int>(0, 0)
     var scatterTexture: GLuint = 0
     var integratedTexture: GLuint = 0
+    /// This frame's view projection, and last frame's while its scatter is still valid history.
+    var viewProjection = Akari.Matrix4.identity
+    var previousViewProjection: Akari.Matrix4?
   }
 
   private static let volumePassNames = [
@@ -119,6 +122,7 @@ extension Akari.LabFXEngine
     volumetrics.pendingRange = SIMD4(clipNear, far, grid.x, grid.y)
     volumetrics.pendingSunLevelBias = Float(sunLevelBias)
     volumetrics.grid = gridSize
+    volumetrics.viewProjection = camera.projection * camera.view
     volumetrics.thisFrame = true
     volumetrics.froxels = Akari.ShadowAtlas.VolumeFroxels(gridWidth: gridSize.x,
                                                           gridHeight: gridSize.y,
@@ -143,6 +147,7 @@ extension Akari.LabFXEngine
     {
       setPasses(Self.volumePassNames, active: thisFrame)
       volumetrics.passesActive = thisFrame
+      volumetrics.previousViewProjection = nil
     }
     let volume = thisFrame ? volumetrics.pending : .zero
     if volume != volumetrics.uploaded
@@ -162,6 +167,11 @@ extension Akari.LabFXEngine
         setFloat("u_volumeSunLevelBias", volumetrics.pendingSunLevelBias)
         volumetrics.uploadedSunLevelBias = volumetrics.pendingSunLevelBias
       }
+      let previous = froxelVolume.hasHistory ? volumetrics.previousViewProjection : nil
+      setSampler("u_froxelHistory", froxelVolume.historyTexture)
+      setMatrix("u_volumePrevViewProj", previous ?? volumetrics.viewProjection)
+      setFloat("u_volumeHistory", previous == nil ? 0 : 1)
+      volumetrics.previousViewProjection = volumetrics.viewProjection
       volumetrics.scatterTexture = runtime.texture("volumeScatter", named: "volumeScatter")
       volumetrics.integratedTexture = runtime.texture("volumeIntegrated", named: "volumeIntegrated")
     }

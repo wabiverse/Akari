@@ -63,6 +63,8 @@ public extension Akari.LabFXEngine
                               settings: settings.light.shadow,
                               lights: syncedPointLights,
                               sceneRevision: lastGeometryRevision,
+                              casterBounds: casterBounds,
+                              casterKeys: casterKeys,
                               volume: volumetrics.froxels)
   }
 
@@ -83,7 +85,7 @@ public extension Akari.LabFXEngine
     guard
       let captureBuffer,
       let sceneBounds,
-      let scene = renderParam.GetScene()
+      renderParam.GetScene() != nil
     else { return }
 
     let shadow = settings.light.shadow
@@ -94,7 +96,7 @@ public extension Akari.LabFXEngine
                                    lightDirection: worldSpaceSunDirection(settings.light),
                                    sceneBounds: sceneBounds,
                                    casterBounds: casterBounds,
-                                   sceneRevision: scene.Revision(),
+                                   sceneRevision: lastGeometryRevision,
                                    frameIndex: frameIndex,
                                    settings: shadow,
                                    lights: syncedPointLights,

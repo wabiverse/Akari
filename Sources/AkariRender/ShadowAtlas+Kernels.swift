@@ -66,6 +66,7 @@ extension Akari.ShadowAtlas
     var clipmapClear: GLuint = 0
     var tilemapBounds: GLuint = 0
     var tagUpdate: GLuint = 0
+    var tagUpdatePunctual: GLuint = 0
     var tagPropagate: GLuint = 0
     var buildRenderViews: GLuint = 0
 
@@ -74,7 +75,7 @@ extension Akari.ShadowAtlas
       [beginFrame, tilemapShift, tagUsagePunctual, tagUsageDirectional, tagUsageVolume,
        dilateUsageDirectional, dilateUsagePunctual, maskLod, free, defrag, allocate,
        pageTable, pageClear, retireDrawn, cull, cullPunctual, renderMapClear, buildClearList,
-       clipmapClear, tilemapBounds, tagUpdate, tagPropagate, buildRenderViews]
+       clipmapClear, tilemapBounds, tagUpdate, tagUpdatePunctual, tagPropagate, buildRenderViews]
     }
 
     /// Waits for the kernels the pipeline can't run without, false if any failed.
@@ -114,6 +115,7 @@ extension Akari.ShadowAtlas
       gl.setComputeShaderThreadgroupSize(clipmapClear, x: 64, y: 1, z: 1)
       gl.setComputeShaderThreadgroupSize(tilemapBounds, x: 64, y: 1, z: 1)
       gl.setComputeShaderThreadgroupSize(tagUpdate, x: 64, y: 1, z: 1)
+      gl.setComputeShaderThreadgroupSize(tagUpdatePunctual, x: 64, y: 1, z: 1)
       gl.setComputeShaderThreadgroupSize(tagPropagate, x: res, y: res, z: 1)
       gl.setComputeShaderThreadgroupSize(buildRenderViews, x: 64, y: 1, z: 1)
     }
@@ -148,6 +150,7 @@ extension Akari.ShadowAtlas
     k.clipmapClear = compile("clipmap-clear", clipmapClearGLSL, clipmapClearMSL)
     k.tilemapBounds = compile("tilemap-bounds", tilemapBoundsGLSL, tilemapBoundsMSL)
     k.tagUpdate = compile("tag-update", tagUpdateGLSL, tagUpdateMSL)
+    k.tagUpdatePunctual = compile("tag-update-punctual", tagUpdatePunctualGLSL, tagUpdatePunctualMSL)
     k.tagPropagate = compile("tag-propagate", tagPropagateGLSL, tagPropagateMSL)
     k.buildRenderViews = compile("build-render-views", buildRenderViewsGLSL, buildRenderViewsMSL)
     k.setThreadgroupSizes()

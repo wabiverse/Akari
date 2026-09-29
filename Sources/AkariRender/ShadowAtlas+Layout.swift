@@ -87,6 +87,8 @@ extension Akari.ShadowAtlas
   static let maxTiles = maxTilemaps * tilesPerTilemap
   /// GPU chunk culling per run.
   static let maxRuns = (maxViews + 1) / 2
+  /// Moved caster boxes tracked per frame, past this every shadow redraws.
+  static let maxMovedCasters = 256
 
   /// Pages per atlas layer, one per amplified view.
   static let pagesPerLayer = maxAmplificationViews

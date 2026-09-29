@@ -78,6 +78,8 @@ public extension Akari
     var sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
     /// Per caster world AABBs for the shadow tilemap's own GPU tagging.
     var casterBounds: [Float] = []
+    /// Per caster, a hash of its world positions, matching `casterBounds`.
+    var casterKeys: [UInt64] = []
     /// Set once the atlas has tiles the deferred pass can sample.
     var shadowsReady = false
     private var temporal = Temporal()
@@ -212,6 +214,7 @@ public extension Akari
         // rebake, then disable them again.
         iblNeedsBake = true
         temporal.prevViewProjection = nil
+        volumetrics.previousViewProjection = nil
         ssgi.needsReset = true
         ssr.needsReset = true
         lastWidth = width
@@ -357,6 +360,7 @@ public extension Akari
 
       sceneBounds = batch.worldBounds
       casterBounds = batch.casterBounds
+      casterKeys = batch.casterKeys
     }
 
     /// Rasterizes the G-buffer now instead of waiting
