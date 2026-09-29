@@ -40,10 +40,17 @@
 #ifndef HDAKARI_RENDER_DELEGATE_H
 #define HDAKARI_RENDER_DELEGATE_H
 
-#include <pxr/pxrns.h>
-#include <Hd/renderDelegate.h>
-#include <Hd/resourceRegistry.h>
-#include <Hgi/hgiImpl.h>
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/renderDelegate.h>
+# include <Hd/resourceRegistry.h>
+# include <Hgi/hgiImpl.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/renderDelegate.h>
+# include <pxr/imaging/hd/resourceRegistry.h>
+# include <pxr/imaging/hgi/hgi.h>
+#endif
 
 #include "HdAkari/api.h"
 

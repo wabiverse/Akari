@@ -37,22 +37,38 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/changeTracker.h>
+# include <Hd/material.h>
+# include <Hd/meshTopology.h>
+# include <Hd/meshUtil.h>
+# include <Hd/repr.h>
+# include <Hd/sceneDelegate.h>
+# include <Hd/tokens.h>
+# include <Hd/types.h>
+# include <Sdf/assetPath.h>
+# include <Gf/vec2f.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/changeTracker.h>
+# include <pxr/imaging/hd/material.h>
+# include <pxr/imaging/hd/meshTopology.h>
+# include <pxr/imaging/hd/meshUtil.h>
+# include <pxr/imaging/hd/repr.h>
+# include <pxr/imaging/hd/sceneDelegate.h>
+# include <pxr/imaging/hd/tokens.h>
+# include <pxr/imaging/hd/types.h>
+# include <pxr/usd/sdf/assetPath.h>
+# include <pxr/base/gf/vec2f.h>
+#endif
+
 #include "HdAkari/mesh.h"
+#include "HdAkari/lightProbe.h"
 #include "HdAkari/materialBinding.h"
 #include "HdAkari/renderParam.h"
 #include "HdAkari/scene.h"
 #include "HdAkari/textureAtlas.h"
-
-#include <Hd/changeTracker.h>
-#include <Hd/material.h>
-#include <Hd/meshTopology.h>
-#include <Hd/meshUtil.h>
-#include <Hd/repr.h>
-#include <Hd/sceneDelegate.h>
-#include <Hd/tokens.h>
-#include <Hd/types.h>
-#include <Sdf/assetPath.h>
-#include <Gf/vec2f.h>
 
 #include <algorithm>
 #include <cmath>
@@ -116,6 +132,11 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
   bool geoChanged = (*dirtyBits & (HdChangeTracker::DirtyTopology | HdChangeTracker::DirtyPoints)) != 0;
 
   if (!geoChanged) {
+    if (HdAkariSyncLightProbe(sceneDelegate, id, scene, nullptr)) {
+      *dirtyBits = HdChangeTracker::Clean;
+      return;
+    }
+
     // only display properties changed, mutate in place, zero copy.
     auto xf = sceneDelegate->GetTransform(id);
     bool vis = sceneDelegate->GetVisible(id);
@@ -166,6 +187,11 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
     data.points = pointsVal.UncheckedGet<VtVec3fArray>();
   }
 
+  if (HdAkariSyncLightProbe(sceneDelegate, id, scene, &data.points)) {
+    *dirtyBits = HdChangeTracker::Clean;
+    return;
+  }
+
   data.transform = sceneDelegate->GetTransform(id);
   data.visible = sceneDelegate->GetVisible(id);
 
@@ -195,6 +221,7 @@ HdAkariMesh::Finalize(HdRenderParam *renderParam)
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
     if (HdAkariScene *scene = param->GetScene()) {
       scene->RemoveMesh(GetId());
+      scene->RemoveProbe(GetId());
     }
   }
 }

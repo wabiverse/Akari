@@ -71,6 +71,7 @@ public extension Akari
     private let recorder = Akari.Geom.Recorder()
     let shadowAtlas = Akari.ShadowAtlas()
     private let fireflies = Fireflies()
+    private let probeBake = ProbeBakeOverlay()
     var boundShadowAtlas: GLuint = 0
 
     /// World bounds of the last recorded geometry.
@@ -88,8 +89,17 @@ public extension Akari
 
     var syncedPointLights: [Akari.Lux.PointLight] = []
 
+    /// Volume + sphere light probes baked from the scene capture.
+    let lightProbes = Akari.LightProbes()
+    var probeOverrides: [Akari.LightProbes.Override] = []
+    var probeOverrideRevision: UInt64 = .max
+    /// Probe identity without the transform, keys the probe layout bake.
+    var probeStructuralRevision: UInt64 = 0
+    /// The material, color and emissive atlases the probe capture samples.
+    var probeMaterials: (material: GLuint, color: GLuint, emissive: GLuint) = (0, 0, 0)
+
     /// This is `true` when the opened usd stage's upAxis is "Z".
-    private var stageIsZUp = false
+    var stageIsZUp = false
 
     /// Call once, right after opening the usd stage.
     public func setStageUpAxis(isZUp: Bool)
@@ -221,6 +231,9 @@ public extension Akari
       ssr.thisFrame = false
       setVector("u_ssr", SIMD4(0, 0, 0, 0))
 
+      setVector("u_probeGridMin", SIMD4(0, 0, 0, 0))
+      setVector("u_probeGridMax", SIMD4(0, 0, 0, 0))
+
       volumetrics.thisFrame = false
       volumetrics.froxels = nil
 
@@ -259,6 +272,7 @@ public extension Akari
         setSampler("u_color_atlas", colorTex)
         setSampler("u_normal_atlas", normalTex)
         setSampler("u_emissive_atlas", emissiveTex)
+        probeMaterials = (materialTex, colorTex, emissiveTex)
       }
 
       let lights = scene.LightSnapshot().prefix(4)
@@ -483,11 +497,13 @@ public extension Akari
     ///   - hgi: opaque `Hgi` shared with Hydra.
     public func present(color: UnsafeMutableRawPointer?,
                         hgi: UnsafeMutableRawPointer?,
-                        fireflies enableFireflies: Bool = false)
+                        fireflies enableFireflies: Bool = false,
+                        lightProbes showLightProbes: Bool = false)
     {
       guard let windowHandle else { return }
 
       fireflies.update(enabled: enableFireflies)
+      probeBake.update(enabled: showLightProbes, probes: lightProbes)
 
       ensureShadowBindings()
 
@@ -629,8 +645,14 @@ public extension Akari
       setFloat("roughnessScale", 1.0)
 
       fireflies.attach(to: &runtime)
+      probeBake.attach(to: &runtime)
 
       attachVolumetrics()
+
+      // compiles in the background, each pass waits only on what it uses.
+      lightProbes.precompileShaders()
+      froxelVolume.precompileShaders()
+      shadowAtlas.precompileShaders()
 
       // capture buffer the geometry pass replays each frame.
       guard let cap = labgl.captureCreate()
@@ -649,10 +671,12 @@ public extension Akari
     private func teardown()
     {
       fireflies.release()
-
+      probeBake.release()
       shadowAtlas.release()
-
       froxelVolume.release()
+      lightProbes.release()
+
+      gl.shaderCacheFlush()
 
       runtime.destroy()
       if let captureBuffer

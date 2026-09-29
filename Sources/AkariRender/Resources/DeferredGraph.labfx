@@ -239,6 +239,11 @@ pass: fireflies-overlay
   blend: additive
   outputs: tonemap [ tonemap ]
 
+pass: probe-bake-overlay
+  callback: draw-probe-bake
+  blend: alpha
+  outputs: tonemap [ tonemap ]
+
 pass: blit
   draw: blit
   inputs: [tonemap.tonemap]
@@ -376,6 +381,12 @@ shader: deferred-shade
               u_ssrGuide_texture: sampler2d,
               u_ssr: vec4,
               u_horizonScan: vec4,
+              u_probe_volume: sampler2d,
+              u_probe_sphere: sampler2d,
+              u_probe_info: sampler2d,
+              u_probeGridMin: vec4,
+              u_probeGridMax: vec4,
+              u_probeGridSize: vec4,
               frameIndex: int ]
   varying:  [ texCoord: vec2 ]
 
@@ -1376,6 +1387,85 @@ shader: deferred-shade
       return float4(sum.rgb / sum.a, sum.a / weight * saturate(weight * 10.0));
     }
 
+    float3 probeVolumeIrradiance(float3 worldPos, float3 N, float3 fallback,
+                                 texture2d<float> sh, constant Uniforms& u)
+    {
+      if (u.u_probeGridMin.w < 0.5) return fallback;
+      int3 dims = int3(u.u_probeGridSize.xyz);
+      float3 cell = (u.u_probeGridMax.xyz - u.u_probeGridMin.xyz) / float3(max(dims - 1, int3(1)));
+      float3 g = (worldPos + N * u.u_probeGridSize.w - u.u_probeGridMin.xyz) / cell;
+      float3 outside = max(max(-g, g - float3(dims - 1)), float3(0.0));
+      float fade = saturate(1.0 - max(outside.x, max(outside.y, outside.z)));
+      if (fade <= 0.0) return fallback;
+      g = clamp(g, float3(0.0), float3(dims - 1));
+      int3 base = min(int3(floor(g)), max(dims - 2, int3(0)));
+      float3 f = g - float3(base);
+      float3 l0 = float3(0.0), lx = float3(0.0), ly = float3(0.0), lz = float3(0.0);
+      float weight = 0.0;
+      for (int i = 0; i < 8; ++i) {
+        int3 o = int3(i & 1, (i >> 1) & 1, i >> 2);
+        int3 c = min(base + o, dims - 1);
+        float3 w3 = mix(1.0 - f, f, float3(o));
+        int index = c.x + dims.x * (c.y + dims.y * c.z);
+        uint2 t = uint2((index % 256) * 4, index / 256);
+        float4 c0 = sh.read(t);
+        float3 toProbe = u.u_probeGridMin.xyz + float3(c) * cell - worldPos;
+        float facing = dot(toProbe, N) * rsqrt(max(dot(toProbe, toProbe), 1e-12)) * 0.5 + 0.5;
+        float w = w3.x * w3.y * w3.z * (facing * facing + 0.05) * max(c0.a, 1e-3);
+        l0 += c0.rgb * w;
+        lx += sh.read(t + uint2(1, 0)).rgb * w;
+        ly += sh.read(t + uint2(2, 0)).rgb * w;
+        lz += sh.read(t + uint2(3, 0)).rgb * w;
+        weight += w;
+      }
+      float3 irradiance = max((0.282095 * l0 + 0.325735 * (lx * N.x + ly * N.y + lz * N.z)) / max(weight, 1e-8), float3(0.0));
+      return mix(fallback, irradiance, fade);
+    }
+
+    float2 probeOctEncode(float3 d)
+    {
+      d /= abs(d.x) + abs(d.y) + abs(d.z);
+      float2 p = d.xy;
+      if (d.z < 0.0) p = (1.0 - abs(d.yx)) * select(float2(-1.0), float2(1.0), d.xy >= 0.0);
+      return p * 0.5 + 0.5;
+    }
+
+    float3 probeSphereMip(texture2d<float> atlas, sampler smp, int sphere, int mip, float3 d)
+    {
+      float res = float(128 >> mip);
+      float2 tile = float2(float((sphere % 4) * 196), float((sphere / 4) * 130));
+      float2 offset = mip == 0 ? float2(0.0)
+                    : float2(130.0, mip == 1 ? 0.0 : mip == 2 ? 66.0 : mip == 3 ? 100.0 : 118.0);
+      float2 texel = tile + offset + probeOctEncode(d) * res + 1.0;
+      return atlas.sample(smp, texel / float2(atlas.get_width(), atlas.get_height()), level(0.0)).rgb;
+    }
+
+    float3 probeSphereRadiance(float3 worldPos, float3 R, float perceptualRoughness, float3 fallback,
+                               texture2d<float> atlas, sampler smp, texture2d<float> info,
+                               constant Uniforms& u)
+    {
+      int count = int(u.u_probeGridMax.w);
+      float lod = saturate(perceptualRoughness) * 4.0;
+      int mip = min(int(lod), 3);
+      float blend = lod - float(mip);
+      float3 result = fallback;
+      for (int i = 0; i < count; ++i) {
+        float4 sphere = info.read(uint2(i, 0));
+        float3 d = worldPos - sphere.xyz;
+        float dist = length(d);
+        if (dist >= sphere.w) continue;
+        float w = saturate((sphere.w - dist) / (0.2 * sphere.w)) * info.read(uint2(i, 1)).x;
+        if (w <= 0.0) continue;
+        float b = dot(d, R);
+        float hit = -b + sqrt(max(b * b - dot(d, d) + sphere.w * sphere.w, 0.0));
+        float3 dir = normalize(mix(normalize(d + R * hit), R, perceptualRoughness * perceptualRoughness));
+        float3 radiance = mix(probeSphereMip(atlas, smp, i, mip, dir),
+                              probeSphereMip(atlas, smp, i, mip + 1, dir), blend);
+        result = mix(result, radiance, w);
+      }
+      return result;
+    }
+
     float3 pointLightRadiance(float3 worldPos, float3 N, float3 V, float NoV,
                               float roughness, float3 f0, float3 diffuseColor,
                               texture2d_array<uint> punctualAtlas, sampler punctualAtlasSmp,
@@ -1525,24 +1615,27 @@ shader: deferred-shade
         float lod = 5.0 * perceptualRoughness * (2.0 - perceptualRoughness);
         lod = clamp(lod, 0.0, 5.0);
 
-        float3 prefilteredRadiance = textureLod(u_prefiltered_texture, toSkySpace(r, u_zUp), lod).rgb;
+        float3 prefilteredRadiance = textureLod(u_prefiltered_texture, toSkySpace(r, u_zUp), lod).rgb * u_iblEnabled;
+        prefilteredRadiance = probeSphereRadiance(worldPos, r, perceptualRoughness, prefilteredRadiance,
+                                                  u_probe_sphere, u_probe_sphere_smp, u_probe_info, _u);
 
         float4 gi = ssgiUpsample(gbufferPixel, posEye, normalEye, u_ssgiAccum_texture,
                                  u_ssgiDepth_texture, u_ssgiNormal_texture, _u);
         float specularOcclusion = clamp(pow(NoV + gi.a, exp2(-16.0 * roughness - 1.0)) - 1.0 + gi.a, 0.0, 1.0);
-        float3 irradiance = texture(u_irradiance_texture, toSkySpace(N, u_zUp)).rgb;
+        float3 irradiance = texture(u_irradiance_texture, toSkySpace(N, u_zUp)).rgb * u_iblEnabled;
+        irradiance = probeVolumeIrradiance(worldPos, N, irradiance, u_probe_volume, _u);
         float3 Fd = diffuseColor * irradiance * gi.a * (1.0 - E);
 
         float4 reflection = ssrUpsample(gbufferPixel, posEye, normalEye,
                                         u_ssrAccum_texture, u_ssrGuide_texture, _u);
-        float3 traced = mix(prefilteredRadiance * specularOcclusion * u_iblEnabled, reflection.rgb, reflection.a);
+        float3 traced = mix(prefilteredRadiance * specularOcclusion, reflection.rgb, reflection.a);
         float4 horizon = ssgiUpsample(gbufferPixel, posEye, normalEye, u_ssgiSpecAccum_texture,
                                       u_ssgiDepth_texture, u_ssgiNormal_texture, _u);
         float horizonMix = u_horizonScan.y * saturate((perceptualRoughness - u_horizonScan.x) / 0.2);
         float3 Fr = E * energyCompensation
-                  * mix(traced, horizon.rgb + prefilteredRadiance * horizon.a * u_iblEnabled, horizonMix);
+                  * mix(traced, horizon.rgb + prefilteredRadiance * horizon.a, horizonMix);
 
-        color += Fd * u_iblEnabled + Fr + diffuseColor * gi.rgb * (1.0 - E);
+        color += Fd + Fr + diffuseColor * gi.rgb * (1.0 - E);
 
         color += float3(u_material_texture.read(gbufferPixel).ba, u_position_texture.read(gbufferPixel).w);
 

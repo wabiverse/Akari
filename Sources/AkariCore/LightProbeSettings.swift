@@ -37,51 +37,24 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
-#ifndef HDAKARI_LIGHT_H
-#define HDAKARI_LIGHT_H
 
-#if __has_include(<pxr/pxrns.h>)
-# include <pxr/pxrns.h>
-# include <Hd/version.h>
-# include <Hd/light.h>
-# include <Sdf/path.h>
-#else
-# include <pxr/pxr.h>
-# include <pxr/imaging/hd/version.h>
-# include <pxr/imaging/hd/light.h>
-# include <pxr/usd/sdf/path.h>
-#endif
-
-#include "HdAkari/api.h"
-
-PXR_NAMESPACE_OPEN_SCOPE
-
-class HdAkariLight final : public HdLight
+/// How the volume and sphere light probes are placed, captured and relit.
+public struct LightProbeSettings: Sendable
 {
-public:
-  HDAKARI_API
-  explicit HdAkariLight(SdfPath const &id);
+  /// Auto volume probes along the scene's longest axis.
+  public var volumeResolution: Int = 12
+  /// Light bounces the volume probes gather.
+  public var bounces: Int = 2
+  /// Cube faces captured per frame while the probes rebake.
+  public var captureViewsPerFrame: Int = 96
 
-  ~HdAkariLight() override;
+  public init()
+  {}
 
-  HDAKARI_API
-  void Sync(HdSceneDelegate *delegate,
-            HdRenderParam   *renderParam,
-            HdDirtyBits     *dirtyBits) override;
-
-  HDAKARI_API
-  HdDirtyBits GetInitialDirtyBitsMask() const override;
-
-  HDAKARI_API
-  void Finalize(HdRenderParam *renderParam) override;
-
-private:
-  HdAkariLight(const HdAkariLight &) = delete;
-  HdAkariLight &operator=(const HdAkariLight &) = delete;
-
-  uint64_t _dataGeneration = 0;
-};
-
-PXR_NAMESPACE_CLOSE_SCOPE
-
-#endif // HDAKARI_LIGHT_H
+  public init(volumeResolution: Int, bounces: Int, captureViewsPerFrame: Int)
+  {
+    self.volumeResolution = volumeResolution
+    self.bounces = bounces
+    self.captureViewsPerFrame = captureViewsPerFrame
+  }
+}

@@ -37,13 +37,21 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/rendererPluginRegistry.h>
+# include <Tf/registryManager.h>
+# include <Tf/type.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/rendererPluginRegistry.h>
+# include <pxr/base/tf/registryManager.h>
+# include <pxr/base/tf/type.h>
+#endif
+
 #include "HdAkari/rendererPlugin.h"
 #include "HdAkari/renderDelegate.h"
 #include "HdAkari/akariBridge.h"
-
-#include <Hd/rendererPluginRegistry.h>
-#include <Tf/registryManager.h>
-#include <Tf/type.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 

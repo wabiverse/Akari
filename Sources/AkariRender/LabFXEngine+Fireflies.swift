@@ -71,9 +71,9 @@ extension Akari.LabFXEngine
     /// Hooks the overlay's draw into the deferred graph's `draw-fireflies` pass.
     func attach(to deferred: inout lab.fx.Runtime)
     {
-      shader = gl.defineShader(name: "akari-firefly",
-                               vertexGLSL: Self.vertexGLSL, fragmentGLSL: Self.fragmentGLSL,
-                               vertexMSL: Self.msl, fragmentMSL: nil)
+      shader = gl.precompileShader(name: "akari-firefly",
+                                   vertexGLSL: Self.vertexGLSL, fragmentGLSL: Self.fragmentGLSL,
+                                   vertexMSL: Self.msl, fragmentMSL: nil)
       deferred.setPassCallback("draw-fireflies", callback: akariFireflyDrawCallback,
                                userdata: Unmanaged.passUnretained(self).toOpaque())
     }

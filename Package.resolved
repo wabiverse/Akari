@@ -1,5 +1,5 @@
 {
-  "originHash" : "94f3b1fa6aa665e2465b676f8e32403c1f1a66d47674564839b1403d0ca4205a",
+  "originHash" : "c126cf051addc455e2d361d83f0f4b98a7e8c6bddcad3e218155d4bcfb6e2d50",
   "pins" : [
     {
       "identity" : "imgui",
@@ -123,8 +123,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-syntax",
       "state" : {
-        "revision" : "2b59c0c741e9184ab057fd22950b491076d42e91",
-        "version" : "603.0.0"
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
       }
     },
     {
@@ -132,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/wabiverse/swift-usd.git",
       "state" : {
-        "revision" : "5df70ae23ee6a8a3b812e0c3bde33a079db5a99f",
-        "version" : "26.8.7"
+        "revision" : "6821446e9ada11465e65bd4efd195950c02c6c03",
+        "version" : "26.8.9"
       }
     },
     {
@@ -150,8 +150,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/furbytm/SwiftLabGL.git",
       "state" : {
-        "revision" : "4d61b68c2b59ef31dabd9f3ab3f0a5bf60ea62e0",
-        "version" : "0.1.6"
+        "revision" : "4af28bc1b330848f02ca5096ff08e3f4f915dcd5",
+        "version" : "0.1.7"
       }
     },
     {

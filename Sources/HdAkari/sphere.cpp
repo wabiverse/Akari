@@ -37,28 +37,42 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
-#include "pxr/pxrns.h"
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/bufferSource.h>
+# include <Hd/changeTracker.h>
+# include <Hd/meshTopology.h>
+# include <Hd/meshUtil.h>
+# include <Hd/mesh.h>
+# include <Hd/repr.h>
+# include <Hd/sceneDelegate.h>
+# include <Hd/sphereSchema.h>
+# include <Hd/tokens.h>
+# include <Hd/vtBufferSource.h>
+# include <GeomUtil/sphereMeshGenerator.h>
+# include <Vt/value.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/bufferSource.h>
+# include <pxr/imaging/hd/changeTracker.h>
+# include <pxr/imaging/hd/meshTopology.h>
+# include <pxr/imaging/hd/meshUtil.h>
+# include <pxr/imaging/hd/mesh.h>
+# include <pxr/imaging/hd/repr.h>
+# include <pxr/imaging/hd/sceneDelegate.h>
+# include <pxr/imaging/hd/sphereSchema.h>
+# include <pxr/imaging/hd/tokens.h>
+# include <pxr/imaging/hd/vtBufferSource.h>
+# include <pxr/imaging/geomUtil/sphereMeshGenerator.h>
+# include <pxr/base/vt/value.h>
+#endif
 
 #include "HdAkari/sphere.h"
+#include "HdAkari/lightProbe.h"
 #include "HdAkari/materialBinding.h"
 #include "HdAkari/renderParam.h"
 #include "HdAkari/textureAtlas.h"
 #include "HdAkari/scene.h"
-
-#include <Hd/bufferSource.h>
-#include <Hd/changeTracker.h>
-#include <Hd/meshTopology.h>
-#include <Hd/meshUtil.h>
-#include <Hd/mesh.h>
-#include <Hd/repr.h>
-#include <Hd/sceneDelegate.h>
-#include <Hd/sphereSchema.h>
-#include <Hd/tokens.h>
-#include <Hd/vtBufferSource.h>
-
-#include <GeomUtil/sphereMeshGenerator.h>
-
-#include <Vt/value.h>
 
 #include <algorithm>
 
@@ -139,6 +153,11 @@ HdAkariSphere::Sync(HdSceneDelegate *sceneDelegate,
   data.points.resize(numPoints);
   GeomUtilSphereMeshGenerator::GeneratePoints(data.points.begin(), numRadial, numAxial, radius);
 
+  if (HdAkariSyncLightProbe(sceneDelegate, id, scene, &data.points)) {
+    *dirtyBits = HdChangeTracker::Clean;
+    return;
+  }
+
   PxOsdMeshTopology topology = GeomUtilSphereMeshGenerator::GenerateTopology(numRadial, numAxial);
 
   HdMeshTopology meshTopology(topology);
@@ -177,6 +196,7 @@ HdAkariSphere::Finalize(HdRenderParam *renderParam)
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
     if (HdAkariScene *scene = param->GetScene()) {
       scene->RemoveMesh(GetId());
+      scene->RemoveProbe(GetId());
     }
   }
 }

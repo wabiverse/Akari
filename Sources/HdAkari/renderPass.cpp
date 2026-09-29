@@ -37,17 +37,28 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/renderPassState.h>
+# include <Hd/renderIndex.h>
+# include <Hd/renderDelegate.h>
+# include <Hd/aov.h>
+# include <Hd/tokens.h>
+# include <Gf/matrix4d.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/renderPassState.h>
+# include <pxr/imaging/hd/renderIndex.h>
+# include <pxr/imaging/hd/renderDelegate.h>
+# include <pxr/imaging/hd/aov.h>
+# include <pxr/imaging/hd/tokens.h>
+# include <pxr/base/gf/matrix4d.h>
+#endif
+
 #include "HdAkari/renderPass.h"
 #include "HdAkari/renderParam.h"
 #include "HdAkari/renderBuffer.h"
 #include "HdAkari/akariEngineCallbacks.h"
-
-#include <Hd/renderPassState.h>
-#include <Hd/renderIndex.h>
-#include <Hd/renderDelegate.h>
-#include <Hd/aov.h>
-#include <Hd/tokens.h>
-#include <Gf/matrix4d.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 

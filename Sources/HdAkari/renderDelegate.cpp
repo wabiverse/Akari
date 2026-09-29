@@ -37,6 +37,28 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/camera.h>
+# include <Hd/driver.h>
+# include <Hd/instancer.h>
+# include <Hd/tokens.h>
+# include <Hd/aov.h>
+# include <Hgi/tokens.h>
+# include <Gf/vec4f.h>
+# include <Tf/diagnostic.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/camera.h>
+# include <pxr/imaging/hd/driver.h>
+# include <pxr/imaging/hd/instancer.h>
+# include <pxr/imaging/hd/tokens.h>
+# include <pxr/imaging/hd/aov.h>
+# include <pxr/imaging/hgi/tokens.h>
+# include <pxr/base/gf/vec4f.h>
+# include <pxr/base/tf/diagnostic.h>
+#endif
+
 #include "HdAkari/renderDelegate.h"
 #include "HdAkari/renderParam.h"
 #include "HdAkari/renderPass.h"
@@ -49,15 +71,6 @@
 #include "HdAkari/textureAtlas.h"
 #include "HdAkari/akariBridge.h"
 #include "HdAkari/akariBridgeDelegateCalls.h"
-
-#include <Hd/camera.h>
-#include <Hd/driver.h>
-#include <Hd/instancer.h>
-#include <Hd/tokens.h>
-#include <Hd/aov.h>
-#include <Hgi/tokens.h>
-#include <Gf/vec4f.h>
-#include <Tf/diagnostic.h>
 
 #include <cstdio>
 #include <cstring>

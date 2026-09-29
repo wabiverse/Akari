@@ -54,10 +54,6 @@ public struct RenderFeatures: OptionSet, Sendable
   public static let lightProbes = RenderFeatures(rawValue: 1 << 1)
   /// Shadow maps for punctual / area lights (cascades for sun).
   public static let shadowMaps = RenderFeatures(rawValue: 1 << 2)
-  /// Screen space contact shadows that fill the gap shadow maps miss.
-  public static let contactShadows = RenderFeatures(rawValue: 1 << 3)
-  /// Ground truth ambient occlusion (GTAO).
-  public static let ambientOcclusion = RenderFeatures(rawValue: 1 << 4)
   /// Screen space reflections.
   public static let screenSpaceReflections = RenderFeatures(rawValue: 1 << 5)
   /// Screen space global illumination (horizon scan GI).
@@ -78,15 +74,15 @@ public struct RenderFeatures: OptionSet, Sendable
 
   /// The complete realtime fidelity stack (screen space, no hardware RT).
   public static let fullFidelity: RenderFeatures = [
-    .imageBasedLighting, .lightProbes, .shadowMaps, .contactShadows,
-    .ambientOcclusion, .screenSpaceReflections, .screenSpaceGI,
+    .imageBasedLighting, .lightProbes, .shadowMaps,
+    .screenSpaceReflections, .screenSpaceGI,
     .temporalAA, .bloom, .depthOfField
   ]
 
   /// A leaner set tuned to high fps in an interactive viewport.
   public static let game60fps: RenderFeatures = [
     .imageBasedLighting, .shadowMaps,
-    .ambientOcclusion, .screenSpaceReflections,
+    .screenSpaceReflections,
     .temporalAA, .bloom
   ]
 }

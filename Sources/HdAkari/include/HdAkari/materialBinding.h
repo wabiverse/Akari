@@ -40,12 +40,21 @@
 #ifndef HDAKARI_MATERIAL_BINDING_H
 #define HDAKARI_MATERIAL_BINDING_H
 
-#include <pxr/pxrns.h>
-#include <Gf/vec3f.h>
-#include <Sdf/path.h>
-#include <Tf/token.h>
-#include <Vt/types.h>
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Gf/vec3f.h>
+# include <Sdf/path.h>
+# include <Tf/token.h>
+# include <Vt/types.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/base/gf/vec3f.h>
+# include <pxr/usd/sdf/path.h>
+# include <pxr/base/tf/token.h>
+# include <pxr/base/vt/types.h>
+#endif
 
+#include "HdAkari/api.h"
 #include "HdAkari/textureAtlas.h"
 
 #include <string>

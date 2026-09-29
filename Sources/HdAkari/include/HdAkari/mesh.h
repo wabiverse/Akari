@@ -40,8 +40,13 @@
 #ifndef HDAKARI_MESH_H
 #define HDAKARI_MESH_H
 
-#include <pxr/pxrns.h>
-#include <Hd/mesh.h>
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/mesh.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/mesh.h>
+#endif
 
 #include "HdAkari/api.h"
 

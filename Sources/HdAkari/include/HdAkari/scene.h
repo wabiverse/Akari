@@ -40,17 +40,30 @@
 #ifndef HDAKARI_SCENE_H
 #define HDAKARI_SCENE_H
 
-#include <pxr/pxrns.h>
-#include <Sdf/path.h>
-#include <Gf/matrix4d.h>
-#include <Gf/vec2f.h>
-#include <Gf/vec3f.h>
-#include <Gf/vec3i.h>
-#include <Vt/array.h>
-#include <Vt/types.h>
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Sdf/path.h>
+# include <Gf/matrix4d.h>
+# include <Gf/vec2f.h>
+# include <Gf/vec3f.h>
+# include <Gf/vec3i.h>
+# include <Vt/array.h>
+# include <Vt/types.h>
+# include <Arch/swiftInterop.h>
+# include <Tf/sharedPtrRetainReleaseHelper.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/usd/sdf/path.h>
+# include <pxr/base/gf/matrix4d.h>
+# include <pxr/base/gf/vec2f.h>
+# include <pxr/base/gf/vec3f.h>
+# include <pxr/base/gf/vec3i.h>
+# include <pxr/base/vt/array.h>
+# include <pxr/base/vt/types.h>
+# include <pxr/base/tf/sharedPtrRetainReleaseHelper.h>
+#endif
 
-#include <Arch/swiftInterop.h>
-#include <Tf/sharedPtrRetainReleaseHelper.h>
+#include "HdAkari/api.h"
 
 #include <mutex>
 #include <atomic>
@@ -99,6 +112,19 @@ struct HdAkariLightData
   uint64_t dataRevision = 0;
 };
 
+/// A light probe authored as a gprim with `primvars:akari:lightProbe`
+/// ("volume" or "sphere"), its local bounds from `transform` give the extent.
+/// Volumes may set `primvars:akari:lightProbeResolution` (int3) probe counts.
+struct HdAkariLightProbeData
+{
+  SdfPath id;
+  GfMatrix4d transform = GfMatrix4d(1.0);
+  float minX = -1.0f, minY = -1.0f, minZ = -1.0f;
+  float maxX = 1.0f, maxY = 1.0f, maxZ = 1.0f;
+  bool isSphere = false;
+  int resolutionX = 0, resolutionY = 0, resolutionZ = 0; // 0 = auto
+};
+
 /// @class HdAkariScene
 ///
 /// Thread safe registry of the meshes and lights the delegate has synced.
@@ -138,12 +164,17 @@ public:
     auto it = _meshes.find(id);
     if (it == _meshes.end()) return;
     auto &m = it->second;
+    const bool changed = m.transform != xf || m.displayColor != color || m.opacity != opacity ||
+                         m.roughness != roughness || m.metallic != metallic || m.visible != visible;
     m.transform = xf;
     m.displayColor = color;
     m.opacity = opacity;
     m.roughness = roughness;
     m.metallic = metallic;
     m.visible = visible;
+    if (changed) {
+      _revision.fetch_add(1, std::memory_order_relaxed);
+    }
   }
 
   /// Copy only the geometry (points + indices) from a previously stored
@@ -162,8 +193,9 @@ public:
   void RemoveMesh(SdfPath const &id)
   {
     std::lock_guard<std::mutex> lock(_mutex);
-    _meshes.erase(id);
-    _revision.fetch_add(1, std::memory_order_relaxed);
+    if (_meshes.erase(id) > 0) {
+      _revision.fetch_add(1, std::memory_order_relaxed);
+    }
   }
 
   size_t MeshCount() const
@@ -249,12 +281,57 @@ public:
     return _lightRevision.load(std::memory_order_relaxed);
   }
 
+  void UpdateProbe(HdAkariLightProbeData data)
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _probes[data.id] = std::move(data);
+    _probeRevision.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  /// Keeps the stored bounds when only the transform changed.
+  bool CopyProbeBounds(SdfPath const &id, HdAkariLightProbeData &dst) const
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    auto it = _probes.find(id);
+    if (it == _probes.end()) return false;
+    dst.minX = it->second.minX; dst.minY = it->second.minY; dst.minZ = it->second.minZ;
+    dst.maxX = it->second.maxX; dst.maxY = it->second.maxY; dst.maxZ = it->second.maxZ;
+    return true;
+  }
+
+  void RemoveProbe(SdfPath const &id)
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (_probes.erase(id) > 0) {
+      _probeRevision.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  std::vector<HdAkariLightProbeData> ProbeSnapshot() const
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    std::vector<HdAkariLightProbeData> out;
+    out.reserve(_probes.size());
+    for (auto const &kv : _probes) {
+      out.push_back(kv.second);
+    }
+    return out;
+  }
+
+  /// Monotonically increasing counter, bumped on every UpdateProbe/RemoveProbe.
+  uint64_t ProbeRevision() const
+  {
+    return _probeRevision.load(std::memory_order_relaxed);
+  }
+
 private:
   mutable std::mutex _mutex;
   std::unordered_map<SdfPath, HdAkariMeshData, SdfPath::Hash> _meshes;
   std::atomic<uint64_t> _revision{0};
   std::unordered_map<SdfPath, HdAkariLightData, SdfPath::Hash> _lights;
   std::atomic<uint64_t> _lightRevision{0};
+  std::unordered_map<SdfPath, HdAkariLightProbeData, SdfPath::Hash> _probes;
+  std::atomic<uint64_t> _probeRevision{0};
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

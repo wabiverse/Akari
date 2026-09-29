@@ -40,7 +40,11 @@
 #ifndef HDAKARI_API_H
 #define HDAKARI_API_H
 
-#include "Arch/export.h"
+#if __has_include(<Arch/export.h>)
+# include <Arch/export.h>
+#else
+# include <pxr/base/arch/export.h>
+#endif
 
 #if defined(PXR_STATIC)
 #   define HDAKARI_API

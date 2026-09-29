@@ -40,8 +40,13 @@
 #ifndef HDAKARI_RENDER_PASS_H
 #define HDAKARI_RENDER_PASS_H
 
-#include <pxr/pxrns.h>
-#include <Hd/renderPass.h>
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/renderPass.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/renderPass.h>
+#endif
 
 #include "HdAkari/api.h"
 

@@ -193,8 +193,6 @@ extension AkariDemo
           featureToggle(.imageBasedLighting, "IBL")
           featureToggle(.lightProbes, "Light probes")
           featureToggle(.shadowMaps, "Shadow maps")
-          featureToggle(.contactShadows, "Contact shadows")
-          featureToggle(.ambientOcclusion, "Ambient occlusion")
           featureToggle(.screenSpaceReflections, "Screen space reflections")
         }
         VStack(alignment: .leading, spacing: 3)

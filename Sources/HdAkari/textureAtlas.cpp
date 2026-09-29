@@ -37,19 +37,32 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Ar/asset.h>
+# include <Ar/resolvedPath.h>
+# include <Ar/resolver.h>
+# include <Hd/material.h>
+# include <Hd/renderIndex.h>
+# include <Hd/sceneDelegate.h>
+# include <Hio/image.h>
+# include <Hio/types.h>
+# include <Work/loops.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/usd/ar/asset.h>
+# include <pxr/usd/ar/resolvedPath.h>
+# include <pxr/usd/ar/resolver.h>
+# include <pxr/imaging/hd/material.h>
+# include <pxr/imaging/hd/renderIndex.h>
+# include <pxr/imaging/hd/sceneDelegate.h>
+# include <pxr/imaging/hio/image.h>
+# include <pxr/imaging/hio/types.h>
+# include <pxr/base/work/loops.h>
+#endif
+
 #include "HdAkari/textureAtlas.h"
-
 #include "HdAkari/akariImaging.h" // swift -> c++ interop, see Sources/AkariImaging.
-
-#include <Ar/asset.h>
-#include <Ar/resolvedPath.h>
-#include <Ar/resolver.h>
-#include <Hd/material.h>
-#include <Hd/renderIndex.h>
-#include <Hd/sceneDelegate.h>
-#include <Hio/image.h>
-#include <Hio/types.h>
-#include <Work/loops.h>
 
 #include <algorithm>
 #include <climits>

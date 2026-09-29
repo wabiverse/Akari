@@ -276,16 +276,18 @@ public extension Akari
       dispatchPageTable()
       dispatchSelectViews()
 
+      let forceDirectional = sunChanged || castersMoved
       let forcePunctual = camera.view.simd != directionalHistory.view.simd || punctualHistory.invalidated
+                          || castersMoved
       punctualHistory.invalidated = punctualHistory.pendingDirty != 0
 
       let drawn = drawViews(capture: capture, directional: directional,
                             directionalSlots: directionalSlots, punctualFaces: punctualFaces,
-                            forced: sunChanged ? Set(directionalSlots) : [],
+                            forced: forceDirectional ? Set(directionalSlots) : [],
                             forcePunctual: forcePunctual)
 
-      retireDrawn(views: sunChanged ? drawn : drawn.filter { $0 >= Self.punctualViewBase })
-      if sunChanged || forcePunctual, !drawn.isEmpty { dispatchPageTable() }
+      retireDrawn(views: forceDirectional ? drawn : drawn.filter { $0 >= Self.punctualViewBase })
+      if !drawn.isEmpty { dispatchPageTable() }
 
       directionalHistory.slots = directionalSlots
       directionalHistory.view = camera.view

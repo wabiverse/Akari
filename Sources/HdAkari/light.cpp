@@ -37,18 +37,25 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
-#include "pxr/pxrns.h"
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/changeTracker.h>
+# include <Hd/light.h>
+# include <Hd/sceneDelegate.h>
+# include <Hd/tokens.h>
+# include <Vt/value.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/changeTracker.h>
+# include <pxr/imaging/hd/light.h>
+# include <pxr/imaging/hd/sceneDelegate.h>
+# include <pxr/imaging/hd/tokens.h>
+# include <pxr/base/vt/value.h>
+#endif
 
 #include "HdAkari/light.h"
 #include "HdAkari/renderParam.h"
 #include "HdAkari/scene.h"
-
-#include <Hd/changeTracker.h>
-#include <Hd/light.h>
-#include <Hd/sceneDelegate.h>
-#include <Hd/tokens.h>
-
-#include <Vt/value.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 

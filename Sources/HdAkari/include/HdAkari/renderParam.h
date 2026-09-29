@@ -40,11 +40,20 @@
 #ifndef HDAKARI_RENDER_PARAM_H
 #define HDAKARI_RENDER_PARAM_H
 
-#include <pxr/pxrns.h>
-#include <Arch/swiftInterop.h>
-#include <Tf/sharedPtrRetainReleaseHelper.h>
-#include <Hd/renderDelegate.h>
-#include <Hgi/hgiImpl.h>
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Arch/swiftInterop.h>
+# include <Tf/sharedPtrRetainReleaseHelper.h>
+# include <Hd/renderDelegate.h>
+# include <Hgi/hgiImpl.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/base/tf/sharedPtrRetainReleaseHelper.h>
+# include <pxr/imaging/hd/renderDelegate.h>
+# include <pxr/imaging/hgi/hgi.h>
+#endif
+
+#include "HdAkari/api.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 

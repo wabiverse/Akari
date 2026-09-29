@@ -49,12 +49,12 @@ public enum RenderPassID: String, CaseIterable, Sendable
   case depthPrepass
   /// Shadow map(s), sun cascades + punctual/area maps.
   case shadow
+  /// Volume + sphere light probes, baked and relit from the scene capture.
+  case lightProbes
   /// Opaque geometry, G-buffer (deferred) or forward+ shaded opaque.
   case geometry
   /// Froxel volumetrics composite.
   case volumetrics
-  /// Ground truth ambient occlusion (GTAO).
-  case ambientOcclusion
   /// Direct + image based lighting (PBR, analytic & area lights, IBL).
   case lighting
   /// Screen space global illumination (indirect diffuse bounce).

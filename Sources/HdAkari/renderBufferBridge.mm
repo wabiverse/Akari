@@ -37,12 +37,20 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hgi/texture.h>
+# include <HgiMetal/hgi.h>
+# include <HgiMetal/texture.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hgi/texture.h>
+# include <pxr/imaging/hgiMetal/hgi.h>
+# include <pxr/imaging/hgiMetal/texture.h>
+#endif
+
 #include "HdAkari/akariBridge.h"
 #include "HdAkari/renderBuffer.h"
-
-#include <Hgi/texture.h>
-#include <HgiMetal/hgi.h>
-#include <HgiMetal/texture.h>
 
 #include <cstdint>
 

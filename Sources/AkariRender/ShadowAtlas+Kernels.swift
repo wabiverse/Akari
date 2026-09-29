@@ -77,11 +77,14 @@ extension Akari.ShadowAtlas
        clipmapClear, tilemapBounds, tagUpdate, tagPropagate, buildRenderViews]
     }
 
-    /// The kernels the pipeline can't run without.
-    var isComplete: Bool
+    /// Waits for the kernels the pipeline can't run without, false if any failed.
+    func waitForRequired() -> Bool
     {
       [beginFrame, tilemapShift, tagUsagePunctual, tagUsageDirectional, dilateUsageDirectional,
-       dilateUsagePunctual, maskLod, free, defrag, allocate, pageTable].allSatisfy { $0 != 0 }
+       dilateUsagePunctual, maskLod, free, defrag, allocate, pageTable].allSatisfy
+      {
+        $0 != 0 && gl.waitComputeShader($0) != 0
+      }
     }
 
     func setThreadgroupSizes()
@@ -116,11 +119,11 @@ extension Akari.ShadowAtlas
     }
   }
 
-  static func compileKernels() -> Kernels
+  static func precompileKernels() -> Kernels
   {
     func compile(_ name: String, _ glsl: String, _ msl: String) -> GLuint
     {
-      gl.defineComputeShader(name: "akari-shadow-\(name)", glsl: glsl, msl: msl)
+      gl.precompileComputeShader(name: "akari-shadow-\(name)", glsl: glsl, msl: msl)
     }
 
     var k = Kernels()
@@ -129,10 +132,6 @@ extension Akari.ShadowAtlas
     k.tagUsagePunctual = compile("tag-usage-punctual", tagUsagePunctualGLSL, tagUsagePunctualMSL)
     k.tagUsageDirectional = compile("tag-usage-directional", tagUsageDirectionalGLSL, tagUsageDirectionalMSL)
     k.tagUsageVolume = compile("tag-usage-volume", tagUsageVolumeGLSL, tagUsageVolumeMSL)
-    if k.tagUsageVolume == 0
-    {
-      print("[akari/shadow] volume usage tagging failed to compile, fog shadows fall back to surface pages")
-    }
     k.dilateUsageDirectional = compile("dilate-usage-directional", dilateUsageDirectionalGLSL, dilateUsageDirectionalMSL)
     k.dilateUsagePunctual = compile("dilate-usage-punctual", dilateUsagePunctualGLSL, dilateUsagePunctualMSL)
     k.maskLod = compile("mask-lod", maskLodGLSL, maskLodMSL)
@@ -151,6 +150,7 @@ extension Akari.ShadowAtlas
     k.tagUpdate = compile("tag-update", tagUpdateGLSL, tagUpdateMSL)
     k.tagPropagate = compile("tag-propagate", tagPropagateGLSL, tagPropagateMSL)
     k.buildRenderViews = compile("build-render-views", buildRenderViewsGLSL, buildRenderViewsMSL)
+    k.setThreadgroupSizes()
 
     return k
   }

@@ -43,7 +43,7 @@
 /// be toggled afterward.
 public enum RenderQuality: String, Sendable, CaseIterable
 {
-  /// Mobile, IBL + shadows + AO, half res SS fx.
+  /// Mobile, IBL + shadows + TAA.
   case low
   /// Balances quality with performance.
   case medium
@@ -68,6 +68,8 @@ public struct RenderSettings: Sendable
   public var volume: VolumeSettings = .init()
   /// Screen space reflection settings.
   public var reflection: ReflectionSettings = .init()
+  /// Light probe settings.
+  public var probes: LightProbeSettings = .init()
   /// Frame rate the interactive pipeline budgets toward.
   public var targetFrameRate: Int = 60
   /// Viewport sample count (defaults to 16).
@@ -86,6 +88,7 @@ public struct RenderSettings: Sendable
               light: LightSettings = LightSettings(),
               volume: VolumeSettings = VolumeSettings(),
               reflection: ReflectionSettings = ReflectionSettings(),
+              probes: LightProbeSettings = LightProbeSettings(),
               targetFrameRate: Int = 60,
               samples: Int = 16,
               renderSamples: Int = 64,
@@ -97,6 +100,7 @@ public struct RenderSettings: Sendable
     self.light = light
     self.volume = volume
     self.reflection = reflection
+    self.probes = probes
     self.targetFrameRate = targetFrameRate
     self.samples = samples
     self.renderSamples = renderSamples
@@ -109,7 +113,7 @@ public struct RenderSettings: Sendable
     switch quality
     {
       case .low:
-        [.imageBasedLighting, .shadowMaps, .ambientOcclusion, .temporalAA]
+        [.imageBasedLighting, .shadowMaps, .temporalAA]
       case .medium:
         .game60fps
       case .high:

@@ -37,11 +37,18 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hgi/hgiImpl.h>
+# include <Hgi/texture.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hgi/hgi.h>
+# include <pxr/imaging/hgi/texture.h>
+#endif
+
 #include "HdAkari/renderBuffer.h"
 #include "HdAkari/renderParam.h"
-
-#include <Hgi/hgiImpl.h>
-#include <Hgi/texture.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 

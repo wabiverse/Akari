@@ -69,12 +69,11 @@ struct AkariDemo: App
     registerAkariRenderer(engine: engine)
 
     let stage = AppUtils.openOrCreateStage()
-    driver = Akari.FrameDriver()
 
     engine.labfx.setStageUpAxis(isZUp: UsdGeom.getUpAxis(for: stage) == .z)
 
     hydra = Hydra.RenderEngine(stage: stage, rendererPluginId: Tf.Token(Akari.rendererPluginId))
-    hydra.frameDelegate = driver
+    driver = Akari.FrameDriver(stage: stage, hydra: hydra, akari: engine)
 
     print("[akari] first light - renderer = \(Akari.rendererPluginId)")
   }

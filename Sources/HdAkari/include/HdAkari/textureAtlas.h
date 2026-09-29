@@ -40,10 +40,18 @@
 #ifndef HDAKARI_TEXTURE_ATLAS_H
 #define HDAKARI_TEXTURE_ATLAS_H
 
-#include <pxr/pxrns.h>
-#include <Arch/swiftInterop.h>
-#include <Gf/vec3f.h>
-#include <Tf/sharedPtrRetainReleaseHelper.h>
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Arch/swiftInterop.h>
+# include <Gf/vec3f.h>
+# include <Tf/sharedPtrRetainReleaseHelper.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/base/gf/vec3f.h>
+# include <pxr/base/tf/sharedPtrRetainReleaseHelper.h>
+#endif
+
+#include "HdAkari/api.h"
 
 #include <atomic>
 #include <cstdint>

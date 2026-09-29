@@ -129,7 +129,6 @@ public extension Akari.GPU
   enum RenderTargetID: String, Sendable
   {
     case gbufferAlbedo, gbufferNormal, gbufferMaterial, depth
-    case ambientOcclusion
     case sceneColorHDR
     case screenSpaceGI
     case volumeScatter, volumeIntegrated

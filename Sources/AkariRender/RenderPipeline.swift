@@ -65,7 +65,8 @@ public struct RenderPipeline: Sendable
     // records, so they can only be drawn once it has run.
     if f.contains(.shadowMaps) { passes.append(.shadow) }
 
-    if f.contains(.ambientOcclusion) { passes.append(.ambientOcclusion) }
+    // probes replay the same capture into their own cube faces.
+    if f.contains(.lightProbes) { passes.append(.lightProbes) }
 
     passes.append(.lighting)
 

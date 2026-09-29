@@ -50,12 +50,24 @@ public extension Akari
   /// frame.
   final class RenderEngine
   {
-    /// Live configuration, reassigning rebuilds the frame graph.
+    /// Live configuration, safe to set from any thread. The frame
+    /// graph rebuilds at the start of the next `renderFrame`.
     public var settings: RenderSettings
     {
-      didSet { rebuild() }
+      get { settingsLock.withLock { _settings } }
+      set
+      {
+        settingsLock.withLock
+        {
+          _settings = newValue
+          settingsPendingRebuild = true
+        }
+      }
     }
 
+    private let settingsLock = NSLock()
+    private var _settings: RenderSettings
+    private var settingsPendingRebuild = false
     private var pipeline: RenderPipeline
     private var graph: [any Akari.GPU.RenderPassNode]
     private var gpu: Akari.GPU.HydraContext?
@@ -66,21 +78,33 @@ public extension Akari
 
     public init(settings: RenderSettings = RenderSettings())
     {
-      self.settings = settings
+      _settings = settings
       pipeline = RenderPipeline(settings: settings)
       graph = RenderEngine.buildGraph(for: settings)
     }
 
-    /// The passes that will run this frame, in order.
+    /// The passes the latest settings run, in order.
     public var activePasses: [RenderPassID]
     {
-      pipeline.activePasses
+      RenderPipeline(settings: settings).activePasses
     }
 
-    private func rebuild()
+    /// Rebuilds the graph if the settings changed, returning the snapshot this frame runs with.
+    private func applyPendingSettings() -> RenderSettings
     {
-      pipeline.settings = settings
-      graph = RenderEngine.buildGraph(for: settings)
+      let (settings, pending) = settingsLock.withLock
+      {
+        defer { settingsPendingRebuild = false }
+        return (_settings, settingsPendingRebuild)
+      }
+
+      if pending
+      {
+        pipeline.settings = settings
+        graph = RenderEngine.buildGraph(for: settings)
+      }
+
+      return settings
     }
 
     /// Per frame entry point. Called by the Hydra render pass.
@@ -104,6 +128,8 @@ public extension Akari
                             height: Int,
                             isFinalRender: Bool = false)
     {
+      let settings = applyPendingSettings()
+
       if gpu == nil || gpu?.hgi != hgi
       {
         gpu = Akari.GPU.HydraContext(hgi: hgi, backend: settings.backend)
@@ -207,8 +233,8 @@ public extension Akari
       {
         case .depthPrepass: DepthPrepass()
         case .shadow: ShadowPass()
+        case .lightProbes: LightProbePass()
         case .geometry: GeometryPass()
-        case .ambientOcclusion: AmbientOcclusionPass()
         case .lighting: LightingPass()
         case .screenSpaceGI: ScreenSpaceGIPass()
         case .reflections: ReflectionsPass()

@@ -37,51 +37,34 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
-#ifndef HDAKARI_LIGHT_H
-#define HDAKARI_LIGHT_H
+#ifndef HDAKARI_LIGHT_PROBE_H
+#define HDAKARI_LIGHT_PROBE_H
 
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
-# include <Hd/version.h>
-# include <Hd/light.h>
 # include <Sdf/path.h>
+# include <Vt/types.h>
 #else
 # include <pxr/pxr.h>
-# include <pxr/imaging/hd/version.h>
-# include <pxr/imaging/hd/light.h>
 # include <pxr/usd/sdf/path.h>
+# include <pxr/base/vt/types.h>
 #endif
 
 #include "HdAkari/api.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-class HdAkariLight final : public HdLight
-{
-public:
-  HDAKARI_API
-  explicit HdAkariLight(SdfPath const &id);
+class HdSceneDelegate;
+class HdAkariScene;
 
-  ~HdAkariLight() override;
-
-  HDAKARI_API
-  void Sync(HdSceneDelegate *delegate,
-            HdRenderParam   *renderParam,
-            HdDirtyBits     *dirtyBits) override;
-
-  HDAKARI_API
-  HdDirtyBits GetInitialDirtyBitsMask() const override;
-
-  HDAKARI_API
-  void Finalize(HdRenderParam *renderParam) override;
-
-private:
-  HdAkariLight(const HdAkariLight &) = delete;
-  HdAkariLight &operator=(const HdAkariLight &) = delete;
-
-  uint64_t _dataGeneration = 0;
-};
+/// Publishes `id` as a light probe if it has an authored `primvars:akari:lightProbe`,
+/// which causes it to be dropped from the drawn meshes and this returns true.
+/// `points` are its object space points, null keeps the bounds already stored.
+bool HdAkariSyncLightProbe(HdSceneDelegate *sceneDelegate,
+                           SdfPath const &id,
+                           HdAkariScene *scene,
+                           VtVec3fArray const *points);
 
 PXR_NAMESPACE_CLOSE_SCOPE
 
-#endif // HDAKARI_LIGHT_H
+#endif // HDAKARI_LIGHT_PROBE_H

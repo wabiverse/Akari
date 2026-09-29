@@ -61,19 +61,31 @@ public extension Akari
       release()
     }
 
-    /// Compiles the kernels once.
+    /// Starts the kernels compiling in the background.
+    public func precompileShaders()
+    {
+      guard depthShader == 0, !failed else { return }
+
+      depthShader = gl.precompileComputeShader(name: "akari-froxel-depth",
+                                               glsl: Self.depthGLSL,
+                                               msl: Self.depthMSL)
+      integrateShader = gl.precompileComputeShader(name: "akari-froxel-integrate",
+                                                   glsl: Self.integrateGLSL,
+                                                   msl: Self.integrateMSL)
+      gl.setComputeShaderThreadgroupSize(depthShader, x: 16, y: 16, z: 1)
+      gl.setComputeShaderThreadgroupSize(integrateShader, x: 8, y: 8, z: 1)
+    }
+
+    /// Waits for the kernels, once.
     public func prepare() -> Bool
     {
       if built { return true }
       if failed { return false }
 
-      depthShader = gl.defineComputeShader(name: "akari-froxel-depth",
-                                           glsl: Self.depthGLSL,
-                                           msl: Self.depthMSL)
-      integrateShader = gl.defineComputeShader(name: "akari-froxel-integrate",
-                                               glsl: Self.integrateGLSL,
-                                               msl: Self.integrateMSL)
-      guard depthShader != 0, integrateShader != 0
+      precompileShaders()
+      guard
+        gl.waitComputeShader(depthShader) != 0,
+        gl.waitComputeShader(integrateShader) != 0
       else
       {
         print("[akari/volume] froxel compute kernels failed to compile, volumetrics disabled")
@@ -81,8 +93,6 @@ public extension Akari
         failed = true
         return false
       }
-      gl.setComputeShaderThreadgroupSize(depthShader, x: 16, y: 16, z: 1)
-      gl.setComputeShaderThreadgroupSize(integrateShader, x: 8, y: 8, z: 1)
       built = true
       return true
     }

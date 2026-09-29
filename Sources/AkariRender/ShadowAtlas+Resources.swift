@@ -122,19 +122,36 @@ extension Akari.ShadowAtlas
     ensureResources()
   }
 
+  /// Starts the tile management kernels and the depth shader compiling in the background.
+  func precompileShaders()
+  {
+    guard depthShader == 0 else { return }
+
+    kernels = Self.precompileKernels()
+    depthShader = gl.precompileShader(name: "akari-shadow-depth",
+                                      vertexGLSL: Self.depthVertexGLSL,
+                                      fragmentGLSL: Self.depthFragmentGLSL,
+                                      vertexMSL: Self.depthMSL,
+                                      fragmentMSL: nil)
+  }
+
   func ensureResources() -> Bool
   {
     if resourcesReady { return true }
 
-    guard makePagePool() else { return fail("SSBO allocation failed") }
+    precompileShaders()
+    guard
+      kernels.waitForRequired(),
+      gl.waitShader(depthShader) != 0
+    else { return fail("shader compilation failed") }
+    if kernels.tagUsageVolume != 0, gl.waitComputeShader(kernels.tagUsageVolume) == 0
+    {
+      print("[akari/shadow] volume usage tagging failed to compile, fog shadows fall back to surface pages")
+      gl.deleteComputeShader(kernels.tagUsageVolume)
+      kernels.tagUsageVolume = 0
+    }
 
-    kernels = Self.compileKernels()
-    depthShader = gl.defineShader(name: "akari-shadow-depth",
-                                  vertexGLSL: Self.depthVertexGLSL,
-                                  fragmentGLSL: Self.depthFragmentGLSL,
-                                  vertexMSL: Self.depthMSL,
-                                  fragmentMSL: nil)
-    guard kernels.isComplete, depthShader != 0 else { return fail("compute shader compilation failed") }
+    guard makePagePool() else { return fail("SSBO allocation failed") }
 
     amplification.views = gl.genInstanceTransforms(count: GLsizei(Self.maxAmplificationViews))
     amplification.viewports = gl.genInstanceViewports(count: GLsizei(Self.maxAmplificationViews))
@@ -142,7 +159,6 @@ extension Akari.ShadowAtlas
       amplification.views != 0,
       amplification.viewports != 0
     else { return fail("amplification handle allocation failed") }
-    kernels.setThreadgroupSizes()
 
     let viewRes = Self.tilemapRes * Self.pageResolution
     atlasDepth = gl.createMemorylessDepthTexture(width: GLsizei(viewRes),
@@ -162,6 +178,7 @@ extension Akari.ShadowAtlas
     guard rt != 0 else { return fail("glGenRenderTarget failed") }
     gl.renderTargetTexture(target: rt, attachment: GLenum(GL_DEPTH_ATTACHMENT), texture: atlasDepth)
     atlasTarget = rt
+    precompileDepthVariants()
 
     frames = (0 ..< Self.bufferRing).map { _ in makeFrame() }
     data = frames[0].data
@@ -241,6 +258,24 @@ extension Akari.ShadowAtlas
     directionalHistory = DirectionalHistory()
     sunMotion = SunMotion()
     sun.lodBias = 0
+  }
+
+  /// Every amplified run `drawViews` replays, direct and indirect.
+  private func precompileDepthVariants()
+  {
+    for count in 1 ... Self.maxAmplificationViews
+    {
+      for flags in [0, LGL_SHADER_VARIANT_INDIRECT]
+      {
+        gl.precompileShaderVariant(depthShader,
+                                   renderTarget: atlasTarget,
+                                   blend: GLboolean(0),
+                                   blendSource: 0,
+                                   blendDestination: 0,
+                                   amplification: GLsizei(count),
+                                   flags: GLbitfield(flags))
+      }
+    }
   }
 
   func makeBuffer<T>(_ usage: GLuint, _: T.Type, count: Int) -> GLuint

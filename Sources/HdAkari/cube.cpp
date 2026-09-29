@@ -37,28 +37,42 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
-#include "pxr/pxrns.h"
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/bufferSource.h>
+# include <Hd/changeTracker.h>
+# include <Hd/meshTopology.h>
+# include <Hd/meshUtil.h>
+# include <Hd/mesh.h>
+# include <Hd/repr.h>
+# include <Hd/sceneDelegate.h>
+# include <Hd/cubeSchema.h>
+# include <Hd/tokens.h>
+# include <Hd/vtBufferSource.h>
+# include <Sdf/path.h>
+# include <Vt/array.h>
+# include <Vt/value.h>
+# include <GeomUtil/cuboidMeshGenerator.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/version.h>
+# include <pxr/imaging/hd/mesh.h>
+# include <pxr/imaging/hd/rprim.h>
+# include <pxr/imaging/hd/drawingCoord.h>
+# include <pxr/imaging/hd/enums.h>
+# include <pxr/imaging/hd/perfLog.h>
+# include <pxr/usd/sdf/path.h>
+# include <pxr/base/vt/array.h>
+# include <pxr/base/vt/value.h>
+# include <pxr/imaging/geomUtil/cuboidMeshGenerator.h>
+#endif
 
 #include "HdAkari/cube.h"
+#include "HdAkari/lightProbe.h"
 #include "HdAkari/materialBinding.h"
 #include "HdAkari/renderParam.h"
 #include "HdAkari/textureAtlas.h"
 #include "HdAkari/scene.h"
-
-#include <Hd/bufferSource.h>
-#include <Hd/changeTracker.h>
-#include <Hd/meshTopology.h>
-#include <Hd/meshUtil.h>
-#include <Hd/mesh.h>
-#include <Hd/repr.h>
-#include <Hd/sceneDelegate.h>
-#include <Hd/cubeSchema.h>
-#include <Hd/tokens.h>
-#include <Hd/vtBufferSource.h>
-
-#include <GeomUtil/cuboidMeshGenerator.h>
-
-#include <Vt/value.h>
 
 #include <algorithm>
 
@@ -143,6 +157,11 @@ HdAkariCube::Sync(HdSceneDelegate *sceneDelegate,
     /* lZ */ size
   );
 
+  if (HdAkariSyncLightProbe(sceneDelegate, id, scene, &data.points)) {
+    *dirtyBits = HdChangeTracker::Clean;
+    return;
+  }
+
   PxOsdMeshTopology topology = GeomUtilCuboidMeshGenerator::GenerateTopology();
 
   HdMeshTopology meshTopology(topology);
@@ -181,6 +200,7 @@ HdAkariCube::Finalize(HdRenderParam *renderParam)
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
     if (auto scene = param->GetScene()) {
       scene->RemoveMesh(GetId());
+      scene->RemoveProbe(GetId());
     }
   }
 }

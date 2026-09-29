@@ -38,18 +38,28 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-#include "pxr/pxrns.h"
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/material.h>
+# include <Hd/meshUtil.h>
+# include <Hd/sceneDelegate.h>
+# include <Hd/tokens.h>
+# include <Hd/types.h>
+# include <Sdf/assetPath.h>
+# include <Gf/vec2f.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/material.h>
+# include <pxr/imaging/hd/meshUtil.h>
+# include <pxr/imaging/hd/sceneDelegate.h>
+# include <pxr/imaging/hd/tokens.h>
+# include <pxr/imaging/hd/types.h>
+# include <pxr/usd/sdf/assetPath.h>
+# include <pxr/base/gf/vec2f.h>
+#endif
 
 #include "HdAkari/materialBinding.h"
 #include "HdAkari/scene.h"
-
-#include <Hd/material.h>
-#include <Hd/meshUtil.h>
-#include <Hd/sceneDelegate.h>
-#include <Hd/tokens.h>
-#include <Hd/types.h>
-#include <Sdf/assetPath.h>
-#include <Gf/vec2f.h>
 
 #include <algorithm>
 #include <cmath>

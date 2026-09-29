@@ -71,4 +71,12 @@ public extension Bundle
     { return bundle }
     return .module
   }()
+  
+  static let fonts: Bundle = {
+    // in bundled app contexts, swift bundler nests compiled resources under
+    // Contents/Resources - check there before falling back to .module.
+    if let bundle = akariBundle("SwiftLabGL_LabGL")
+    { return bundle }
+    return .module
+  }()
 }

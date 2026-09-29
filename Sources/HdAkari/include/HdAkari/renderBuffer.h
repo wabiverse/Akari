@@ -40,9 +40,15 @@
 #ifndef HDAKARI_RENDER_BUFFER_H
 #define HDAKARI_RENDER_BUFFER_H
 
-#include <pxr/pxrns.h>
-#include <Hd/renderBuffer.h>
-#include <Hgi/texture.h>
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/renderBuffer.h>
+# include <Hgi/texture.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/renderBuffer.h>
+# include <pxr/imaging/hgi/texture.h>
+#endif
 
 #include "HdAkari/api.h"
 

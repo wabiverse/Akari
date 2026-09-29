@@ -233,17 +233,14 @@ extension Akari.ShadowAtlas
                                                  far: depthFar)
       let viewProjection = projectionMatrix * view
 
-      let clampedOffsetX = min(max(levelOffsetX, Float(Int32.min)), Float(Int32.max))
-      let clampedOffsetY = min(max(levelOffsetY, Float(Int32.min)), Float(Int32.max))
-
       cascades.append(Cascade(view: view,
                               projection: projectionMatrix,
                               viewProjection: viewProjection,
                               splitFar: halfSize,
                               key: Self.fingerprint(viewProjection),
                               absoluteLevel: Int32(level + i),
-                              gridOffsetX: Int32(clampedOffsetX),
-                              gridOffsetY: Int32(clampedOffsetY)))
+                              gridOffsetX: Self.gridCoordinate(levelOffsetX),
+                              gridOffsetY: Self.gridCoordinate(levelOffsetY)))
     }
     return DirectionalFit(cascades: cascades,
                           rotation: rotation,
@@ -381,17 +378,14 @@ extension Akari.ShadowAtlas
                                                  near: margin, far: depthFar)
       let viewProjection = projectionMatrix * view
 
-      let clampedGridX = min(max(gridX, Float(Int32.min)), Float(Int32.max))
-      let clampedGridY = min(max(gridY, Float(Int32.min)), Float(Int32.max))
-
       levels.append(Cascade(view: view,
                             projection: projectionMatrix,
                             viewProjection: viewProjection,
                             splitFar: radius,
                             key: Self.fingerprint(viewProjection),
                             absoluteLevel: Int32(level),
-                            gridOffsetX: Int32(clampedGridX),
-                            gridOffsetY: Int32(clampedGridY),
+                            gridOffsetX: Self.gridCoordinate(gridX),
+                            gridOffsetY: Self.gridCoordinate(gridY),
                             tileOffset: tileOffset,
                             depthOffset: depthOffset,
                             zScale: zScale,
@@ -411,6 +405,14 @@ extension Akari.ShadowAtlas
             i & 2 == 0 ? bounds.min.y : bounds.max.y,
             i & 4 == 0 ? bounds.min.z : bounds.max.z)
     }
+  }
+
+  /// A tile grid coordinate as Int32, clamped inside what Float can represent.
+  static func gridCoordinate(_ value: Float) -> Int32
+  {
+    guard value.isFinite else { return 0 }
+    let bound = Float(1 << 30)
+    return Int32(min(max(value, -bound), bound))
   }
 
   static func fingerprint(_ matrix: Akari.Matrix4) -> UInt64

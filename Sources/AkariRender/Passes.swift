@@ -65,6 +65,22 @@ public extension Akari
     }
   }
 
+  /// Volume + sphere light probes for indirect diffuse and reflections.
+  struct LightProbePass: Akari.GPU.RenderPassNode
+  {
+    public let id: RenderPassID = .lightProbes
+    public init() {}
+    public func isEnabled(for s: RenderSettings) -> Bool
+    {
+      s.features.contains(.lightProbes)
+    }
+
+    public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
+    {
+      ctx.labfx.updateLightProbes(renderParam: ctx.renderParam, settings: ctx.settings)
+    }
+  }
+
   /// Opaque geometry into a compact G-buffer (deferred) or forward+ shaded.
   struct GeometryPass: Akari.GPU.RenderPassNode
   {
@@ -79,27 +95,8 @@ public extension Akari
       ctx.labfx.recordGeometry(renderParam: ctx.renderParam,
                                view: ctx.camera.view,
                                projection: ctx.camera.projection)
+
       ctx.labfx.renderGbufferEarly()
-    }
-  }
-
-  /// Ground truth ambient occlusion (GTAO).
-  struct AmbientOcclusionPass: Akari.GPU.RenderPassNode
-  {
-    public let id: RenderPassID = .ambientOcclusion
-    public init() {}
-    public func isEnabled(for s: RenderSettings) -> Bool
-    {
-      s.features.contains(.ambientOcclusion)
-    }
-
-    public func execute(_ state: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
-    {
-      state.declare(.ambientOcclusion,
-                    Akari.GPU.RenderTargetDesc(width: ctx.target.width,
-                                               height: ctx.target.height,
-                                               format: .r16f, scale: 0.5))
-      // TODO: GTAO from depth + normals, multi bounce term, bilateral blur.
     }
   }
 
@@ -281,7 +278,8 @@ public extension Akari
       // and wrap the tonemapped texture into the color AOV.
       ctx.labfx.present(color: ctx.target.color,
                         hgi: ctx.gpu.hgi,
-                        fireflies: ctx.settings.features.contains(.fireflies))
+                        fireflies: ctx.settings.features.contains(.fireflies),
+                        lightProbes: ctx.settings.features.contains(.lightProbes))
     }
   }
 

@@ -40,8 +40,14 @@
 #ifndef HDAKARI_RENDERER_PLUGIN_H
 #define HDAKARI_RENDERER_PLUGIN_H
 
-#include <pxr/pxrns.h>
-#include <Hd/rendererPlugin.h>
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/rendererPlugin.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/rendererPlugin.h>
+#endif
+
 #include "HdAkari/api.h"
 
 PXR_NAMESPACE_OPEN_SCOPE

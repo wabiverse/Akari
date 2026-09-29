@@ -40,17 +40,29 @@
 #ifndef HDAKARI_SPHERE_H
 #define HDAKARI_SPHERE_H
 
-#include "pxr/pxrns.h"
-#include "HdAkari/api.h"
-#include "Hd/version.h"
-#include "Hd/mesh.h"
-#include "Hd/rprim.h"
-#include "Hd/drawingCoord.h"
-#include "Hd/enums.h"
-#include "Hd/perfLog.h"
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Hd/version.h>
+# include <Hd/mesh.h>
+# include <Hd/rprim.h>
+# include <Hd/drawingCoord.h>
+# include <Hd/enums.h>
+# include <Hd/perfLog.h>
+# include <Sdf/path.h>
+# include <Vt/array.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/imaging/hd/version.h>
+# include <pxr/imaging/hd/mesh.h>
+# include <pxr/imaging/hd/rprim.h>
+# include <pxr/imaging/hd/drawingCoord.h>
+# include <pxr/imaging/hd/enums.h>
+# include <pxr/imaging/hd/perfLog.h>
+# include <pxr/usd/sdf/path.h>
+# include <pxr/base/vt/array.h>
+#endif
 
-#include "Sdf/path.h"
-#include "Vt/array.h"
+#include "HdAkari/api.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
