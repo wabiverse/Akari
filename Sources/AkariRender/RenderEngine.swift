@@ -114,6 +114,8 @@ public extension Akari
     ///   - hgi: the `HgiMetal` shared with Hydra.
     ///   - color: the color AOV's render buffer, if bound.
     ///   - depth: the depth AOV's render buffer, if bound.
+    ///   - primId: the primId AOV's render buffer, if bound.
+    ///   - instanceId: the instanceId AOV's render buffer, if bound.
     ///   - view: 16 row-major floats, world->view.
     ///   - projection: 16 row-major floats, view->clip.
     ///   - width: target width dimension in pixels.
@@ -123,6 +125,8 @@ public extension Akari
                             renderParam: Pixar.HdAkariRenderParam,
                             color: Pixar.HdAkariRenderBuffer?,
                             depth: Pixar.HdAkariRenderBuffer?,
+                            primId: Pixar.HdAkariRenderBuffer?,
+                            instanceId: Pixar.HdAkariRenderBuffer?,
                             view: [Float],
                             projection: [Float],
                             width: Int,
@@ -165,6 +169,8 @@ public extension Akari
 
       let target = Akari.GPU.HydraTarget(color: color,
                                          depth: depth,
+                                         primId: primId,
+                                         instanceId: instanceId,
                                          width: width,
                                          height: height)
 

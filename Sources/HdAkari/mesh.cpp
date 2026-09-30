@@ -174,6 +174,7 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
   // geometry changed -> full rebuild.
   HdAkariMeshData data;
   data.id = id;
+  data.primId = GetPrimId();
 
   // topology -> triangulated indices (computed once, not per frame).
   HdMeshTopology topology = GetMeshTopology(sceneDelegate);

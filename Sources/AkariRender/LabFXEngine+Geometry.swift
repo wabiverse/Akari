@@ -212,7 +212,8 @@ extension Akari.LabFXEngine
       item.worldMatrix.withUnsafeBufferPointer
       { buf in
         batch.append(localVerts: item.verts, localIndices: item.indices,
-                     worldMatrix: buf.baseAddress!, normalMatrix: item.normalMatrix)
+                     worldMatrix: buf.baseAddress!, normalMatrix: item.normalMatrix,
+                     primId: item.primId)
       }
     }
     batch.draw()

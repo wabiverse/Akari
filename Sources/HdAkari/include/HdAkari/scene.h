@@ -93,6 +93,7 @@ struct HdAkariMeshData
   float metallic = 0.0f;  // UsdPreviewSurface's own default.
   bool visible = true;
   uint64_t dataRevision = 0; // incremented each Sync, GPU cache keys off this.
+  int32_t primId = -1;       // the Rprim's id, written to the primId AOV for picking.
 
   size_t TriangleCount() const { return triangleIndices.size(); }
 };

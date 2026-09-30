@@ -276,8 +276,10 @@ public extension Akari
     public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       // present stage: execute the deferred graph, present,
-      // and wrap the tonemapped texture into the color AOV.
-      ctx.labfx.present(color: ctx.target.color,
+      // wrap the tonemapped texture into the color AOV, and
+      // write the id + depth AOVs for picking and selection.
+      ctx.labfx.present(target: ctx.target,
+                        projection: ctx.unjitteredCamera.projection,
                         hgi: ctx.gpu.hgi,
                         fireflies: ctx.settings.features.contains(.fireflies),
                         lightProbes: ctx.settings.features.contains(.lightProbes))

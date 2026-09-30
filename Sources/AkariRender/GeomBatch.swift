@@ -108,7 +108,8 @@ public extension Akari.Geom
     /// as it writes.
     public func append(localVerts: [Float], localIndices: [Int32],
                        worldMatrix m: UnsafePointer<Float>,
-                       normalMatrix n: [Float])
+                       normalMatrix n: [Float],
+                       primId: Int32)
     {
       let vertCount = localVerts.count / 8
       if vOff + vertCount * Self.vertexFloats > maxVerts * Self.vertexFloats || iOff + localIndices.count > maxIndices
@@ -146,11 +147,11 @@ public extension Akari.Geom
         vertBuf[d + 2] = world.z
         vertBuf[d + 3] = 1.0
 
-        // unused RGBA, since we use a material atlas.
-        vertBuf[d + 4] = 1.0 // R
-        vertBuf[d + 5] = 1.0 // G
-        vertBuf[d + 6] = 1.0 // B
-        vertBuf[d + 7] = 1.0 // A
+        // materials come from the atlas, so the color slot carries the prim id.
+        vertBuf[d + 4] = Float(primId)
+        vertBuf[d + 5] = 0.0
+        vertBuf[d + 6] = 0.0
+        vertBuf[d + 7] = 1.0
 
         vertBuf[d + 8] = uu
         vertBuf[d + 9] = vv

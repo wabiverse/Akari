@@ -142,6 +142,7 @@ HdAkariCube::Sync(HdSceneDelegate *sceneDelegate,
 
   HdAkariMeshData data;
   data.id = id;
+  data.primId = GetPrimId();
 
   // fetch parameters.
   VtValue sizeVal = sceneDelegate->Get(id, HdCubeSchemaTokens->size);

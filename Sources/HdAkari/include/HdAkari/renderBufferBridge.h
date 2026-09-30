@@ -71,6 +71,29 @@ void AkariRenderBufferSetExternalTexture(HdAkariRenderBuffer *renderBuffer,
                                          HgiMetal *hgi,
                                          uint64_t rawResource);
 
+/**
+ * Writes Akari's prim ids and depth into the id and depth AOVs, which
+ * Hydra picks and outlines the selection with. Akari has no instancing
+ * yet, so the instanceId AOV is -1 for now.
+ *
+ * @param primId       `HdAkariRenderBuffer` for the primId AOV.
+ * @param instanceId   `HdAkariRenderBuffer` for the instanceId AOV.
+ * @param depth        `HdAkariRenderBuffer` for the depth AOV.
+ * @param hgi          the `HgiMetal` shared with Hydra.
+ * @param position     LabGL's gbuffer position texture, eye space xyz and prim id in w.
+ * @param normal       LabGL's gbuffer normal texture, w >= 0.5 where geometry drew.
+ * @param projectionZ  the projection's [2][2], turns eye depth into Hydra's depth.
+ * @param projectionW  the projection's [3][2].
+ */
+void AkariRenderBuffersWriteIds(HdAkariRenderBuffer *primId,
+                                HdAkariRenderBuffer *instanceId,
+                                HdAkariRenderBuffer *depth,
+                                HgiMetal *hgi,
+                                uint64_t position,
+                                uint64_t normal,
+                                float projectionZ,
+                                float projectionW);
+
 PXR_NAMESPACE_CLOSE_SCOPE
 
 #endif // HDAKARI_RENDER_BUFFER_BRIDGE_H

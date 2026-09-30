@@ -321,6 +321,7 @@ public extension Akari
         let flipWinding = Matrix.determinant3x3(mPtr) < 0
 
         rawMeshes.append(Akari.Geom.Recorder.RawMesh(id: mesh.id.string,
+                                                     primId: mesh.primId,
                                                      dataRevision: mesh.dataRevision,
                                                      flipWinding: flipWinding,
                                                      points: mesh.points,
@@ -463,13 +464,16 @@ public extension Akari
       }
     }
 
-    /// Executes the deferred graph, presents, and wraps the final color texture into
-    /// the color AOV render buffer Hydra presents (LabGL's present stage).
+    /// Executes the deferred graph, presents, wraps the final color texture into
+    /// the color AOV render buffer Hydra presents (LabGL's present stage), and
+    /// writes the prim id and depth AOVs Hydra picks and outlines selection with.
     ///
     /// - Parameters:
-    ///   - color: the color AOV's render buffer, if bound.
+    ///   - target: the AOV render buffers Hydra bound.
+    ///   - projection: the unjittered camera projection, for the depth AOV.
     ///   - hgi: the `HgiMetal` shared with Hydra.
-    public func present(color: Pixar.HdAkariRenderBuffer?,
+    public func present(target: Akari.GPU.HydraTarget,
+                        projection: Matrix4,
                         hgi: Pixar.HgiMetal,
                         fireflies enableFireflies: Bool = false,
                         lightProbes showLightProbes: Bool = false)
@@ -507,13 +511,22 @@ public extension Akari
 
       // export the tonemapped color buffer's native texture
       // and hand it to the color AOV through Hgi.
-      guard let color else { return }
       let finalTex = runtime.texture("tonemap", named: "tonemap")
-      guard finalTex != 0 else { return }
-      let native = lglGetTextureNativeHandle(finalTex)
-      if native != 0
+      if let color = target.color, finalTex != 0
       {
-        Pixar.AkariRenderBufferSetExternalTexture(color, hgi, native)
+        let native = lglGetTextureNativeHandle(finalTex)
+        if native != 0
+        {
+          Pixar.AkariRenderBufferSetExternalTexture(color, hgi, native)
+        }
+      }
+
+      let position = lglGetTextureNativeHandle(runtime.texture("gbuffer", named: "position"))
+      let normal = lglGetTextureNativeHandle(runtime.texture("gbuffer", named: "normal"))
+      if position != 0, normal != 0
+      {
+        Pixar.AkariRenderBuffersWriteIds(target.primId, target.instanceId, target.depth, hgi,
+                                         position, normal, projection[2, 2], projection[3, 2])
       }
     }
 

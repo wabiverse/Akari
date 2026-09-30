@@ -142,6 +142,7 @@ HdAkariSphere::Sync(HdSceneDelegate *sceneDelegate,
 
   HdAkariMeshData data;
   data.id = id;
+  data.primId = GetPrimId();
 
   // fetch parameters.
   VtValue radiusVal = sceneDelegate->Get(id, HdSphereSchemaTokens->radius);

@@ -54,6 +54,7 @@ public extension Akari.Geom
     public struct RawMesh
     {
       public var id: String
+      public var primId: Int32
       public var dataRevision: UInt64
       public var flipWinding: Bool
       public var points: Pixar.VtVec3fArray
@@ -62,11 +63,12 @@ public extension Akari.Geom
       public var worldMatrix: [Float]
       public var normalMatrix: [Float]
 
-      public init(id: String, dataRevision: UInt64, flipWinding: Bool,
+      public init(id: String, primId: Int32, dataRevision: UInt64, flipWinding: Bool,
                   points: Pixar.VtVec3fArray, tris: Pixar.VtVec3iArray, uvs: Pixar.VtVec2fArray,
                   worldMatrix: [Float], normalMatrix: [Float])
       {
         self.id = id
+        self.primId = primId
         self.dataRevision = dataRevision
         self.flipWinding = flipWinding
         self.points = points
@@ -80,6 +82,7 @@ public extension Akari.Geom
     /// One mesh ready to append into a `Batch`.
     public struct Item
     {
+      public var primId: Int32
       public var verts: [Float]
       public var indices: [Int32]
       public var worldMatrix: [Float]
@@ -90,6 +93,7 @@ public extension Akari.Geom
     private struct BuiltMesh
     {
       var id: String
+      var primId: Int32
       var dataRevision: UInt64
       var flipWinding: Bool
       var verts: [Float]
@@ -102,6 +106,7 @@ public extension Akari.Geom
     private struct BuildInput
     {
       var id: String
+      var primId: Int32
       var dataRevision: UInt64
       var flipWinding: Bool
       var pointsFlat: [Float]
@@ -141,7 +146,7 @@ public extension Akari.Geom
            cached.flipWinding == mesh.flipWinding
         {
           if cached.verts.isEmpty || cached.indices.isEmpty { continue }
-          readyItems.append(BuiltMesh(id: mesh.id, dataRevision: cached.dataRevision,
+          readyItems.append(BuiltMesh(id: mesh.id, primId: mesh.primId, dataRevision: cached.dataRevision,
                                       flipWinding: mesh.flipWinding, verts: cached.verts,
                                       indices: cached.indices, worldMatrix: mesh.worldMatrix,
                                       normalMatrix: mesh.normalMatrix))
@@ -149,7 +154,7 @@ public extension Akari.Geom
         }
 
         let (pointsFlat, trisFlat, uvsFlat) = Akari.Geom.flatten(points: mesh.points, tris: mesh.tris, uvs: mesh.uvs)
-        pendingInputs.append(BuildInput(id: mesh.id, dataRevision: mesh.dataRevision,
+        pendingInputs.append(BuildInput(id: mesh.id, primId: mesh.primId, dataRevision: mesh.dataRevision,
                                         flipWinding: mesh.flipWinding, pointsFlat: pointsFlat,
                                         trisFlat: trisFlat, uvsFlat: uvsFlat, worldMatrix: mesh.worldMatrix,
                                         normalMatrix: mesh.normalMatrix))
@@ -171,7 +176,7 @@ public extension Akari.Geom
                                        flipWinding: item.flipWinding,
                                        verts: item.verts,
                                        indices: item.indices)
-        items.append(Item(verts: item.verts, indices: item.indices,
+        items.append(Item(primId: item.primId, verts: item.verts, indices: item.indices,
                           worldMatrix: item.worldMatrix, normalMatrix: item.normalMatrix))
       }
       cache = newCache
@@ -202,7 +207,7 @@ public extension Akari.Geom
           Akari.Geom.buildMesh(pointsFlat: input.pointsFlat, trisFlat: input.trisFlat,
                                uvsFlat: input.uvsFlat, verts: &verts, indices: &indices,
                                flipWinding: input.flipWinding)
-          box.buffer[i] = BuiltMesh(id: input.id, dataRevision: input.dataRevision,
+          box.buffer[i] = BuiltMesh(id: input.id, primId: input.primId, dataRevision: input.dataRevision,
                                     flipWinding: input.flipWinding, verts: verts, indices: indices,
                                     worldMatrix: input.worldMatrix, normalMatrix: input.normalMatrix)
         }

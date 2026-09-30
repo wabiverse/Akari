@@ -70,6 +70,8 @@ public extension Akari.GPU
   {
     public var color: Pixar.HdAkariRenderBuffer?
     public var depth: Pixar.HdAkariRenderBuffer?
+    public var primId: Pixar.HdAkariRenderBuffer?
+    public var instanceId: Pixar.HdAkariRenderBuffer?
     public var width: Int
     public var height: Int
   }

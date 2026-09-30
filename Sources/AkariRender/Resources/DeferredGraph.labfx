@@ -275,11 +275,12 @@ pass: blit
 shader: mesh
   uniforms: [ u_material_atlas: sampler2d, u_color_atlas: sampler2d,
               u_normal_atlas: sampler2d, u_emissive_atlas: sampler2d ]
-  varying:  [ posEye: vec3, normalEye: vec3, uv: vec2 ]
+  varying:  [ posEye: vec3, normalEye: vec3, uv: vec2, primId: float ]
 
   vsh:
     attributes:
     [ a_position: vec3 <- position,
+      a_color: vec4 <- color,
       a_normal: vec3 <- normal,
       a_uv: vec2 <- texcoord ]
 
@@ -291,6 +292,7 @@ shader: mesh
       var.posEye = ep.xyz;
       var.normalEye = normalize(u_normalMatrix * a_normal);
       var.uv = a_uv;
+      var.primId = a_color.r;
       gl_Position = u_modelviewProjection * vec4(a_position, 1.0);
     }
     ```
@@ -301,6 +303,7 @@ shader: mesh
     var.posEye = ep.xyz;
     var.normalEye = normalize(u_normalMatrix * a_normal);
     var.uv = a_uv;
+    var.primId = a_color.r;
     gl_Position = u_modelviewProjection * float4(a_position, 1.0);
     ```
 
@@ -326,8 +329,8 @@ shader: mesh
       float frame = max(dot(T, T), dot(B, B));
       vec3 normalEye = frame > 1e-30 ? normalize((T * tn.x + B * tn.y) * inversesqrt(frame) + N * tn.z) : N;
       vec3 emission = texture(u_emissive_atlas, var.uv).rgb;
-      o_diffuse_texture = vec4(albedo, mat.b);
-      o_position_texture = vec4(var.posEye, emission.b);
+      o_diffuse_texture = vec4(albedo, emission.b);
+      o_position_texture = vec4(var.posEye, var.primId);
       o_normal_texture = vec4(normalEye, 1.0);
       o_material_texture = vec4(mat.r, mat.g, emission.r, emission.g);
     }
@@ -352,8 +355,8 @@ shader: mesh
     float frame = max(dot(T, T), dot(B, B));
     float3 normalEye = frame > 1e-30 ? normalize((T * tn.x + B * tn.y) * rsqrt(frame) + N * tn.z) : N;
     float3 emission = texture(u_emissive_atlas, var.uv).rgb;
-    o_diffuse_texture = float4(albedo, mat.b);
-    o_position_texture = float4(var.posEye, emission.b);
+    o_diffuse_texture = float4(albedo, emission.b);
+    o_position_texture = float4(var.posEye, var.primId);
     o_normal_texture = float4(normalEye, 1.0);
     o_material_texture = float4(mat.r, mat.g, emission.r, emission.g);
     ```
@@ -878,7 +881,7 @@ shader: deferred-shade
       color += Fd * u_iblEnabled + Fr + diffuseColor * gi.rgb * (1.0 - E);
 
       color += vec3(texelFetch(u_material_texture, gbufferPixel, 0).ba,
-                    texelFetch(u_position_texture, gbufferPixel, 0).w);
+                    texelFetch(u_diffuse_texture, gbufferPixel, 0).w);
 
       vec4 fog = volumeFog(gl_FragCoord.xy, -posEye.z);
       color = color * fog.a + fog.rgb;
@@ -1433,7 +1436,7 @@ shader: deferred-shade
 
         color += Fd + Fr + diffuseColor * gi.rgb * (1.0 - E);
 
-        color += float3(u_material_texture.read(gbufferPixel).ba, u_position_texture.read(gbufferPixel).w);
+        color += float3(u_material_texture.read(gbufferPixel).ba, u_diffuse_texture.read(gbufferPixel).w);
 
         float4 fog = volumeFog(gl_FragCoord.xy, -posEye.z,
                                u_volumeIntegrated_texture, u_volumeIntegrated_texture_smp, _u);

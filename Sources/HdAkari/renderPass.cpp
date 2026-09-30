@@ -82,9 +82,11 @@ HdAkariRenderPass::_Execute(HdRenderPassStateSharedPtr const &renderPassState,
   const GfMatrix4d view = renderPassState->GetWorldToViewMatrix();
   const GfMatrix4d proj = renderPassState->GetProjectionMatrix();
 
-  // resolve the color + depth AOV render buffers.
+  // resolve the color, depth and id AOV render buffers.
   void *colorBuffer = nullptr;
   void *depthBuffer = nullptr;
+  void *primIdBuffer = nullptr;
+  void *instanceIdBuffer = nullptr;
   int width = 0;
   int height = 0;
   for (const HdRenderPassAovBinding &aov : renderPassState->GetAovBindings()) {
@@ -98,11 +100,15 @@ HdAkariRenderPass::_Execute(HdRenderPassStateSharedPtr const &renderPassState,
       height = static_cast<int>(rb->GetHeight());
     } else if (aov.aovName == HdAovTokens->depth) {
       depthBuffer = rb;
+    } else if (aov.aovName == HdAovTokens->primId) {
+      primIdBuffer = rb;
+    } else if (aov.aovName == HdAovTokens->instanceId) {
+      instanceIdBuffer = rb;
     }
   }
 
   AkariEngineRenderFrame(param->GetRenderEngine(), param->GetHgi(), param,
-                         colorBuffer, depthBuffer,
+                         colorBuffer, depthBuffer, primIdBuffer, instanceIdBuffer,
                          view.GetArray(), proj.GetArray(), width, height);
 }
 

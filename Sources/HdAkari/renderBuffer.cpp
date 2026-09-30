@@ -105,10 +105,8 @@ HdAkariRenderBuffer::Allocate(GfVec3i const &dimensions, HdFormat format,
   desc.layerCount = 1;
   desc.mipLevels = 1;
   desc.sampleCount = HgiSampleCount1;
-  const bool isDepth = (format == HdFormatFloat32);
-  desc.usage = (isDepth ? HgiTextureUsageBitsDepthTarget
-                        : HgiTextureUsageBitsColorTarget) |
-               HgiTextureUsageBitsShaderRead;
+  // depth and ids are written by a compute pass, not rasterized into.
+  desc.usage = HgiTextureUsageBitsColorTarget | HgiTextureUsageBitsShaderRead | HgiTextureUsageBitsShaderWrite;
   _texture = _hgi->CreateTexture(desc);
   return bool(_texture);
 }

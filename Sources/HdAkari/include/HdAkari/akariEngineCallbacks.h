@@ -54,6 +54,8 @@ extern "C" {
  * @param renderParam   `HdAkariRenderParam` (reaches the mesh scene).
  * @param colorBuffer   `HdAkariRenderBuffer` for the color AOV (may be null).
  * @param depthBuffer   `HdAkariRenderBuffer` for the depth AOV (may be null).
+ * @param primIdBuffer  `HdAkariRenderBuffer` for the primId AOV (may be null).
+ * @param instanceIdBuffer `HdAkariRenderBuffer` for the instanceId AOV (may be null).
  * @param viewMatrix    16 doubles, GfMatrix4d row-major (world->view).
  * @param projMatrix    16 doubles, GfMatrix4d row-major (view->clip).
  * @param width         target width dimension in pixels.
@@ -61,6 +63,7 @@ extern "C" {
  */
 void AkariEngineRenderFrame(void *engine, void *hgi, void *renderParam,
                             void *colorBuffer, void *depthBuffer,
+                            void *primIdBuffer, void *instanceIdBuffer,
                             const double *viewMatrix, const double *projMatrix,
                             int width, int height);
 
