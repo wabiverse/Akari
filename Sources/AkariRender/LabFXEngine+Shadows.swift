@@ -82,8 +82,9 @@ public extension Akari.LabFXEngine
                      frameIndex: UInt64)
   {
     shadowsReady = false
+    let captures = geometry.captures
     guard
-      let captureBuffer,
+      !captures.isEmpty,
       let sceneBounds,
       renderParam.GetScene() != nil
     else { return }
@@ -91,7 +92,7 @@ public extension Akari.LabFXEngine
     let shadow = settings.light.shadow
     let diagonal = sceneBounds.max - sceneBounds.min
     let punctualFarDistance = max((diagonal * diagonal).sum().squareRoot(), 1)
-    let views = shadowAtlas.render(capture: captureBuffer,
+    let views = shadowAtlas.render(captures: captures,
                                    camera: camera,
                                    lightDirection: worldSpaceSunDirection(settings.light),
                                    sceneBounds: sceneBounds,

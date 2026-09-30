@@ -92,6 +92,7 @@ extension Akari.ShadowAtlas
   /// The capture's per draw bounds and the cull outputs sized to them.
   struct DrawCulling
   {
+    var capture: OpaquePointer?
     var bounds: GLuint = 0
     var visibility: GLuint = 0
     var instanceView: GLuint = 0
@@ -230,7 +231,7 @@ extension Akari.ShadowAtlas
     {
       gl.deleteTextures(count: 1, textures: &tex)
     }
-    for buf in buffers.all + frames.flatMap(\.buffers) + culling.buffers + [casters.buffer] where buf != 0
+    for buf in buffers.all + frames.flatMap(\.buffers) + culling.flatMap(\.buffers) + [casters.buffer] where buf != 0
     {
       gl.deleteBuffer(buf)
     }
@@ -254,7 +255,7 @@ extension Akari.ShadowAtlas
     atlasTarget = 0; atlas = 0; atlasDepth = 0; data = 0; pageTable = 0
     frames = []; ringCursor = 0
     buffers = Buffers()
-    culling = DrawCulling()
+    culling = []
     casters = CasterBounds()
     kernels = Kernels()
     depthShader = 0

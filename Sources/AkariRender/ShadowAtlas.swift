@@ -115,7 +115,7 @@ public extension Akari
       frames.isEmpty ? Frame() : frames[ringCursor]
     }
 
-    var culling = DrawCulling()
+    var culling: [DrawCulling] = []
     var casters = CasterBounds()
     var amplification = Amplification()
     /// Transient depth test, one tilemap of texels.
@@ -217,7 +217,7 @@ public extension Akari
     }
 
     /// Fits every active tilemap and draws its stale views.
-    public func render(capture: OpaquePointer,
+    public func render(captures: [OpaquePointer],
                        camera: Camera,
                        lightDirection: SIMD3<Float>,
                        sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
@@ -308,7 +308,7 @@ public extension Akari
                           || redraw.isNeeded
       punctualHistory.invalidated = punctualHistory.pendingDirty != 0
 
-      let drawn = drawViews(capture: capture, directional: directional,
+      let drawn = drawViews(captures: captures, directional: directional,
                             directionalSlots: directionalSlots, punctualFaces: punctualFaces,
                             forced: forceDirectional ? Set(directionalSlots) : [],
                             forcePunctual: forcePunctual)

@@ -1,5 +1,5 @@
 {
-  "originHash" : "d2316af0816ecec712bd3ead4753bf36b2d1bf4ea2f959a64ea5fbe95360529a",
+  "originHash" : "54b4df625f4001afcc9a0d364596448cb797bb888e612f30a34f4eb80086c6a5",
   "pins" : [
     {
       "identity" : "imgui",
@@ -168,8 +168,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/furbytm/SwiftLabGL.git",
       "state" : {
-        "revision" : "f6889aeb678e3f251ef58402716d316c15571f23",
-        "version" : "0.1.8"
+        "revision" : "72968aa3d6d3a0d4ad1549ff602faf70b132b82a",
+        "version" : "0.1.9"
       }
     },
     {

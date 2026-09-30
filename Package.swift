@@ -17,7 +17,7 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.9.0"),
     .package(url: "https://github.com/wabiverse/Lattice.git", branch: "main"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.1.8"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.1.9"),
   ],
   targets: [
     // TODO: support externally provided openusd builds.

@@ -127,6 +127,14 @@ pass: geometry
   use shader: mesh
   outputs: gbuffer [diffuse, position, normal, material]
 
+pass: geometry dynamic
+  callback: draw-dynamic-geometry
+  clear depth: no
+  depth test: greater
+  write depth: yes
+  use shader: mesh
+  outputs: gbuffer [diffuse, position, normal, material]
+
 pass: ssgi prep
   draw: quad
   depth test: never

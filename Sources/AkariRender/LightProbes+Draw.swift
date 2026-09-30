@@ -46,7 +46,7 @@ extension Akari.LightProbes
 {
   /// Rasterizes `views` (probe * 6 + face) into the capture atlas,
   /// a run of amplified faces per replay of the scene capture.
-  func drawCapture(_ capture: OpaquePointer, views range: Range<Int>,
+  func drawCapture(_ captures: [OpaquePointer], views range: Range<Int>,
                    materials: (material: GLuint, color: GLuint, emissive: GLuint))
   {
     let projection = Akari.Matrix4.reversedDepth(.perspective(left: -near, right: near,
@@ -70,7 +70,10 @@ extension Akari.LightProbes
         rects += [rect.x, rect.y, rect.z, rect.w]
       }
       setAmplification(transforms: transforms, viewports: rects, count: run.count)
-      labgl.capturePlaybackIndirectDraws(capture)
+      for capture in captures
+      {
+        labgl.capturePlaybackIndirectDraws(capture)
+      }
       gl.disableVertexAmplification()
       start = run.upperBound
     }
@@ -79,7 +82,7 @@ extension Akari.LightProbes
   }
 
   /// An orthographic sun depth map over the whole scene.
-  func drawSunMap(_ capture: OpaquePointer,
+  func drawSunMap(_ captures: [OpaquePointer],
                   sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
                   direction: SIMD3<Float>,
                   materials: (material: GLuint, color: GLuint, emissive: GLuint))
@@ -104,7 +107,10 @@ extension Akari.LightProbes
     setAmplification(transforms: transform,
                      viewports: [0, 0, Int32(Self.sunResolution), Int32(Self.sunResolution)],
                      count: 1)
-    labgl.capturePlaybackIndirectDraws(capture)
+    for capture in captures
+    {
+      labgl.capturePlaybackIndirectDraws(capture)
+    }
     gl.disableVertexAmplification()
     endPass()
   }

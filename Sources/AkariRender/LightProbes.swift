@@ -180,7 +180,7 @@ public extension Akari
     /// Advances the bake by one frame and relights when the lights changed.
     ///
     /// - Returns: whether the probes can be sampled this frame.
-    func update(capture: OpaquePointer,
+    func update(captures: [OpaquePointer],
                 sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
                 overrides: [Override],
                 overrideRevision: UInt64,
@@ -228,14 +228,14 @@ public extension Akari
       if captured < total
       {
         let count = min(total - captured, max(settings.captureViewsPerFrame, 1))
-        drawCapture(capture, views: captured ..< captured + count, materials: materials)
+        drawCapture(captures, views: captured ..< captured + count, materials: materials)
         captured += count
         guard captured == total else { return isReady }
       }
 
       if sunKey != lighting.sunDirection
       {
-        drawSunMap(capture, sceneBounds: sceneBounds, direction: lighting.sunDirection, materials: materials)
+        drawSunMap(captures, sceneBounds: sceneBounds, direction: lighting.sunDirection, materials: materials)
         sunKey = lighting.sunDirection
         lastLighting = nil
       }

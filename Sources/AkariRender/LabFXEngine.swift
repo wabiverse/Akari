@@ -58,8 +58,8 @@ public extension Akari
     private var windowHandle: LabGLWindowHandle?
     /// Parsed `.labfx` tree.
     private var graph: LabFXGraph?
-    /// Buffer the scene geometry is recorded into.
-    var captureBuffer: LabGLCaptureBuffer?
+    /// The scene geometry's static and dynamic captures.
+    var geometry = SceneGeometry()
     /// The LabFX runtime driving the graph.
     var runtime = lab.fx.Runtime()
     var lastWidth = 0
@@ -69,7 +69,6 @@ public extension Akari
     var lastGeometryRevision: UInt64 = 0
 
     private let materialAtlas = Akari.MaterialAtlas()
-    private let recorder = Akari.Geom.Recorder()
     let shadowAtlas = Akari.ShadowAtlas()
     private let fireflies = Fireflies()
     private let probeBake = ProbeBakeOverlay()
@@ -183,7 +182,8 @@ public extension Akari
 
     private static let gbufferPassNames = [
       "clear gbuffer",
-      "geometry"
+      "geometry",
+      "geometry dynamic"
     ]
 
     init()
@@ -246,8 +246,8 @@ public extension Akari
       labgl.beginFrame(windowHandle)
     }
 
-    /// Rerecords the synced meshes into the capture buffer and sets
-    /// the per frame view matrix (LabGL's geometry stage).
+    /// Rerecords the synced meshes that changed into the captures
+    /// and sets the per frame view matrix (LabGL's geometry stage).
     ///
     /// - Parameters:
     ///   - renderParam: opaque `HdAkariRenderParam`.
@@ -258,7 +258,7 @@ public extension Akari
                                projection: Matrix4)
     {
       guard
-        let captureBuffer,
+        geometry.staticCapture != nil,
         let scene = renderParam.GetScene()
       else { return }
 
@@ -306,15 +306,12 @@ public extension Akari
 
       let meshes = scene.Snapshot()
 
-      var triangleEstimate = 0
       var rawMeshes: [Akari.Geom.Recorder.RawMesh] = []
       rawMeshes.reserveCapacity(meshes.count)
 
       for mesh in meshes
       {
         if mesh.points.empty() || mesh.triangleIndices.empty() { continue }
-
-        triangleEstimate += mesh.triangleIndices.size()
 
         let mat = Pixar.GfMatrix4f(mesh.transform)
         guard let mPtr = mat.GetArray() else { continue }
@@ -333,36 +330,7 @@ public extension Akari
                                                      normalMatrix: normalMatrix))
       }
 
-      rawMeshes.sort { Self.mortonKey($0.worldMatrix) < Self.mortonKey($1.worldMatrix) }
-
-      let items = recorder.record(rawMeshes)
-
-      gl.bindTexture(target: GL_TEXTURE_2D, texture: 0)
-      labgl.captureClear(captureBuffer)
-      labgl.captureStart(captureBuffer)
-
-      gl.enable(GL_DEPTH_TEST)
-      gl.depthFunc(GLenum(GL_GREATER))
-
-      gl.enable(GL_CULL_FACE)
-      gl.cullFace(GL_BACK)
-      gl.frontFace(GL_CCW)
-
-      let batch = Akari.Geom.Batch(estimatedTriangles: triangleEstimate)
-      for item in items
-      {
-        item.worldMatrix.withUnsafeBufferPointer
-        { buf in
-          batch.append(localVerts: item.verts, localIndices: item.indices,
-                       worldMatrix: buf.baseAddress!, normalMatrix: item.normalMatrix)
-        }
-      }
-      batch.draw()
-      labgl.captureStop()
-
-      sceneBounds = batch.worldBounds
-      casterBounds = batch.casterBounds
-      casterKeys = batch.casterKeys
+      recordCaptures(rawMeshes)
     }
 
     /// Rasterizes the G-buffer now instead of waiting
@@ -594,22 +562,6 @@ public extension Akari
       }
     }
 
-    /// Morton code of a mesh's world position, quantized against a fixed grid (in meters).
-    private static func mortonKey(_ worldMatrix: [Float]) -> UInt64
-    {
-      func part(_ v: Float) -> UInt64
-      {
-        var x = UInt64(UInt32(bitPattern: Int32(max(-1_048_576, min(1_048_575, (v * 8).rounded())) + 1_048_576)) & 0x1FFFFF)
-        x = (x | (x << 32)) & 0x1F_0000_0000_FFFF
-        x = (x | (x << 16)) & 0x1F_0000_FF00_00FF
-        x = (x | (x << 8)) & 0x100F_00F0_0F00_F00F
-        x = (x | (x << 4)) & 0x10C3_0C30_C30C_30C3
-        x = (x | (x << 2)) & 0x1249_2492_4924_9249
-        return x
-      }
-      return part(worldMatrix[12]) | (part(worldMatrix[13]) << 1) | (part(worldMatrix[14]) << 2)
-    }
-
     private func ensureEngine(width: Int, height: Int, hgi: Pixar.HgiMetal)
     {
       guard windowHandle == nil else { return }
@@ -661,15 +613,13 @@ public extension Akari
       froxelVolume.precompileShaders()
       shadowAtlas.precompileShaders()
 
-      // capture buffer the geometry pass replays each frame.
-      guard let cap = labgl.captureCreate()
+      // capture buffers the geometry passes replay each frame.
+      guard createCaptures()
       else
       {
         print("[akari/labgl] labgl_captureCreate failed")
         return
       }
-      runtime.setMeshCapture("mesh", buffer: cap)
-      captureBuffer = cap
 
       lastWidth = width
       lastHeight = height
@@ -686,11 +636,7 @@ public extension Akari
       gl.shaderCacheFlush()
 
       runtime.destroy()
-      if let captureBuffer
-      {
-        labgl.captureDestroy(captureBuffer)
-        self.captureBuffer = nil
-      }
+      destroyCaptures()
       if let graph
       {
         lab.fx.free(graph)
