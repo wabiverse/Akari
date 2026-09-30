@@ -42,12 +42,21 @@
 
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
+# include <Arch/swiftInterop.h>
 # include <Hd/renderBuffer.h>
 # include <Hgi/texture.h>
 #else
 # include <pxr/pxr.h>
 # include <pxr/imaging/hd/renderBuffer.h>
 # include <pxr/imaging/hgi/texture.h>
+#endif
+
+#ifndef SWIFT_UNSAFE_REFERENCE
+# if __has_include(<swift/bridging>)
+#  include <swift/bridging>
+# else
+#  define SWIFT_UNSAFE_REFERENCE
+# endif
 #endif
 
 #include "HdAkari/api.h"
@@ -62,7 +71,7 @@ class Hgi;
 /// the Swift engine (which renders into it) and with Hydra's
 /// present / compositing tasks.
 ///
-class HdAkariRenderBuffer final : public HdRenderBuffer
+class SWIFT_UNSAFE_REFERENCE HdAkariRenderBuffer final : public HdRenderBuffer
 {
  public:
   HDAKARI_API

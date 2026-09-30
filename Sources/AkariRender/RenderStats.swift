@@ -45,10 +45,10 @@ public extension Akari
   /// Live measurements of the render loop.
   struct RenderStats: Sendable, Equatable
   {
-    /// Wall clock between successive frames.
+    /// Wall clock per frame, averaged over the last half second.
     public var frameMilliseconds: Double = 0
     
-    /// Frames rendered per second, averaged over the last half second.
+    /// Frames rendered per second.
     public var framesPerSecond: Double
     {
       frameMilliseconds > 0 ? 1000.0 / frameMilliseconds : 0

@@ -41,6 +41,7 @@
 import AkariCore
 import AkariRender
 import HdAkari
+import OpenUSDKit
 
 /// Registers a live ``Akari/RenderEngine`` with Hydra.
 public func registerAkariRenderer(engine: Akari.RenderEngine)
@@ -70,16 +71,16 @@ public func unregisterAkariRenderer()
 /// The per-frame callback the C++ `HdAkariRenderPass` invokes.
 @_cdecl("AkariEngineRenderFrame")
 public func AkariEngineRenderFrame(_ engine: UnsafeMutableRawPointer?,
-                                   _ hgi: UnsafeMutableRawPointer?,
+                                   _ hgi: Pixar.HgiMetal?,
                                    _ renderParam: Pixar.HdAkariRenderParam,
-                                   _ colorBuffer: UnsafeMutableRawPointer?,
-                                   _ depthBuffer: UnsafeMutableRawPointer?,
+                                   _ colorBuffer: Pixar.HdAkariRenderBuffer?,
+                                   _ depthBuffer: Pixar.HdAkariRenderBuffer?,
                                    _ viewMatrix: UnsafePointer<Double>?,
                                    _ projMatrix: UnsafePointer<Double>?,
                                    _ width: Int32,
                                    _ height: Int32)
 {
-  guard let engine else { return }
+  guard let engine, let hgi else { return }
   let renderer = Unmanaged<Akari.RenderEngine>.fromOpaque(engine).takeUnretainedValue()
 
   renderer.renderFrame(hgi: hgi,

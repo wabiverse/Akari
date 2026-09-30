@@ -40,29 +40,36 @@
 
 import AkariCore
 import HdAkari
+import OpenUSDKit
 
 public extension Akari.GPU
 {
-  /// The Hgi handed to Akari by Hydra, used only to
-  /// wrap LabGL's final color texture into the color
-  /// AOV for presentation.
+  /// The Hgi handed to Akari by Hydra, LabGL submits on its
+  /// queue and wraps the final color texture into the color
+  /// AOV through it for presentation.
   final class HydraContext
   {
     public let backend: Akari.GPU.Backend
-    public let hgi: UnsafeMutableRawPointer?
+    public let hgi: Pixar.HgiMetal
 
-    public init(hgi: UnsafeMutableRawPointer?, backend: Akari.GPU.Backend)
+    public init(hgi: Pixar.HgiMetal, backend: Akari.GPU.Backend)
     {
       self.hgi = hgi
       self.backend = backend
+    }
+
+    /// Whether this context was made for `other`.
+    public func wraps(_ other: Pixar.HgiMetal) -> Bool
+    {
+      unsafeBitCast(hgi, to: UnsafeRawPointer.self) == unsafeBitCast(other, to: UnsafeRawPointer.self)
     }
   }
 
   /// The AOV render buffers Hydra wants Akari to fill.
   struct HydraTarget
   {
-    public var color: UnsafeMutableRawPointer?
-    public var depth: UnsafeMutableRawPointer?
+    public var color: Pixar.HdAkariRenderBuffer?
+    public var depth: Pixar.HdAkariRenderBuffer?
     public var width: Int
     public var height: Int
   }

@@ -41,6 +41,7 @@
 import AkariCore
 import Foundation
 import HdAkari
+import OpenUSDKit
 
 public extension Akari
 {
@@ -110,18 +111,18 @@ public extension Akari
     /// Per frame entry point. Called by the Hydra render pass.
     ///
     /// - Parameters:
-    ///   - hgi: opaque `Hgi` shared with Hydra.
-    ///   - color: opaque `HgiTexture` for the color AOV (may be null).
-    ///   - depth: opaque `HgiTexture` for the depth AOV (may be null).
+    ///   - hgi: the `HgiMetal` shared with Hydra.
+    ///   - color: the color AOV's render buffer, if bound.
+    ///   - depth: the depth AOV's render buffer, if bound.
     ///   - view: 16 row-major floats, world->view.
     ///   - projection: 16 row-major floats, view->clip.
     ///   - width: target width dimension in pixels.
     ///   - height: target height dimension in pixels.
     ///   - isFinalRender: if rendering for output (still).
-    public func renderFrame(hgi: UnsafeMutableRawPointer?,
+    public func renderFrame(hgi: Pixar.HgiMetal,
                             renderParam: Pixar.HdAkariRenderParam,
-                            color: UnsafeMutableRawPointer?,
-                            depth: UnsafeMutableRawPointer?,
+                            color: Pixar.HdAkariRenderBuffer?,
+                            depth: Pixar.HdAkariRenderBuffer?,
                             view: [Float],
                             projection: [Float],
                             width: Int,
@@ -130,7 +131,7 @@ public extension Akari
     {
       let settings = applyPendingSettings()
 
-      if gpu == nil || gpu?.hgi != hgi
+      if gpu?.wraps(hgi) != true
       {
         gpu = Akari.GPU.HydraContext(hgi: hgi, backend: settings.backend)
       }

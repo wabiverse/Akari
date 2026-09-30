@@ -313,7 +313,7 @@ public extension Akari
                             forced: forceDirectional ? Set(directionalSlots) : [],
                             forcePunctual: forcePunctual)
 
-      retireDrawn(views: forceDirectional ? drawn : drawn.filter { $0 >= Self.punctualViewBase })
+      retireDrawn(views: drawn)
       if !drawn.isEmpty { dispatchPageTable() }
 
       directionalHistory.slots = directionalSlots

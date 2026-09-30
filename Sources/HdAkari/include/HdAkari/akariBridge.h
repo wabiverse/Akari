@@ -110,22 +110,6 @@ long AkariSceneMeshCount(void *renderParam);
 /** Total triangles across all synced meshes (-1 if renderParam is null). */
 long AkariSceneTriangleCount(void *renderParam);
 
-/**
- * Replaces a color AOV render buffer's texture with a wrap of an
- * externally owned native texture, the handoff for LabGL's final
- * color buffer. The buffer takes over Hgi ownership of the wrap
- * (destroying it on realloc / deallocate does not destroy the Metal
- * object, which stays owned by LabGL). The wrap is described from
- * the AOV's own dims/format, so the creator's texture must match
- * the AOV descriptor.
- *
- * @param renderBuffer  `HdAkariRenderBuffer` for the color AOV.
- * @param hgi           `Hgi` (must be the shared `HgiMetal`).
- * @param rawResource   Backend native texture handle from LabGL.
- */
-void AkariRenderBufferSetExternalTexture(void *renderBuffer, void *hgi,
-                                         uint64_t rawResource);
-
 #ifdef __cplusplus
 }
 #endif

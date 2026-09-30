@@ -21,7 +21,9 @@ public extension Akari
     public weak var engine: Hydra.RenderEngine?
     public weak var akari: Akari.RenderEngine?
     
-    private var lastPullStart: CFAbsoluteTime = 0
+    /// Start of the current half second average, and the frames pulled in it.
+    private var windowStart: CFAbsoluteTime = 0
+    private var windowFrames = 0
     
     private let statsLock = NSLock()
     private var stats = Akari.RenderStats()
@@ -45,12 +47,18 @@ public extension Akari
     public func hydraWillPull(deltaTime: Double)
     {
       let pullStart = CFAbsoluteTimeGetCurrent()
-      let frameMs = lastPullStart > 0 ? (pullStart - lastPullStart) * 1000.0 : 0
-      lastPullStart = pullStart
+      if windowStart == 0 { windowStart = pullStart }
+      else { windowFrames += 1 }
 
-      statsLock.lock()
-      stats.frameMilliseconds = frameMs
-      statsLock.unlock()
+      let elapsed = pullStart - windowStart
+      if elapsed >= 0.5, windowFrames > 0
+      {
+        statsLock.lock()
+        stats.frameMilliseconds = elapsed * 1000.0 / Double(windowFrames)
+        statsLock.unlock()
+        windowStart = pullStart
+        windowFrames = 0
+      }
 
       advanceTime(by: deltaTime)
     }

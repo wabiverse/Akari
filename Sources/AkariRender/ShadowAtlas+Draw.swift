@@ -102,7 +102,6 @@ extension Akari.ShadowAtlas
     gl.setShaderBuffer(depthShader, index: 0, buffer: buffers.renderMap)
     gl.setShaderImageArgument(depthShader, bufferIndex: 1, texture: atlas)
     gl.setShaderBuffer(depthShader, index: 4, buffer: frame.slotOfView)
-    gl.setShaderBuffer(depthShader, index: 5, buffer: buffers.tiles)
     gl.setShaderVertexBuffer(depthShader, index: 5, buffer: buffers.renderRect)
     gl.setShaderVertexBuffer(depthShader, index: 7, buffer: frame.viewXf)
     gl.setShaderVertexBuffer(depthShader, index: 8,
@@ -396,6 +395,7 @@ extension Akari.ShadowAtlas
   {
     gl.bindRenderTarget(atlasTarget)
     gl.disable(GLenum(GL_BLEND))
+    gl.disable(GL_CULL_FACE)
     gl.disable(GL_DEPTH_TEST)
     gl.depthMask(GLboolean(0))
     gl.enable(GLenum(GL_SCISSOR_TEST))
@@ -404,6 +404,7 @@ extension Akari.ShadowAtlas
   private func endAtlasPass()
   {
     gl.disable(GLenum(GL_SCISSOR_TEST))
+    gl.enable(GL_CULL_FACE)
     gl.enable(GL_DEPTH_TEST)
     gl.depthMask(GLboolean(1))
     gl.bindRenderTarget(gl.rootRenderTarget())

@@ -181,25 +181,19 @@ extension Akari.ShadowAtlas
     fragment void frag_main(FragIn in [[stage_in]],
                             const device uint* render_map [[buffer(0)]],
                             constant AtlasImages& images [[buffer(1)]],
-                            const device int* slot_of_view [[buffer(4)]],
-                            device atomic_uint* tiles_buf [[buffer(5)]])
+                            const device int* slot_of_view [[buffer(4)]])
     {
       int2 texel = int2(in.position.xy);
       int2 tile = texel >> \(pageShift);
       int view = int(in.view);
       int size = \(tilemapRes);
-      int tileBase;
       if (view >= \(punctualViewBase))
       {
-        int pv = view - \(punctualViewBase);
-        tileBase = (pv / \(lodCount)) * \(tilesPerTilemap);
-        for (int l = 0; l < pv % \(lodCount); ++l) { tileBase += size * size; size >>= 1; }
+        size >>= (view - \(punctualViewBase)) % \(lodCount);
       }
-      else
+      else if (slot_of_view[view] < 0)
       {
-        int slot = slot_of_view[view];
-        if (slot < 0) return;
-        tileBase = slot * \(tilesPerTilemap);
+        return;
       }
       if (any(tile < int2(0)) || any(tile >= int2(size))) return;
       uint packed = render_map[view * \(tilemapRes * tilemapRes)
@@ -211,8 +205,6 @@ extension Akari.ShadowAtlas
                               uint(texel.y & \(pageResolution - 1)));
       images.atlas.atomic_fetch_min(out_texel, uint(page / \(pagesPerLayer)),
                                     as_type<uint>(in.position.z));
-      atomic_fetch_or_explicit(&tiles_buf[tileBase + tile.y * size + tile.x],
-                               \(flagIsRendered)u, memory_order_relaxed);
     }
     """
 }

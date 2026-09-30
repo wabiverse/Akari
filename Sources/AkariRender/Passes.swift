@@ -91,7 +91,8 @@ public extension Akari
       // geometry stage: open the frame, rerecord the synced meshes
       // into the capture buffer, and set the per frame view matrix.
       ctx.labfx.beginFrame(width: ctx.target.width,
-                           height: ctx.target.height)
+                           height: ctx.target.height,
+                           hgi: ctx.gpu.hgi)
       ctx.labfx.recordGeometry(renderParam: ctx.renderParam,
                                view: ctx.camera.view,
                                projection: ctx.camera.projection)

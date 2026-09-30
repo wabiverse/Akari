@@ -43,6 +43,7 @@ import Foundation
 import HdAkari
 import LabFX
 import LabGL
+import OpenUSDKit
 
 public extension Akari
 {
@@ -199,10 +200,11 @@ public extension Akari
     /// - Parameters:
     ///   - width: AOV width dimension in pixels.
     ///   - height: AOV height dimension in pixels.
-    public func beginFrame(width: Int, height: Int)
+    ///   - hgi: the `HgiMetal` whose command queue LabGL submits on.
+    public func beginFrame(width: Int, height: Int, hgi: Pixar.HgiMetal)
     {
       guard width > 0, height > 0 else { return }
-      ensureEngine(width: width, height: height)
+      ensureEngine(width: width, height: height, hgi: hgi)
       guard let windowHandle else { return }
 
       if width != lastWidth || height != lastHeight
@@ -497,10 +499,10 @@ public extension Akari
     /// the color AOV render buffer Hydra presents (LabGL's present stage).
     ///
     /// - Parameters:
-    ///   - color: opaque `HdAkariRenderBuffer` for the color AOV.
-    ///   - hgi: opaque `Hgi` shared with Hydra.
-    public func present(color: UnsafeMutableRawPointer?,
-                        hgi: UnsafeMutableRawPointer?,
+    ///   - color: the color AOV's render buffer, if bound.
+    ///   - hgi: the `HgiMetal` shared with Hydra.
+    public func present(color: Pixar.HdAkariRenderBuffer?,
+                        hgi: Pixar.HgiMetal,
                         fireflies enableFireflies: Bool = false,
                         lightProbes showLightProbes: Bool = false)
     {
@@ -537,13 +539,13 @@ public extension Akari
 
       // export the tonemapped color buffer's native texture
       // and hand it to the color AOV through Hgi.
-      guard let color, let hgi else { return }
+      guard let color else { return }
       let finalTex = runtime.texture("tonemap", named: "tonemap")
       guard finalTex != 0 else { return }
       let native = lglGetTextureNativeHandle(finalTex)
       if native != 0
       {
-        AkariRenderBufferSetExternalTexture(color, hgi, native)
+        Pixar.AkariRenderBufferSetExternalTexture(color, hgi, native)
       }
     }
 
@@ -608,12 +610,13 @@ public extension Akari
       return part(worldMatrix[12]) | (part(worldMatrix[13]) << 1) | (part(worldMatrix[14]) << 2)
     }
 
-    private func ensureEngine(width: Int, height: Int)
+    private func ensureEngine(width: Int, height: Int, hgi: Pixar.HgiMetal)
     {
       guard windowHandle == nil else { return }
 
-      // headless attach.
-      guard let handle = labgl.attachOffscreen(width: Int32(width), height: Int32(height))
+      // headless attach, on hydra's queue so the AOV handoff stays ordered.
+      let queue = Unmanaged.passUnretained(hgi.GetQueue() as AnyObject).toOpaque()
+      guard let handle = labgl.attachOffscreen(width: Int32(width), height: Int32(height), commandQueue: queue)
       else
       {
         print("[akari/labgl] labgl_attachOffscreen failed")
