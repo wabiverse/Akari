@@ -57,7 +57,6 @@ struct AkariDemo: App
   let engine: Akari.RenderEngine
   
   let driver: any Akari.HydraFrameDriver
-  @State var stats = Akari.RenderStats()
 
   init()
   {
@@ -84,19 +83,8 @@ struct AkariDemo: App
     {
       Hydra.Viewport(engine: hydra)
         .frame(minWidth: 900, minHeight: 600)
-        .overlay(alignment: .topLeading) { HUD(engine: engine, stats: $stats) }
+        .overlay(alignment: .topLeading) { HUD(engine: engine, driver: driver) }
         .environment(\.colorScheme, .dark)
-        .task
-        {
-          await hydra.waitUntilSceneReady()
-
-          while !Task.isCancelled
-          {
-            stats = driver.snapshot()
-
-            try? await Task.sleep(for: .milliseconds(120))
-          }
-        }
     }
   }
 }

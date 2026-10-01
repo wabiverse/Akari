@@ -50,12 +50,12 @@ extension AkariDemo
   struct HUD: View
   {
     @State private var state: AkariDemo.HUDState
-    @Binding var stats: Akari.RenderStats
+    let driver: any Akari.HydraFrameDriver
 
-    init(engine: Akari.RenderEngine, stats: Binding<Akari.RenderStats>)
+    init(engine: Akari.RenderEngine, driver: any Akari.HydraFrameDriver)
     {
       _state = State(wrappedValue: AkariDemo.HUDState(engine: engine))
-      _stats = stats
+      self.driver = driver
     }
 
     var body: some View
@@ -65,8 +65,7 @@ extension AkariDemo
         Text("AKARI 灯り")
           .font(.system(size: 12, weight: .semibold))
           .foregroundColor(Color(white: 0.62))
-        Text("\(String(format: "%.0f", stats.framesPerSecond)) fps")
-          .font(.system(size: 30, weight: .bold).monospaced())
+        FPSCounter(driver: driver)
         
         ScrollView
         {

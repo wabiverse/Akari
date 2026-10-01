@@ -21,7 +21,7 @@ public extension Akari
     public weak var engine: Hydra.RenderEngine?
     public weak var akari: Akari.RenderEngine?
     
-    /// Start of the current half second average, and the frames pulled in it.
+    /// Start of the current one second average, and the frames pulled in it.
     private var windowStart: CFAbsoluteTime = 0
     private var windowFrames = 0
     
@@ -51,7 +51,7 @@ public extension Akari
       else { windowFrames += 1 }
 
       let elapsed = pullStart - windowStart
-      if elapsed >= 0.5, windowFrames > 0
+      if elapsed >= 1, windowFrames > 0
       {
         statsLock.lock()
         stats.frameMilliseconds = elapsed * 1000.0 / Double(windowFrames)
