@@ -106,6 +106,33 @@ buffer: tonemap
   textures:
     [ tonemap, f16x4, scale: 1.0 ]
 
+buffer: outlineMask
+  has depth: yes
+  textures:
+    [ outlineMask, f32x1, scale: 1.0 ]
+
+buffer: outlineEdge
+  has depth: no
+  textures:
+    [ outlineEdge, f16x1, scale: 1.0 ]
+
+buffer: outlineSpan
+  has depth: no
+  textures:
+    [ outlineSpan, f16x1, scale: 1.0 ]
+
+buffer: outline
+  has depth: no
+  textures:
+    [ outline, f16x4, scale: 1.0 ]
+
+buffer: aov
+  has depth: no
+  textures:
+    [ aovPrimId, i32x1, scale: 1.0
+      aovInstanceId, i32x1, scale: 1.0
+      aovDepth, f32x1, scale: 1.0 ]
+
 pass: clear gbuffer
   draw: no
   clear depth: yes
@@ -266,6 +293,48 @@ pass: probe-bake-overlay
   callback: draw-probe-bake
   blend: alpha
   outputs: tonemap [ tonemap ]
+
+pass: outline mask
+  callback: draw-outline-mask
+  clear depth: yes
+  clear outputs: yes
+  depth test: greater
+  write depth: yes
+  use shader: outline-mask
+  inputs: [gbuffer.position, gbuffer.normal]
+  outputs: outlineMask [ outlineMask ]
+
+pass: outline edge
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: outline-edge
+  inputs: [outlineMask.outlineMask]
+  outputs: outlineEdge [ outlineEdge ]
+
+pass: outline span
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: outline-span
+  inputs: [outlineEdge.outlineEdge]
+  outputs: outlineSpan [ outlineSpan ]
+
+pass: outline
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: outline-composite
+  inputs: [tonemap.tonemap, outlineSpan.outlineSpan]
+  outputs: outline [ outline ]
+
+pass: aov
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: aov
+  inputs: [gbuffer.position, gbuffer.normal]
+  outputs: aov [ aovPrimId, aovInstanceId, aovDepth ]
 
 pass: blit
   draw: blit
@@ -3765,4 +3834,321 @@ shader: ssr-copy
     source msl:
     ```msl
     o_ssrHistory_texture = u_ssrAccum_texture.read(uint2(gl_FragCoord.xy));
+    ```
+
+shader: outline-mask
+  uniforms: [ u_material_atlas: sampler2d,
+              u_outlineLabels: sampler2d,
+              u_position_texture: sampler2d,
+              u_normal_texture: sampler2d,
+              u_outline: vec4 ]
+  varying:  [ posEye: vec3, uv: vec2, primId: float ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_color: vec4 <- color,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.posEye = (u_modelview * vec4(a_position, 1.0)).xyz;
+      var.uv = a_uv;
+      var.primId = a_color.r;
+      gl_Position = u_modelviewProjection * vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.posEye = (u_modelview * float4(a_position, 1.0)).xyz;
+    var.uv = a_uv;
+    var.primId = a_color.r;
+    gl_Position = u_modelviewProjection * float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    void main()
+    {
+      vec4 mat = texture(u_material_atlas, var.uv);
+      if (mat.a > 0.0 && mat.b < mat.a) discard;
+      int width = int(u_outline.y);
+      int id = int(round(var.primId));
+      float label = id >= 0 && float(id) < u_outline.z
+        ? texelFetch(u_outlineLabels, ivec2(id % width, id / width), 0).r : 0.0;
+      if (label <= 0.0) discard;
+      ivec2 pixel = ivec2(gl_FragCoord.xy);
+      vec4 scene = texelFetch(u_position_texture, pixel, 0);
+      int sceneId = int(round(scene.w));
+      float sceneLabel = sceneId >= 0 && float(sceneId) < u_outline.z
+        ? texelFetch(u_outlineLabels, ivec2(sceneId % width, sceneId / width), 0).r : 0.0;
+      bool hidden = texelFetch(u_normal_texture, pixel, 0).a >= 0.5 && sceneLabel <= 0.0 &&
+                    scene.z > var.posEye.z + max(0.01 * abs(var.posEye.z), 1e-3);
+      if (hidden) discard;
+      o_outlineMask_texture = vec4(label);
+    }
+    ```
+
+    source msl:
+    ```msl
+    float4 mat = texture(u_material_atlas, var.uv);
+    if (mat.a > 0.0 && mat.b < mat.a) discard_fragment();
+    int width = int(u_outline.y);
+    int id = int(round(var.primId));
+    float label = 0.0;
+    if (id >= 0 && float(id) < u_outline.z) {
+      label = u_outlineLabels.read(uint2(id % width, id / width)).r;
+    }
+    if (label <= 0.0) discard_fragment();
+    uint2 pixel = uint2(gl_FragCoord.xy);
+    float4 scene = u_position_texture.read(pixel);
+    int sceneId = int(round(scene.w));
+    float sceneLabel = 0.0;
+    if (sceneId >= 0 && float(sceneId) < u_outline.z) {
+      sceneLabel = u_outlineLabels.read(uint2(sceneId % width, sceneId / width)).r;
+    }
+    bool hidden = u_normal_texture.read(pixel).a >= 0.5 && sceneLabel <= 0.0 &&
+                  scene.z > var.posEye.z + max(0.01 * abs(var.posEye.z), 1e-3);
+    if (hidden) discard_fragment();
+    o_outlineMask_texture = float4(label);
+    ```
+
+shader: outline-edge
+  uniforms: [ u_outlineMask_texture: sampler2d ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    void main()
+    {
+      ivec2 pixel = ivec2(gl_FragCoord.xy);
+      ivec2 size = textureSize(u_outlineMask_texture, 0);
+      ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+      float label = texelFetch(u_outlineMask_texture, pixel, 0).r;
+      bool edge = false;
+      for (int i = 0; i < 4; ++i) {
+        ivec2 q = clamp(pixel + offsets[i], ivec2(0), size - 1);
+        edge = edge || texelFetch(u_outlineMask_texture, q, 0).r != label;
+      }
+      o_outlineEdge_texture = vec4(label > 0.0 && edge ? 1.0 : 0.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    int2 pixel = int2(gl_FragCoord.xy);
+    int2 size = int2(u_outlineMask_texture.get_width(), u_outlineMask_texture.get_height());
+    const int2 offsets[4] = { int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1) };
+    float label = u_outlineMask_texture.read(uint2(pixel)).r;
+    bool edge = false;
+    for (int i = 0; i < 4; ++i) {
+      uint2 q = uint2(clamp(pixel + offsets[i], int2(0), size - 1));
+      edge = edge || u_outlineMask_texture.read(q).r != label;
+    }
+    o_outlineEdge_texture = float4(label > 0.0 && edge ? 1.0 : 0.0);
+    ```
+
+shader: outline-span
+  uniforms: [ u_outlineEdge_texture: sampler2d,
+              u_outline: vec4 ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    void main()
+    {
+      ivec2 pixel = ivec2(gl_FragCoord.xy);
+      int width = textureSize(u_outlineEdge_texture, 0).x;
+      int radius = int(ceil(max(u_outline.w, 1.0) * 0.5 + 0.5));
+      float best = 1024.0;
+      for (int dx = -radius; dx <= radius; ++dx) {
+        int x = pixel.x + dx;
+        if (x >= 0 && x < width && texelFetch(u_outlineEdge_texture, ivec2(x, pixel.y), 0).r > 0.5) {
+          best = min(best, float(abs(dx)));
+        }
+      }
+      o_outlineSpan_texture = vec4(best);
+    }
+    ```
+
+    source msl:
+    ```msl
+    int2 pixel = int2(gl_FragCoord.xy);
+    int width = int(u_outlineEdge_texture.get_width());
+    int radius = int(ceil(max(u_outline.w, 1.0) * 0.5 + 0.5));
+    float best = 1024.0;
+    for (int dx = -radius; dx <= radius; ++dx) {
+      int x = pixel.x + dx;
+      if (x >= 0 && x < width && u_outlineEdge_texture.read(uint2(x, pixel.y)).r > 0.5) {
+        best = min(best, float(abs(dx)));
+      }
+    }
+    o_outlineSpan_texture = float4(best);
+    ```
+
+shader: outline-composite
+  uniforms: [ u_tonemap_texture: sampler2d,
+              u_outlineSpan_texture: sampler2d,
+              u_outline: vec4,
+              u_outlineColor: vec4 ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    void main()
+    {
+      ivec2 pixel = ivec2(gl_FragCoord.xy);
+      int height = textureSize(u_outlineSpan_texture, 0).y;
+      int radius = int(ceil(max(u_outline.w, 1.0) * 0.5 + 0.5));
+      float best = 1048576.0;
+      for (int dy = -radius; dy <= radius; ++dy) {
+        int y = pixel.y + dy;
+        if (y >= 0 && y < height) {
+          float dx = texelFetch(u_outlineSpan_texture, ivec2(pixel.x, y), 0).r;
+          best = min(best, dx * dx + float(dy * dy));
+        }
+      }
+      float halfWidth = max(u_outline.w, 1.0) * 0.5;
+      float coverage = (1.0 - smoothstep(halfWidth - 0.5, halfWidth + 0.5, sqrt(best))) * u_outlineColor.a;
+      vec4 color = texelFetch(u_tonemap_texture, pixel, 0);
+      o_outline_texture = vec4(mix(color.rgb, u_outlineColor.rgb, coverage), color.a);
+    }
+    ```
+
+    source msl:
+    ```msl
+    int2 pixel = int2(gl_FragCoord.xy);
+    int height = int(u_outlineSpan_texture.get_height());
+    int radius = int(ceil(max(u_outline.w, 1.0) * 0.5 + 0.5));
+    float best = 1048576.0;
+    for (int dy = -radius; dy <= radius; ++dy) {
+      int y = pixel.y + dy;
+      if (y >= 0 && y < height) {
+        float dx = u_outlineSpan_texture.read(uint2(pixel.x, y)).r;
+        best = min(best, dx * dx + float(dy * dy));
+      }
+    }
+    float halfWidth = max(u_outline.w, 1.0) * 0.5;
+    float coverage = (1.0 - smoothstep(halfWidth - 0.5, halfWidth + 0.5, sqrt(best))) * u_outlineColor.a;
+    float4 color = u_tonemap_texture.read(uint2(pixel));
+    o_outline_texture = float4(mix(color.rgb, u_outlineColor.rgb, coverage), color.a);
+    ```
+
+shader: aov
+  uniforms: [ u_position_texture: sampler2d,
+              u_normal_texture: sampler2d,
+              u_aovProjection: vec4 ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    void main()
+    {
+      ivec2 pixel = ivec2(gl_FragCoord.xy);
+      vec4 p = texelFetch(u_position_texture, pixel, 0);
+      bool hit = texelFetch(u_normal_texture, pixel, 0).a >= 0.5;
+      float ndc = (u_aovProjection.x * p.z + u_aovProjection.y) / max(-p.z, 1e-6);
+      o_aovPrimId_texture = ivec4(hit ? int(round(p.w)) : -1);
+      o_aovInstanceId_texture = ivec4(-1);
+      o_aovDepth_texture = vec4(hit ? clamp(ndc * 0.5 + 0.5, 0.0, 0.999999) : 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    uint2 pixel = uint2(gl_FragCoord.xy);
+    float4 p = u_position_texture.read(pixel);
+    bool hit = u_normal_texture.read(pixel).a >= 0.5;
+    float ndc = (u_aovProjection.x * p.z + u_aovProjection.y) / max(-p.z, 1e-6);
+    o_aovPrimId_texture = int4(hit ? int(round(p.w)) : -1);
+    o_aovInstanceId_texture = int4(-1);
+    o_aovDepth_texture = float4(hit ? clamp(ndc * 0.5 + 0.5, 0.0, 0.999999) : 1.0);
     ```

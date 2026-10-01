@@ -27,6 +27,17 @@ public extension Akari
     
     private let statsLock = NSLock()
     private var stats = Akari.RenderStats()
+
+    /// Hydra's selection the outline labels were last built for.
+    private var selectionKey: SelectionKey?
+    private var selectionLabels: (labels: [Int32], all: Bool)?
+
+    private struct SelectionKey: Equatable
+    {
+      var primId: Int32
+      var groupVersion: Int?
+      var modelsVersion: Int?
+    }
     
     public init(stage: UsdStage, hydra: Hydra.RenderEngine, akari: Akari.RenderEngine)
     {
@@ -35,6 +46,8 @@ public extension Akari
       self.akari = akari
       
       self.engine?.frameDelegate = self
+      // akari outlines the selection in its own graph.
+      self.engine?.drawsSelectionOutline = false
     }
     
     public func snapshot() -> Akari.RenderStats
@@ -61,10 +74,62 @@ public extension Akari
       }
 
       advanceTime(by: deltaTime)
+      syncSelection()
     }
 
     public func hydraDidPull()
     {}
+
+    /// Hands Hydra's selection to Akari's outline,
+    /// rebuilding the labels only when it changed.
+    private func syncSelection()
+    {
+      guard let engine, let akari else { return }
+
+      let key = SelectionKey(primId: engine.selectedPrimId,
+                             groupVersion: engine.selectionUsesGroup ? engine.selectionGroupVersion : nil,
+                             modelsVersion: engine.selectionSelectAll ? engine.selectionModelLUTVersion : nil)
+      if key != selectionKey
+      {
+        selectionKey = key
+        if engine.selectionSelectAll
+        {
+          // model ids are hashes, renumber them so each stays exact as a float.
+          var numbers: [Int32: Int32] = [:]
+          let labels = engine.selectionModelLUT.map
+          { model in
+            if let number = numbers[model] { return number }
+            let number = Int32(numbers.count + 1)
+            numbers[model] = number
+            return number
+          }
+          selectionLabels = (labels, true)
+        }
+        else if engine.selectionUsesGroup
+        {
+          selectionLabels = (engine.selectionGroup, false)
+        }
+        else if engine.selectedPrimId >= 0
+        {
+          var labels = [Int32](repeating: 0, count: Int(engine.selectedPrimId) + 1)
+          labels[Int(engine.selectedPrimId)] = 1
+          selectionLabels = (labels, false)
+        }
+        else
+        {
+          selectionLabels = nil
+        }
+      }
+
+      let color = engine.selectionOutlineColor
+      akari.selection = selectionLabels.map
+      {
+        Akari.Selection(labels: $0.labels,
+                        all: $0.all,
+                        color: SIMD4(Float(color[0]), Float(color[1]), Float(color[2]), Float(color[3])),
+                        width: engine.selectionOutlineWidth)
+      }
+    }
 
     /// Loops the stage's animation, held while the light probes bake.
     private func advanceTime(by deltaTime: Double)

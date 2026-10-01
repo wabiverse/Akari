@@ -89,13 +89,16 @@ public extension Akari
     public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
       // geometry stage: open the frame, rerecord the synced meshes
-      // into the capture buffer, and set the per frame view matrix.
+      // into the capture buffers (the selected ones into the outline's),
+      // and set the per frame view matrix.
       ctx.labfx.beginFrame(width: ctx.target.width,
                            height: ctx.target.height,
                            hgi: ctx.gpu.hgi)
       ctx.labfx.recordGeometry(renderParam: ctx.renderParam,
                                view: ctx.camera.view,
-                               projection: ctx.camera.projection)
+                               projection: ctx.camera.projection,
+                               unjitteredProjection: ctx.unjitteredCamera.projection,
+                               selection: ctx.selection)
 
       ctx.labfx.renderGbufferEarly()
     }
@@ -275,9 +278,9 @@ public extension Akari
     public init() {}
     public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
-      // present stage: execute the deferred graph, present,
-      // wrap the tonemapped texture into the color AOV, and
-      // write the id + depth AOVs for picking and selection.
+      // present stage: execute the deferred graph, outline the
+      // selection, present, and wrap the final color and the id
+      // + depth textures into the AOVs.
       ctx.labfx.present(target: ctx.target,
                         projection: ctx.unjitteredCamera.projection,
                         hgi: ctx.gpu.hgi,

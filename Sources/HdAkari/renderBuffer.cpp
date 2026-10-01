@@ -105,8 +105,7 @@ HdAkariRenderBuffer::Allocate(GfVec3i const &dimensions, HdFormat format,
   desc.layerCount = 1;
   desc.mipLevels = 1;
   desc.sampleCount = HgiSampleCount1;
-  // depth and ids are written by a compute pass, not rasterized into.
-  desc.usage = HgiTextureUsageBitsColorTarget | HgiTextureUsageBitsShaderRead | HgiTextureUsageBitsShaderWrite;
+  desc.usage = HgiTextureUsageBitsColorTarget | HgiTextureUsageBitsShaderRead;
   _texture = _hgi->CreateTexture(desc);
   return bool(_texture);
 }
@@ -124,7 +123,7 @@ HdAkariRenderBuffer::GetHgiTexture() const
 }
 
 void
-HdAkariRenderBuffer::SetWrappedTexture(HgiTextureHandle const &wrapped)
+HdAkariRenderBuffer::SetWrappedTexture(HgiTextureHandle const &wrapped, uint64_t rawResource)
 {
   if (!wrapped || !_hgi) {
     return;
@@ -133,6 +132,7 @@ HdAkariRenderBuffer::SetWrappedTexture(HgiTextureHandle const &wrapped)
     _hgi->DestroyTexture(&_texture);
   }
   _texture = wrapped;
+  _wrappedResource = rawResource;
 }
 
 void
@@ -142,6 +142,7 @@ HdAkariRenderBuffer::_Deallocate()
     _hgi->DestroyTexture(&_texture);
   }
   _texture = HgiTextureHandle();
+  _wrappedResource = 0;
   _width = _height = 0;
   _format = HdFormatInvalid;
 }

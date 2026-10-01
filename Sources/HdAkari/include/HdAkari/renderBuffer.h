@@ -61,6 +61,8 @@
 
 #include "HdAkari/api.h"
 
+#include <cstdint>
+
 PXR_NAMESPACE_OPEN_SCOPE
 
 class Hgi;
@@ -123,7 +125,10 @@ class SWIFT_UNSAFE_REFERENCE HdAkariRenderBuffer final : public HdRenderBuffer
   /// passed value of `wrapped` is invalid or Sync has not captured
   /// he Hgi yet.
   HDAKARI_API
-  void SetWrappedTexture(HgiTextureHandle const &wrapped);
+  void SetWrappedTexture(HgiTextureHandle const &wrapped, uint64_t rawResource);
+
+  /// Whether the AOV texture already wraps `rawResource`.
+  bool Wraps(uint64_t rawResource) const { return _wrappedResource == rawResource; }
 
   /// Minimal HdFormat -> HgiFormat mapping for the AOVs Akari produces.
   HDAKARI_API
@@ -136,6 +141,7 @@ class SWIFT_UNSAFE_REFERENCE HdAkariRenderBuffer final : public HdRenderBuffer
  private:
   Hgi *_hgi = nullptr; // shared, not owned
   HgiTextureHandle _texture;
+  uint64_t _wrappedResource = 0;
   unsigned int _width = 0;
   unsigned int _height = 0;
   HdFormat _format = HdFormatInvalid;

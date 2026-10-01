@@ -86,6 +86,7 @@ public extension Akari
     private var ssgi = ScreenSpaceGI()
     private var ssr = ScreenSpaceReflections()
     var volumetrics = Volumetrics()
+    var outline = Outline()
     /// Froxel depth reduction + column integration.
     let froxelVolume = Akari.FroxelVolume()
 
@@ -246,21 +247,28 @@ public extension Akari
       labgl.beginFrame(windowHandle)
     }
 
-    /// Rerecords the synced meshes that changed into the captures
-    /// and sets the per frame view matrix (LabGL's geometry stage).
+    /// Rerecords the synced meshes that changed into the captures, the
+    /// selected ones into the outline's, and sets the per frame view
+    /// matrix (LabGL's geometry stage).
     ///
     /// - Parameters:
     ///   - renderParam: opaque `HdAkariRenderParam`.
     ///   - view: 16 row-major floats, world->view.
     ///   - projection: 16 row-major floats, view->clip.
+    ///   - unjitteredProjection: `projection` without the TAA jitter.
+    ///   - selection: what to outline, if anything.
     public func recordGeometry(renderParam: Pixar.HdAkariRenderParam,
                                view: Matrix4,
-                               projection: Matrix4)
+                               projection: Matrix4,
+                               unjitteredProjection: Matrix4,
+                               selection: Akari.Selection?)
     {
       guard
         geometry.staticCapture != nil,
         let scene = renderParam.GetScene()
       else { return }
+
+      updateOutline(selection, projection: unjitteredProjection, sceneProjection: projection)
 
       gl.matrixMode(GL_PROJECTION)
       gl.loadMatrix(Matrix4.reversedDepth(projection).m)
@@ -299,9 +307,10 @@ public extension Akari
                                     radius: light.radius)
       }
 
-      // only capture when geometry has changed.
+      // only capture when geometry or the outlined meshes changed.
       let rev = scene.Revision()
-      guard rev != lastGeometryRevision else { return }
+      let geometryChanged = rev != lastGeometryRevision
+      guard geometryChanged || (outline.needsRecord && outline.passesActive) else { return }
       lastGeometryRevision = rev
 
       let meshes = scene.Snapshot()
@@ -331,7 +340,11 @@ public extension Akari
                                                      normalMatrix: normalMatrix))
       }
 
-      recordCaptures(rawMeshes)
+      if geometryChanged
+      {
+        recordCaptures(rawMeshes)
+      }
+      recordOutline(rawMeshes)
     }
 
     /// Rasterizes the G-buffer now instead of waiting
@@ -464,9 +477,9 @@ public extension Akari
       }
     }
 
-    /// Executes the deferred graph, presents, wraps the final color texture into
-    /// the color AOV render buffer Hydra presents (LabGL's present stage), and
-    /// writes the prim id and depth AOVs Hydra picks and outlines selection with.
+    /// Executes the deferred graph, outlines the selection, presents, and wraps the
+    /// final color, prim id and depth textures into the AOV render buffers Hydra
+    /// presents and picks with (LabGL's present stage).
     ///
     /// - Parameters:
     ///   - target: the AOV render buffers Hydra bound.
@@ -498,6 +511,7 @@ public extension Akari
       }
 
       syncVolumetrics()
+      setVector("u_aovProjection", SIMD4(projection[2, 2], projection[3, 2], 0, 0))
 
       runtime.render()
 
@@ -509,24 +523,21 @@ public extension Akari
       }
       labgl.present(windowHandle)
 
-      // export the tonemapped color buffer's native texture
-      // and hand it to the color AOV through Hgi.
-      let finalTex = runtime.texture("tonemap", named: "tonemap")
-      if let color = target.color, finalTex != 0
+      // hand the graph's final color and id/depth
+      // textures to the AOVs through Hgi.
+      let outputs = [
+        (target.color, outlinedTexture),
+        (target.primId, runtime.texture("aov", named: "aovPrimId")),
+        (target.instanceId, runtime.texture("aov", named: "aovInstanceId")),
+        (target.depth, runtime.texture("aov", named: "aovDepth"))
+      ]
+      for case let (renderBuffer?, texture) in outputs where texture != 0
       {
-        let native = lglGetTextureNativeHandle(finalTex)
+        let native = lglGetTextureNativeHandle(texture)
         if native != 0
         {
-          Pixar.AkariRenderBufferSetExternalTexture(color, hgi, native)
+          Pixar.AkariRenderBufferSetExternalTexture(renderBuffer, hgi, native)
         }
-      }
-
-      let position = lglGetTextureNativeHandle(runtime.texture("gbuffer", named: "position"))
-      let normal = lglGetTextureNativeHandle(runtime.texture("gbuffer", named: "normal"))
-      if position != 0, normal != 0
-      {
-        Pixar.AkariRenderBuffersWriteIds(target.primId, target.instanceId, target.depth, hgi,
-                                         position, normal, projection[2, 2], projection[3, 2])
       }
     }
 
@@ -627,7 +638,7 @@ public extension Akari
       shadowAtlas.precompileShaders()
 
       // capture buffers the geometry passes replay each frame.
-      guard createCaptures()
+      guard createCaptures(), createOutlineCapture()
       else
       {
         print("[akari/labgl] labgl_captureCreate failed")
@@ -645,6 +656,7 @@ public extension Akari
       shadowAtlas.release()
       froxelVolume.release()
       lightProbes.release()
+      releaseOutline()
 
       gl.shaderCacheFlush()
 

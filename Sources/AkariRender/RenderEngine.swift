@@ -66,8 +66,25 @@ public extension Akari
       }
     }
 
+    /// What the viewport outlines, safe to set from any thread.
+    public var selection: Akari.Selection?
+    {
+      get { settingsLock.withLock { _selection } }
+      set { settingsLock.withLock { _selection = newValue } }
+    }
+
+    /// The viewport overlay toggle for the selection outline, safe
+    /// to set from any thread. Never drawn into a final render.
+    public var showsSelectionOutline: Bool
+    {
+      get { settingsLock.withLock { _showsSelectionOutline } }
+      set { settingsLock.withLock { _showsSelectionOutline = newValue } }
+    }
+
     private let settingsLock = NSLock()
     private var _settings: RenderSettings
+    private var _selection: Akari.Selection?
+    private var _showsSelectionOutline = true
     private var settingsPendingRebuild = false
     private var pipeline: RenderPipeline
     private var graph: [any Akari.GPU.RenderPassNode]
@@ -183,6 +200,7 @@ public extension Akari
                                        frameIndex: frameIndex,
                                        cameraMoved: cameraMoved,
                                        isFinalRender: isFinalRender,
+                                       selection: isFinalRender || !showsSelectionOutline ? nil : selection,
                                        renderParam: renderParam)
 
       var state = Akari.GPU.FrameState(target: target)

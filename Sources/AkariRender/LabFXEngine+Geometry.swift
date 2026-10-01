@@ -187,9 +187,9 @@ extension Akari.LabFXEngine
     casterKeys = batches.flatMap(\.casterKeys)
   }
 
-  private func recordBatch(_ meshes: [Akari.Geom.Recorder.RawMesh],
-                           into capture: LabGLCaptureBuffer,
-                           recorder: Akari.Geom.Recorder) -> BatchSummary
+  func recordBatch(_ meshes: [Akari.Geom.Recorder.RawMesh],
+                   into capture: LabGLCaptureBuffer,
+                   recorder: Akari.Geom.Recorder) -> BatchSummary
   {
     labgl.captureClear(capture)
     let sorted = meshes.sorted { Self.mortonKey($0.worldMatrix) < Self.mortonKey($1.worldMatrix) }

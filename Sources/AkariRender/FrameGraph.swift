@@ -113,6 +113,8 @@ public extension Akari.GPU
     public let cameraMoved: Bool
     /// True when rendering for output (still) rather than interaction.
     public let isFinalRender: Bool
+    /// What the viewport outlines, if anything.
+    public let selection: Akari.Selection?
     /// Opaque `HdAkariRenderParam`.
     public let renderParam: Pixar.HdAkariRenderParam
   }

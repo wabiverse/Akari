@@ -47,6 +47,18 @@ import HydraKit
 import OpenUSDKit
 import SwiftCrossUI
 
+#if os(Android)
+  import AndroidBackend
+#elseif os(Linux)
+  import GtkBackend
+#elseif os(Windows)
+  import WinUIBackend
+#elseif os(macOS)
+  import AppKitBackend
+#else
+  import UIKitBackend
+#endif
+
 /// First light for the Akari render engine.
 @main
 struct AkariDemo: App
@@ -84,6 +96,7 @@ struct AkariDemo: App
       Hydra.Viewport(engine: hydra)
         .frame(minWidth: 900, minHeight: 600)
         .overlay(alignment: .topLeading) { HUD(engine: engine, driver: driver) }
+        .overlay(alignment: .topTrailing) { OutlineButton(engine: engine, hydra: hydra).padding(16) }
         .environment(\.colorScheme, .dark)
     }
   }
