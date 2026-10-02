@@ -57,12 +57,13 @@ extension AkariDemo
     @Environment(\.self) private var environment
 
     @State private var isOn: Bool
-    @State private var isHovered = false
+    @State private var isToggleHovered = false
+    @State private var isDropdownHovered = false
     @State private var showsOptions = false
     @State private var thickness: Double
     @State private var color: Color
 
-    private static let border = Color(white: 0.24)
+    private static let border = Color(white: 0.80, opacity: 0.1)
     private static let accent = Color(red: 0.28, green: 0.45, blue: 0.7)
     private static let well = Color(white: 0.16)
 
@@ -89,7 +90,7 @@ extension AkariDemo
           HStack(spacing: 0)
           {
             toggleSegment
-            Rectangle().fill(Self.border).frame(width: 1, height: 17)
+            Rectangle().fill(Self.border).frame(width: 1, height: 18)
             dropdownSegment
           }
           .cornerRadius(3)
@@ -107,17 +108,17 @@ extension AkariDemo
 
     private var toggleSegment: some View
     {
-      let fill = isOn ? Self.accent : isHovered ? Color(white: 0.2) : Self.well
+      let fill = isOn ? Self.accent : isToggleHovered ? Color(white: 0.2) : Self.well
       return ZStack
       {
-        OutlineRing().stroke(Color(white: 0.96), style: StrokeStyle(width: 1.2))
+        OutlineRing(lineWidth: 1.2).stroke(Color(white: 0.96), style: StrokeStyle(width: 1.2))
         OutlineDisc(inset: -1.4).fill(fill)
         OutlineDisc(inset: 0).fill(Color(white: 0.98))
       }
-      .frame(width: 13, height: 13)
-      .frame(width: 18, height: 17)
+      .frame(width: 14, height: 14)
+      .frame(width: 18, height: 18)
       .background(fill)
-      .onHover { isHovered = $0 }
+      .onHover { isToggleHovered = $0 }
       .onTapGesture
       {
         isOn.toggle()
@@ -128,11 +129,14 @@ extension AkariDemo
 
     private var dropdownSegment: some View
     {
-      Chevron()
+      let fill = isDropdownHovered ? Color(white: 0.2) : Self.well
+
+      return Chevron()
         .stroke(Color(white: 0.85), style: StrokeStyle(width: 1.2))
         .frame(width: 7, height: 4)
-        .frame(width: 19, height: 17)
-        .background(showsOptions ? Color(white: 0.22) : Self.well)
+        .frame(width: 19, height: 18)
+        .background(showsOptions ? Color(white: 0.22) : fill)
+        .onHover { isDropdownHovered = $0 }
         .onTapGesture { showsOptions.toggle() }
         .help("Selection outline options")
     }
@@ -171,10 +175,13 @@ extension AkariDemo
   /// The outline half of the overlay glyph, lower left.
   struct OutlineRing: Shape
   {
+    var lineWidth: Double
+
     nonisolated func path(in bounds: Path.Rect) -> Path
     {
       let size = min(bounds.width, bounds.height)
-      return Path().addCircle(center: bounds.origin + SIMD2(0.36, 0.64) * size, radius: 0.3 * size)
+      return Path().addCircle(center: bounds.origin + SIMD2(0.39, 0.61) * size,
+                              radius: 0.28 * size - lineWidth / 2)
     }
   }
 
@@ -186,7 +193,7 @@ extension AkariDemo
     nonisolated func path(in bounds: Path.Rect) -> Path
     {
       let size = min(bounds.width, bounds.height)
-      return Path().addCircle(center: bounds.origin + SIMD2(0.62, 0.38) * size, radius: 0.3 * size - inset)
+      return Path().addCircle(center: bounds.origin + SIMD2(0.61, 0.39) * size, radius: 0.28 * size - inset)
     }
   }
 

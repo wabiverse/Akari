@@ -83,7 +83,9 @@ struct AkariDemo: App
 
     engine.labfx.setStageUpAxis(isZUp: UsdGeom.getUpAxis(for: stage) == .z)
 
-    hydra = Hydra.RenderEngine(stage: stage, rendererPluginId: Tf.Token(Akari.rendererPluginId))
+    hydra = Hydra.RenderEngine(stage: stage,
+                               selectionColor: Pixar.GfVec4f(1.0, Float(0xA0) / 255, Float(0x28) / 255, 1.0),
+                               rendererPluginId: Tf.Token(Akari.rendererPluginId))
     driver = Akari.FrameDriver(stage: stage, hydra: hydra, akari: engine)
 
     print("[akari] first light - renderer = \(Akari.rendererPluginId)")
