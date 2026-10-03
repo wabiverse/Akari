@@ -43,7 +43,6 @@ import AkariHydra
 import AkariRender
 import CxxStdlib
 import Foundation
-import HdAkari
 import HydraKit
 import OpenUSDKit
 import SwiftCrossUI
@@ -88,8 +87,15 @@ struct AkariDemo: App
     // a point light on the front of ALab's characters, from the shot camera's side.
     if stage.getPrim(at: "/root/stoat").isValid
     {
-      Pixar.HdAkariAddSessionSphereLight(Overlay.TfWeakPtr(stage), std.string("/root/akari_key_light"),
-                                         Pixar.GfVec3f(52, 126, 77), 6, 50, Pixar.GfVec3f(1, 0.85, 0.7))
+      stage.SetEditTarget(Pixar.UsdEditTarget(stage.GetSessionLayer(), Pixar.SdfLayerOffset(offset: 0, scale: 1)))
+
+      let light = UsdLux.SphereLight.define(stage, path: "/root/akari_key_light")
+      light.CreateRadiusAttr(Pixar.VtValue(Float(2)), false)
+      light.CreateIntensityAttr(Pixar.VtValue(Float(50)), false)
+      light.CreateColorAttr(Pixar.VtValue(Pixar.GfVec3f(1, 0.85, 0.7)), false)
+      light.addTranslateOp(precision: .double).set(Pixar.GfVec3d(52, 126, 77))
+
+      stage.SetEditTarget(Pixar.UsdEditTarget(stage.getRootLayer(), Pixar.SdfLayerOffset(offset: 0, scale: 1)))
     }
 
     hydra = Hydra.RenderEngine(stage: stage,

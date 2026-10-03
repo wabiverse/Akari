@@ -71,7 +71,7 @@ extension AkariDemo
     {
       self.engine = engine
       self.hydra = hydra
-      let c = hydra.selectionOutlineColor
+      let c: Pixar.GfVec4f = hydra.selectionOutlineColor
 
       _isOn = State(wrappedValue: engine.showsSelectionOutline)
       _thickness = State(wrappedValue: Double(hydra.selectionOutlineWidth))
