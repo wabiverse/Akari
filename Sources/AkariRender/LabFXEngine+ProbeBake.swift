@@ -9,7 +9,7 @@
  *    notice, this list of conditions and the following disclaimer.
  *
  * 2. Redistributions  in  binary  form  must  reproduce  the  above
- *    copyright  notice,  this  list  of  conditions  and  the  following
+ *    copyright  notice,  this  list of conditions and the following
  *    disclaimer   in   the  documentation  and/or  other  materials
  *    provided with the distribution.
  *
@@ -21,16 +21,16 @@
  * THIS   SOFTWARE   IS   PROVIDED  BY  THE  COPYRIGHT  HOLDERS  AND
  * CONTRIBUTORS  "AS  IS"  AND  ANY  EXPRESS  OR IMPLIED WARRANTIES,
  * INCLUDING,   BUT  NOT  LIMITED  TO,  THE  IMPLIED  WARRANTIES  OF
- * MERCHANTABILITY   AND   FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED.   IN  NO  EVENT SHALL THE COPYRIGHT HOLDER OR
+ * MERCHANTABILITY   AND   FITNESS  FOR  A  PARTICULAR  PURPOSE  ARE
+ * DISCLAIMED.   IN   NO   EVENT   SHALL  THE  COPYRIGHT  HOLDER  OR
  * CONTRIBUTORS  BE  LIABLE  FOR  ANY  DIRECT, INDIRECT, INCIDENTAL,
  * SPECIAL,  EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED  TO,  PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * LIMITED  TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
  * USE,  DATA,  OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
- * AND  ON  ANY  THEORY  OF  LIABILITY,  WHETHER  IN CONTRACT, STRICT
- * LIABILITY,  OR  TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
- * ANY  WAY  OUT  OF  THE  USE  OF  THIS SOFTWARE, EVEN IF ADVISED OF
- * THE  POSSIBILITY OF SUCH DAMAGE.
+ * AND  ON  ANY  THEORY  OF  LIABILITY,  WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+ * ANY  WAY  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  *
  *                               Copyright (C) 2026 Wabi Foundation.
  *                                              All rights reserved.
@@ -89,9 +89,9 @@ extension Akari.LabFXEngine
       guard enabled, shader != 0, let probes else { return }
       let total = probes.captureTotal
       guard total > 0, probes.captured < total || !probes.isReady else { return }
-      
+
       let progress = min(max(Float(probes.captured) / Float(total), 0), 1)
-      
+
       let x0: Float = 0.63
       let x1: Float = 0.95
       let y0: Float = -0.93
@@ -151,7 +151,7 @@ extension Akari.LabFXEngine
 
       gl.enable(GL_CULL_FACE)
     }
-    
+
     /// Two triangles in clip space.
     private func quad(_ x0: Float, _ y0: Float, _ x1: Float, _ y1: Float)
     {
@@ -170,11 +170,11 @@ extension Akari.LabFXEngine
 
       return [
         -Float.pi / 2, 0,
-         Float.pi / 2,
-         Float.pi
+        Float.pi / 2,
+        Float.pi
       ].map
       { start in
-        (0...arcSteps).map
+        (0 ... arcSteps).map
         { i in
           let a = start + Float(i) * (Float.pi / 2) / Float(arcSteps)
           return (cos(a), sin(a))
@@ -185,7 +185,8 @@ extension Akari.LabFXEngine
     private func roundedQuad(_ x0: Float, _ y0: Float, _ x1: Float, _ y1: Float, radius: Float)
     {
       let r = min(radius, (y1 - y0) * 0.5, (x1 - x0) * 0.5)
-      guard r > 0 else
+      guard r > 0
+      else
       {
         quad(x0, y0, x1, y1)
         return

@@ -4,5 +4,6 @@ module HdAkari {
   header "HdAkari/scene.h"
   header "HdAkari/renderParam.h"
   header "HdAkari/textureAtlas.h"
+  header "HdAkari/sessionLight.h"
   export *
 }

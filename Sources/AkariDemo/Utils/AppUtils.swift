@@ -114,7 +114,7 @@ public enum AppUtils
               float inputs:angle = 0.53
           }
       }
-      
+
       def "Materials"
       {
           def Material "DefaultMaterial"

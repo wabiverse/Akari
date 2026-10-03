@@ -66,7 +66,7 @@ extension AkariDemo
           .font(.system(size: 12, weight: .semibold))
           .foregroundColor(Color(white: 0.62))
         FPSCounter(driver: driver)
-        
+
         ScrollView
         {
           VStack(alignment: .leading, spacing: 3)
@@ -94,7 +94,7 @@ extension AkariDemo
                         state.$environmentSunAngle, in: 0 ... 20)
               sliderRow("Clipmap LOD Bias", String(format: "%+.0f", state.shadowLevelLodBias),
                         state.$shadowLevelLodBias, in: -4 ... 4)
-              sliderRow("Max Shadow Distance", String(format: "%.0f", state.shadowMaxDistance),
+              sliderRow("Max Shadow Distance", String(format: "%.0f m", state.shadowMaxDistance),
                         state.$shadowMaxDistance, in: 2 ... 200)
             }
 
@@ -109,7 +109,7 @@ extension AkariDemo
                         state.$volumeDensity, in: 0 ... 0.2)
               sliderRow("Fog Anisotropy", String(format: "%+.2f", state.volumeAnisotropy),
                         state.$volumeAnisotropy, in: -0.9 ... 0.9)
-              sliderRow("Fog Distance", String(format: "%.0f", state.volumeMaxDistance),
+              sliderRow("Fog Distance", String(format: "%.0f m", state.volumeMaxDistance),
                         state.$volumeMaxDistance, in: 5 ... 500)
               Toggle("Volume shadows", isOn: state.volumeShadowsBinding)
                 .toggleStyle(.switch)
@@ -118,15 +118,15 @@ extension AkariDemo
             Group
             {
               sectionHeader("FEATURES")
-              
+
               Text("\(state.activePassCount)")
                 .font(.system(size: 30, weight: .bold).monospaced())
               Text("frame graph passes active")
                 .font(.system(size: 12))
                 .foregroundColor(Color(white: 0.62))
-              
+
               featuresSection
-              
+
               Text("edits rebuild the frame graph live")
                 .font(.system(size: 10))
                 .foregroundColor(Color(white: 0.5))

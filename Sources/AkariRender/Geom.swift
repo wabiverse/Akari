@@ -60,6 +60,21 @@ public extension Akari
                 verts: &verts, indices: &indices, flipWinding: flipWinding)
     }
 
+    /// Copies USD's points into a plain Swift array.
+    public static func flatten(points: Pixar.VtVec3fArray) -> [Float]
+    {
+      let ptCount = points.size()
+      var pointsFlat = [Float](repeating: 0, count: ptCount * 3)
+      for i in 0 ..< ptCount
+      {
+        let p = points[i]
+        pointsFlat[i * 3 + 0] = p[0]
+        pointsFlat[i * 3 + 1] = p[1]
+        pointsFlat[i * 3 + 2] = p[2]
+      }
+      return pointsFlat
+    }
+
     /// Copies USD's point/triangle/uv arrays into plain Swift arrays.
     public static func flatten(points: Pixar.VtVec3fArray,
                                tris: Pixar.VtVec3iArray,
@@ -97,6 +112,58 @@ public extension Akari
       return (pointsFlat, trisFlat, uvsFlat)
     }
 
+    /// What a mesh's build needs from its triangles alone,
+    /// reused while only its points move.
+    public struct Topology: Sendable
+    {
+      /// Triangle corners into the points, with the winding repaired.
+      var triIndices: [Int32]
+      /// Two floats per corner, swapped along with the winding.
+      var triUvs: [Float]
+      /// The triangles around each point, `vertexFaces[vertexFaceStart[p] ..< vertexFaceStart[p + 1]]`.
+      var vertexFaceStart: [Int32]
+      var vertexFaces: [Int32]
+    }
+
+    public static func topology(trisFlat: [Int32], uvsFlat: [Float], pointCount: Int) -> Topology
+    {
+      var triIndices = trisFlat
+      var triUvs = uvsFlat.count == trisFlat.count * 2 ? uvsFlat : [Float](repeating: 0, count: trisFlat.count * 2)
+      repairWinding(&triIndices, &triUvs)
+
+      let triCount = triIndices.count / 3
+      func valid(_ t: Int) -> Bool
+      {
+        (0 ..< 3).allSatisfy { triIndices[t * 3 + $0] >= 0 && Int(triIndices[t * 3 + $0]) < pointCount }
+      }
+
+      var start = [Int32](repeating: 0, count: pointCount + 1)
+      for t in 0 ..< triCount where valid(t)
+      {
+        for c in 0 ..< 3
+        {
+          start[Int(triIndices[t * 3 + c]) + 1] += 1
+        }
+      }
+      for p in 0 ..< pointCount
+      {
+        start[p + 1] += start[p]
+      }
+      var fill = start
+      var faces = [Int32](repeating: 0, count: Int(start[pointCount]))
+      for t in 0 ..< triCount where valid(t)
+      {
+        for c in 0 ..< 3
+        {
+          let p = Int(triIndices[t * 3 + c])
+          faces[Int(fill[p])] = Int32(t)
+          fill[p] += 1
+        }
+      }
+
+      return Topology(triIndices: triIndices, triUvs: triUvs, vertexFaceStart: start, vertexFaces: faces)
+    }
+
     /// Builds the indexed triangle stream with auto smooth normals by
     /// splitting vertices at hard edges.
     public static func buildMesh(pointsFlat: [Float],
@@ -106,16 +173,26 @@ public extension Akari
                                  indices: inout [Int32],
                                  flipWinding: Bool = false)
     {
+      buildMesh(pointsFlat: pointsFlat,
+                topology: topology(trisFlat: trisFlat, uvsFlat: uvsFlat, pointCount: pointsFlat.count / 3),
+                verts: &verts, indices: &indices, flipWinding: flipWinding)
+    }
+
+    public static func buildMesh(pointsFlat: [Float],
+                                 topology: Topology,
+                                 verts: inout [Float],
+                                 indices: inout [Int32],
+                                 flipWinding: Bool = false)
+    {
       let hardEdgeCos: Float = 0.8660254 // cos(30°)
 
-      let triCount = trisFlat.count / 3
-      let ptCount = pointsFlat.count / 3
+      let triIndices = topology.triIndices
+      let triUvs = topology.triUvs
+      let triCount = triIndices.count / 3
+      let ptCount = min(pointsFlat.count / 3, topology.vertexFaceStart.count - 1)
 
       verts.reserveCapacity(verts.count + triCount * 24)
       indices.reserveCapacity(indices.count + triCount * 3)
-      var triIndices = trisFlat
-      var triUvs = uvsFlat.count == trisFlat.count * 2 ? uvsFlat : [Float](repeating: 0, count: trisFlat.count * 2)
-      repairWinding(&triIndices, &triUvs)
 
       func point(_ i: Int32) -> SIMD3<Float>
       {
@@ -126,14 +203,13 @@ public extension Akari
       var smooth = [SIMD3<Float>](repeating: .zero, count: ptCount)
       var faceNormals = [SIMD3<Float>](repeating: .zero, count: triCount)
       var faceValid = [Bool](repeating: false, count: triCount)
-      var facesPerVertex = [[Int32]](repeating: [], count: ptCount)
 
       for idx in 0 ..< triCount
       {
         let i0 = triIndices[idx * 3 + 0]
         let i1 = triIndices[idx * 3 + 1]
         let i2 = triIndices[idx * 3 + 2]
-        guard i0 >= 0, i1 >= 0, i2 >= 0 else { continue }
+        guard i0 >= 0, i1 >= 0, i2 >= 0, Int(i0) < ptCount, Int(i1) < ptCount, Int(i2) < ptCount else { continue }
 
         let p0 = point(i0); let p1 = point(i1); let p2 = point(i2)
         let fn = cross(p1 - p0, p2 - p0)
@@ -145,9 +221,6 @@ public extension Akari
         smooth[Int(i0)] += fn
         smooth[Int(i1)] += fn
         smooth[Int(i2)] += fn
-        facesPerVertex[Int(i0)].append(Int32(idx))
-        facesPerVertex[Int(i1)].append(Int32(idx))
-        facesPerVertex[Int(i2)].append(Int32(idx))
       }
       for i in smooth.indices
       {
@@ -157,16 +230,18 @@ public extension Akari
           : SIMD3<Float>(0, 1, 0)
       }
 
+      let faceStart = topology.vertexFaceStart
+      let vertexFaces = topology.vertexFaces
       var vertexIsSmooth = [Bool](repeating: true, count: ptCount)
       for v in 0 ..< ptCount
       {
-        let faces = facesPerVertex[v]
+        let faces = Int(faceStart[v]) ..< Int(faceStart[v + 1])
         guard faces.count > 1 else { continue }
-        outer: for a in 0 ..< faces.count
+        outer: for a in faces where faceValid[Int(vertexFaces[a])]
         {
-          for b in (a + 1) ..< faces.count
+          for b in (a + 1) ..< faces.upperBound where faceValid[Int(vertexFaces[b])]
           {
-            if dot(faceNormals[Int(faces[a])], faceNormals[Int(faces[b])]) <= hardEdgeCos
+            if dot(faceNormals[Int(vertexFaces[a])], faceNormals[Int(vertexFaces[b])]) <= hardEdgeCos
             {
               vertexIsSmooth[v] = false
               break outer

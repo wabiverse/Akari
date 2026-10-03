@@ -52,7 +52,7 @@ extension Akari.ShadowAtlas
       uint i = gl_GlobalInvocationID.x;
       if (i >= \(maxTiles)u) return;
       uint d = tiles_buf[i];
-      if ((d & \(flagIsRendered)u) != 0u) { d &= ~(\(flagDoUpdate)u | \(flagIsRendered)u); }
+      if ((d & \(flagIsRendered)u) != 0u) { d &= ~(\(flagDoUpdate | flagIsRendered | flagDynamicUpdate)u); }
       d &= ~0x80000000u;
       if (i < \(maxPunctualTilemaps * tilesPerTilemap)u)
       {
@@ -74,7 +74,7 @@ extension Akari.ShadowAtlas
     {
       if (i >= \(maxTiles)u) return;
       uint d = tiles_buf[i];
-      if ((d & \(flagIsRendered)u) != 0u) { d &= ~(\(flagDoUpdate)u | \(flagIsRendered)u); }
+      if ((d & \(flagIsRendered)u) != 0u) { d &= ~(\(flagDoUpdate | flagIsRendered | flagDynamicUpdate)u); }
       d &= ~0x80000000u;
       if (i < \(maxPunctualTilemaps * tilesPerTilemap)u)
       {
@@ -334,6 +334,7 @@ extension Akari.ShadowAtlas
       vec3 lL = worldPos - posRadius.xyz;
       float distanceToLight = max(max(abs(lL.x), abs(lL.y)), abs(lL.z));
       if (distanceToLight < 1e-6) return;
+      if (length(lL) > posRadius.w) return;
       int face = akpFaceIndex(lL);
       vec3 fL = akpFaceLocal(face, lL);
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
@@ -405,6 +406,7 @@ extension Akari.ShadowAtlas
       float3 lL = worldPos - posRadius.xyz;
       float distanceToLight = max(max(abs(lL.x), abs(lL.y)), abs(lL.z));
       if (distanceToLight < 1e-6) return;
+      if (length(lL) > posRadius.w) return;
       int face = akpFaceIndex(lL);
       float3 fL = akpFaceLocal(face, lL);
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
@@ -638,6 +640,7 @@ extension Akari.ShadowAtlas
       vec3 lL = worldPos - posRadius.xyz;
       float distanceToLight = max(max(abs(lL.x), abs(lL.y)), abs(lL.z));
       if (distanceToLight < 1e-6) return;
+      if (length(lL) > posRadius.w) return;
       int face = akpFaceIndex(lL);
       vec3 fL = akpFaceLocal(face, lL);
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
@@ -752,6 +755,7 @@ extension Akari.ShadowAtlas
       float3 lL = worldPos - posRadius.xyz;
       float distanceToLight = max(max(abs(lL.x), abs(lL.y)), abs(lL.z));
       if (distanceToLight < 1e-6) return;
+      if (length(lL) > posRadius.w) return;
       int face = akpFaceIndex(lL);
       float3 fL = akpFaceLocal(face, lL);
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
@@ -832,7 +836,7 @@ extension Akari.ShadowAtlas
         {
           int tile_offset = tileOffsetLds(tile_co, lod);
           uint tile_data = tiles_buf[tilemapBase + tile_offset];
-          if ((tile_data & 0x80000000u) == 0u) { tile_data &= ~0x20000000u; }
+          if ((tile_data & 0x80000000u) == 0u) { tile_data &= ~0x20002000u; }
           else { force_base_page = 1u; }
           tile_data &= ~(0x40000000u | 0x10000000u);
           tiles_local[tile_offset] = tile_data;
@@ -856,7 +860,7 @@ extension Akari.ShadowAtlas
           if (isMasked)
           {
             tiles_local[tile_offset] |= 0x80000000u;
-            tiles_local[tile_offset] &= ~0x20000000u;
+            tiles_local[tile_offset] &= ~0x20002000u;
             tiles_local[tile_offset] |= 0x40000000u;
             tiles_local[tile_offset] |= 0x10000000u;
           }
@@ -870,7 +874,7 @@ extension Akari.ShadowAtlas
         if (threadMask(tile_co, lod))
         {
           int tile_offset = tileOffsetLds(tile_co, lod);
-          if ((tiles_local[tile_offset] & 0x20000000u) != 0u) { atomicOr(levels_rendered, 1u << lod); }
+          if ((tiles_local[tile_offset] & 0x20002000u) != 0u) { atomicOr(levels_rendered, 1u << lod); }
         }
       }
       barrier();
@@ -887,7 +891,7 @@ extension Akari.ShadowAtlas
           if (threadMask(tile_co, lod))
           {
             int tile_offset = tileOffsetLds(tile_co, lod);
-            if ((tiles_local[tile_offset] & 0x20000000u) != 0u)
+            if ((tiles_local[tile_offset] & 0x20002000u) != 0u)
             {
               tiles_local[tile_offset] |= (0x10000000u | 0x40000000u);
               int bottom_offset = tileOffsetLds(tile_co >> (max_lod - lod), max_lod);
@@ -963,7 +967,7 @@ extension Akari.ShadowAtlas
         {
           int tile_offset = tileOffsetLds(tile_co, lod);
           uint tile_data = tiles_buf[tilemapBase + tile_offset];
-          if ((tile_data & 0x80000000u) == 0u) { tile_data &= ~0x20000000u; }
+          if ((tile_data & 0x80000000u) == 0u) { tile_data &= ~0x20002000u; }
           else { force_base_page = 1u; }
           tile_data &= ~(0x40000000u | 0x10000000u);
           tiles_local[tile_offset] = tile_data;
@@ -987,7 +991,7 @@ extension Akari.ShadowAtlas
           if (isMasked)
           {
             tiles_local[tile_offset] |= 0x80000000u;
-            tiles_local[tile_offset] &= ~0x20000000u;
+            tiles_local[tile_offset] &= ~0x20002000u;
             tiles_local[tile_offset] |= 0x40000000u;
             tiles_local[tile_offset] |= 0x10000000u;
           }
@@ -1001,7 +1005,7 @@ extension Akari.ShadowAtlas
         if (threadMask(tile_co, lod))
         {
           int tile_offset = tileOffsetLds(tile_co, lod);
-          if ((tiles_local[tile_offset] & 0x20000000u) != 0u)
+          if ((tiles_local[tile_offset] & 0x20002000u) != 0u)
           {
             atomic_fetch_or_explicit(&levels_rendered, 1u << uint(lod), memory_order_relaxed);
           }
@@ -1023,7 +1027,7 @@ extension Akari.ShadowAtlas
           if (threadMask(tile_co, lod))
           {
             int tile_offset = tileOffsetLds(tile_co, lod);
-            if ((tiles_local[tile_offset] & 0x20000000u) != 0u)
+            if ((tiles_local[tile_offset] & 0x20002000u) != 0u)
             {
               tiles_local[tile_offset] |= (0x10000000u | 0x40000000u);
               int bottom_offset = tileOffsetLds(tile_co >> (max_lod - lod), max_lod);

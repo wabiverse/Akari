@@ -45,10 +45,17 @@ import simd
 
 extension Akari.ShadowAtlas
 {
-  /// The views in `forced` plus those the GPU last reported with tiles to render.
-  func drawViews(captures: [OpaquePointer], directional: [Cascade], directionalSlots: [Int],
+  /// The views in `forced` plus those the GPU last reported with tiles to render. The
+  /// static captures redraw only the pages whose static depth went stale, into the
+  /// static atlas, which then seeds every page the dynamic captures draw over.
+  func drawViews(staticCaptures: [OpaquePointer], dynamicCaptures: [OpaquePointer],
+                 dynamicDrawBounds: [[Float]?],
+                 directional: [Cascade], directionalSlots: [Int],
                  punctualFaces: [[PunctualFace]], forced: Set<Int>, forcePunctual: Bool) -> [Int]
   {
+    let captures = staticCaptures + dynamicCaptures
+    let rects = staticCaptures.map { _ in buffers.renderRectStatic } + dynamicCaptures.map { _ in buffers.renderRect }
+    let drawBounds: [[Float]?] = staticCaptures.map { _ in nil } + dynamicDrawBounds
     let lightCount = punctualFaces.prefix(while: { $0.count == Self.facesPerLight }).count
     let punctualViews = Self.punctualViewBase ..< Self.punctualViewBase
       + lightCount * Self.facesPerLight * Self.lodCount
@@ -84,74 +91,86 @@ extension Akari.ShadowAtlas
     ensureCulling(count: captures.count)
     let punctualSelected = views.filter { $0 >= Self.punctualViewBase }
     var runs = Self.buildRuns(views.filter { $0 < Self.punctualViewBase })
-    var culled = cullRuns(captures: captures, runs: runs, viewProjection: viewProjection)
+    var culled = cullRuns(captures: captures, rects: rects, drawBounds: drawBounds, runs: runs, viewProjection: viewProjection)
     let instanced = culled &&
       !punctualSelected.isEmpty &&
-      cullPunctual(captures: captures, views: punctualSelected, slot: runs.count, viewProjection: viewProjection)
+      cullPunctual(captures: captures, rects: rects, views: punctualSelected, slot: runs.count,
+                   viewProjection: viewProjection)
     if !instanced, !punctualSelected.isEmpty
     {
       runs += Self.buildRuns(punctualSelected)
-      culled = cullRuns(captures: captures, runs: runs, viewProjection: viewProjection)
+      culled = cullRuns(captures: captures, rects: rects, drawBounds: drawBounds, runs: runs, viewProjection: viewProjection)
     }
-    dispatchPageClear()
 
     let res = GLsizei(Self.tilemapRes * Self.pageResolution)
-    beginAtlasPass()
-    gl.viewport(x: 0, y: 0, width: res, height: res)
-    gl.scissor(x: 0, y: 0, width: res, height: res)
-    gl.useShader(depthShader)
-    gl.setShaderBuffer(depthShader, index: 0, buffer: buffers.renderMap)
-    gl.setShaderImageArgument(depthShader, bufferIndex: 1, texture: atlas)
-    gl.setShaderBuffer(depthShader, index: 4, buffer: frame.slotOfView)
-    gl.setShaderVertexBuffer(depthShader, index: 5, buffer: buffers.renderRect)
-    gl.setShaderVertexBuffer(depthShader, index: 7, buffer: frame.viewXf)
-    gl.setShaderVertexBuffer(depthShader, index: 8, buffer: frame.viewXf)
+    func drawPass(_ indices: Range<Int>, into image: GLuint, renderMap: GLuint, renderRect: GLuint)
+    {
+      guard !indices.isEmpty else { return }
+      beginAtlasPass()
+      gl.viewport(x: 0, y: 0, width: res, height: res)
+      gl.scissor(x: 0, y: 0, width: res, height: res)
+      gl.useShader(depthShader)
+      gl.setShaderBuffer(depthShader, index: 0, buffer: renderMap)
+      gl.setShaderImageArgument(depthShader, bufferIndex: 1, texture: image)
+      gl.setShaderBuffer(depthShader, index: 4, buffer: frame.slotOfView)
+      gl.setShaderVertexBuffer(depthShader, index: 5, buffer: renderRect)
+      gl.setShaderVertexBuffer(depthShader, index: 7, buffer: frame.viewXf)
+      gl.setShaderVertexBuffer(depthShader, index: 8, buffer: frame.viewXf)
 
-    for (r, run) in runs.enumerated()
-    {
-      var transforms: [Float] = []
-      var rects: [Int32] = []
-      for view in run
+      for (r, run) in runs.enumerated()
       {
-        let viewRes = view < Self.punctualViewBase
-          ? Int32(res)
-          : Int32((Self.tilemapRes >> ((view - Self.punctualViewBase) % Self.lodCount)) * Self.pageResolution)
-        viewProjection(view).withUnsafeFloats { transforms.append(contentsOf: $0) }
-        rects += [0, 0, viewRes, viewRes]
+        var transforms: [Float] = []
+        var viewports: [Int32] = []
+        for view in run
+        {
+          let viewRes = view < Self.punctualViewBase
+            ? Int32(res)
+            : Int32((Self.tilemapRes >> ((view - Self.punctualViewBase) % Self.lodCount)) * Self.pageResolution)
+          viewProjection(view).withUnsafeFloats { transforms.append(contentsOf: $0) }
+          viewports += [0, 0, viewRes, viewRes]
+        }
+        setAmplification(transforms: transforms, viewports: viewports, viewBase: Int32(run[0]), count: run.count)
+        for capture in captures[indices]
+        {
+          if culled { labgl.capturePlaybackCulled(capture, slot: UInt32(r + Self.cullSlotBase)) }
+          else { labgl.capturePlaybackIndirectDraws(capture) }
+        }
+        gl.disableVertexAmplification()
       }
-      setAmplification(transforms: transforms, viewports: rects, viewBase: Int32(run[0]), count: run.count)
-      for capture in captures
+      if instanced
       {
-        if culled { labgl.capturePlaybackCulled(capture, slot: UInt32(r)) }
-        else { labgl.capturePlaybackIndirectDraws(capture) }
+        var identity: [Float] = []
+        Akari.Matrix4.identity.withUnsafeFloats { identity.append(contentsOf: $0) }
+        setAmplification(transforms: identity, viewports: [0, 0, Int32(res), Int32(res)], viewBase: -1, count: 1)
+        for i in indices
+        {
+          gl.setShaderVertexBuffer(depthShader, index: 8, buffer: culling[i].instanceView)
+          labgl.capturePlaybackCulled(captures[i], slot: UInt32(runs.count + Self.cullSlotBase))
+        }
+        gl.disableVertexAmplification()
       }
-      gl.disableVertexAmplification()
+      gl.useShader(0)
+      endAtlasPass()
     }
-    if instanced
-    {
-      var identity: [Float] = []
-      Akari.Matrix4.identity.withUnsafeFloats { identity.append(contentsOf: $0) }
-      setAmplification(transforms: identity, viewports: [0, 0, Int32(res), Int32(res)], viewBase: -1, count: 1)
-      for (capture, entry) in zip(captures, culling)
-      {
-        gl.setShaderVertexBuffer(depthShader, index: 8, buffer: entry.instanceView)
-        labgl.capturePlaybackCulled(capture, slot: UInt32(runs.count))
-      }
-      gl.disableVertexAmplification()
-    }
-    gl.useShader(0)
-    endAtlasPass()
+
+    dispatchPageClear()
+    drawPass(0 ..< staticCaptures.count, into: staticAtlas,
+             renderMap: buffers.renderMapStatic, renderRect: buffers.renderRectStatic)
+    dispatchPageCopy()
+    drawPass(staticCaptures.count ..< captures.count, into: atlas,
+             renderMap: buffers.renderMap, renderRect: buffers.renderRect)
 
     return views
   }
 
-  /// Groups consecutive views of the same tilemap into amplified runs.
+  /// Groups consecutive directional levels, or consecutive lods of one
+  /// punctual face, into amplified runs.
   private static func buildRuns(_ views: [Int]) -> [[Int]]
   {
     func face(_ view: Int) -> Int
     {
       view < punctualViewBase
-        ? -1 - view
+        ? -1
         : (view - punctualViewBase) / lodCount
     }
 
@@ -197,12 +216,13 @@ extension Akari.ShadowAtlas
                               count: GLsizei(count))
   }
 
-  private func cullRuns(captures: [OpaquePointer], runs: [[Int]], viewProjection: (Int) -> Akari.Matrix4) -> Bool
+  private func cullRuns(captures: [OpaquePointer], rects: [GLuint], drawBounds: [[Float]?], runs: [[Int]],
+                        viewProjection: (Int) -> Akari.Matrix4) -> Bool
   {
     guard
       kernels.cull != 0,
       runs.count <= Self.maxRuns,
-      captures.indices.allSatisfy({ ensureDrawBounds(capture: captures[$0], culling: $0) })
+      captures.indices.allSatisfy({ ensureDrawBounds(capture: captures[$0], culling: $0, bounds: drawBounds[$0]) })
     else { return false }
 
     guard !runs.isEmpty else { return true }
@@ -231,7 +251,7 @@ extension Akari.ShadowAtlas
     gl.unmapBuffer(frame.runXf)
 
     let kernel = kernels.cull
-    for (capture, entry) in zip(captures, culling)
+    for (i, (capture, entry)) in zip(captures, culling).enumerated()
     {
       setUniform(kernel, "u_params", GL_INT_VEC4,
                  SIMD4<Int32>(Int32(entry.count),
@@ -240,7 +260,7 @@ extension Akari.ShadowAtlas
       gl.setComputeShaderBuffer(kernel, binding: 0, buffer: entry.bounds)
       gl.setComputeShaderBuffer(kernel, binding: 1, buffer: frame.runViews)
       gl.setComputeShaderBuffer(kernel, binding: 2, buffer: frame.runXf)
-      gl.setComputeShaderBuffer(kernel, binding: 3, buffer: buffers.renderRect)
+      gl.setComputeShaderBuffer(kernel, binding: 3, buffer: rects[i])
       gl.setComputeShaderBuffer(kernel, binding: 4, buffer: entry.visibility)
       gl.dispatchCompute(kernel,
                          groupsX: GLuint((entry.count * runs.count + 63) / 64),
@@ -250,7 +270,7 @@ extension Akari.ShadowAtlas
       {
         guard labgl.captureEncodeCulled(capture, visibility: entry.visibility,
                                         offset: Int32(r * entry.count * MemoryLayout<UInt32>.size),
-                                        slot: UInt32(r), instanceStride: 0) != 0
+                                        slot: UInt32(r + Self.cullSlotBase), instanceStride: 0) != 0
         else { return false }
       }
     }
@@ -258,7 +278,7 @@ extension Akari.ShadowAtlas
     return true
   }
 
-  private func cullPunctual(captures: [OpaquePointer], views: [Int], slot: Int,
+  private func cullPunctual(captures: [OpaquePointer], rects: [GLuint], views: [Int], slot: Int,
                             viewProjection: (Int) -> Akari.Matrix4) -> Bool
   {
     guard
@@ -283,7 +303,7 @@ extension Akari.ShadowAtlas
     gl.unmapBuffer(frame.viewXf)
 
     let kernel = kernels.cullPunctual
-    for (capture, entry) in zip(captures, culling)
+    for (i, (capture, entry)) in zip(captures, culling).enumerated()
     {
       setUniform(kernel, "u_params", GL_INT_VEC4,
                  SIMD4<Int32>(Int32(entry.count),
@@ -292,7 +312,7 @@ extension Akari.ShadowAtlas
       gl.setComputeShaderBuffer(kernel, binding: 0, buffer: entry.bounds)
       gl.setComputeShaderBuffer(kernel, binding: 1, buffer: frame.punctualViews)
       gl.setComputeShaderBuffer(kernel, binding: 2, buffer: frame.viewXf)
-      gl.setComputeShaderBuffer(kernel, binding: 3, buffer: buffers.renderRect)
+      gl.setComputeShaderBuffer(kernel, binding: 3, buffer: rects[i])
       gl.setComputeShaderBuffer(kernel, binding: 4, buffer: entry.visibility)
       gl.setComputeShaderBuffer(kernel, binding: 5, buffer: entry.instanceView)
       gl.dispatchCompute(kernel,
@@ -303,7 +323,7 @@ extension Akari.ShadowAtlas
       guard labgl.captureEncodeCulled(capture,
                                       visibility: entry.visibility,
                                       offset: Int32(slot * entry.count * MemoryLayout<UInt32>.size),
-                                      slot: UInt32(slot),
+                                      slot: UInt32(slot + Self.cullSlotBase),
                                       instanceStride: UInt32(Self.maxPunctualViews)) != 0
       else { return false }
     }
@@ -327,13 +347,14 @@ extension Akari.ShadowAtlas
     }
   }
 
-  private func ensureDrawBounds(capture: OpaquePointer, culling index: Int) -> Bool
+  /// `bounds` replaces the capture's own per draw bounds when its draws move.
+  private func ensureDrawBounds(capture: OpaquePointer, culling index: Int, bounds override: [Float]?) -> Bool
   {
     var entry = culling[index]
     defer { culling[index] = entry }
 
     let generation = labgl.captureGeneration(capture)
-    if generation != entry.generation || capture != entry.capture
+    if generation != entry.generation || capture != entry.capture || override != nil
     {
       entry.generation = generation
       entry.capture = capture
@@ -367,7 +388,14 @@ extension Akari.ShadowAtlas
         let p = gl.mapBuffer(entry.bounds)
       else { return false }
 
-      memcpy(p, bounds, count * 6 * MemoryLayout<Float>.size)
+      if let override, override.count == count * 6
+      {
+        override.withUnsafeBytes { p.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
+      }
+      else
+      {
+        memcpy(p, bounds, count * 6 * MemoryLayout<Float>.size)
+      }
       gl.unmapBuffer(entry.bounds)
       entry.count = count
     }
@@ -402,33 +430,58 @@ extension Akari.ShadowAtlas
                        groupsY: 1, groupsZ: 1)
   }
 
-  /// Resets the pages about to be redrawn to the far value.
+  /// Resets the static pages about to be redrawn to the far value.
   private func dispatchPageClear()
   {
     guard
       kernels.pageClear != 0,
-      kernels.buildClearList != 0,
-      frame.clearList != 0,
-      buffers.clearArgs != 0
+      buildPageList(renderMap: buffers.renderMapStatic, list: frame.clearListStatic, args: buffers.clearArgsStatic)
     else { return }
 
-    gl.setComputeShaderBuffer(kernels.buildClearList, binding: 0, buffer: buffers.renderMap)
-    gl.setComputeShaderBuffer(kernels.buildClearList, binding: 1, buffer: frame.clearList)
-    gl.setComputeShaderBuffer(kernels.buildClearList, binding: 2, buffer: buffers.clearArgs)
+    gl.setComputeShaderBuffer(kernels.pageClear, binding: 0, buffer: frame.clearListStatic)
+    gl.setComputeShaderImage(kernels.pageClear,
+                             index: 0,
+                             texture: staticAtlas,
+                             format: GLenum(GL_R32UI),
+                             level: 0)
+    gl.dispatchComputeIndirect(kernels.pageClear,
+                               argsBuffer: buffers.clearArgsStatic,
+                               offsetBytes: 0)
+  }
+
+  /// Seeds every page about to be redrawn with its static depth.
+  private func dispatchPageCopy()
+  {
+    guard
+      kernels.pageCopy != 0,
+      buildPageList(renderMap: buffers.renderMap, list: frame.clearList, args: buffers.clearArgs)
+    else { return }
+
+    gl.setComputeShaderBuffer(kernels.pageCopy, binding: 0, buffer: frame.clearList)
+    gl.setComputeShaderImage(kernels.pageCopy, index: 0, texture: staticAtlas, format: GLenum(GL_R32UI), level: 0)
+    gl.setComputeShaderImage(kernels.pageCopy, index: 1, texture: atlas, format: GLenum(GL_R32UI), level: 0)
+    gl.dispatchComputeIndirect(kernels.pageCopy,
+                               argsBuffer: buffers.clearArgs,
+                               offsetBytes: 0)
+  }
+
+  /// Lists the pages a render map draws into, as the indirect page kernels' z.
+  private func buildPageList(renderMap: GLuint, list: GLuint, args: GLuint) -> Bool
+  {
+    guard
+      kernels.buildClearList != 0,
+      list != 0,
+      args != 0
+    else { return false }
+
+    gl.setComputeShaderBuffer(kernels.buildClearList, binding: 0, buffer: renderMap)
+    gl.setComputeShaderBuffer(kernels.buildClearList, binding: 1, buffer: list)
+    gl.setComputeShaderBuffer(kernels.buildClearList, binding: 2, buffer: args)
     gl.dispatchCompute(kernels.buildClearList,
                        groupsX: GLuint((Self.maxViews * Self.tilemapRes * Self.tilemapRes + 63) / 64),
                        groupsY: 1,
                        groupsZ: 1)
-
-    gl.setComputeShaderBuffer(kernels.pageClear, binding: 0, buffer: frame.clearList)
-    gl.setComputeShaderImage(kernels.pageClear,
-                             index: 0,
-                             texture: atlas,
-                             format: GLenum(GL_R32UI),
-                             level: 0)
-    gl.dispatchComputeIndirect(kernels.pageClear,
-                               argsBuffer: buffers.clearArgs,
-                               offsetBytes: 0)
+    return true
   }
 
   private func beginAtlasPass()

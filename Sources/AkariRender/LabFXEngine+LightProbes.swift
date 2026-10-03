@@ -108,7 +108,7 @@ public extension Akari.LabFXEngine
 
     let overrides: [Akari.LightProbes.Override] = probes.compactMap
     { probe in
-      structural = (structural ^ (probe.isSphere ? 1 : 0)) &* 0x100000001b3
+      structural = (structural ^ (probe.isSphere ? 1 : 0)) &* 0x100_0000_01B3
       for bits in [UInt64(probe.minX.bitPattern), UInt64(probe.minY.bitPattern),
                    UInt64(probe.minZ.bitPattern), UInt64(probe.maxX.bitPattern),
                    UInt64(probe.maxY.bitPattern), UInt64(probe.maxZ.bitPattern),
@@ -116,7 +116,7 @@ public extension Akari.LabFXEngine
                    UInt64(probe.resolutionY),
                    UInt64(probe.resolutionZ)]
       {
-        structural = (structural ^ bits) &* 0x100000001b3
+        structural = (structural ^ bits) &* 0x100_0000_01B3
       }
 
       let mat = Pixar.GfMatrix4f(probe.transform)

@@ -47,26 +47,28 @@ import OpenUSDKit
 
 extension Akari.LabFXEngine
 {
-  /// The scene split into meshes that recently changed and the rest, each
+  /// The scene split into meshes that have animated and the rest, each
   /// in its own capture, so animated frames only rerecord what moves.
   struct SceneGeometry
   {
-    /// Records a mesh stays dynamic for after it last changed.
-    static let holdRecords = 30
-
     var staticCapture: LabGLCaptureBuffer?
     var dynamicCapture: LabGLCaptureBuffer?
-    let staticRecorder = Akari.Geom.Recorder()
-    let dynamicRecorder = Akari.Geom.Recorder()
+    let staticRecorder = Akari.Geom.Recorder(keepsTopology: false)
+    /// Lays the animated meshes out once and deforms them on the GPU per frame.
+    let deformer = Akari.Geom.Deformer()
 
     /// Per mesh, a key of its data and transform, and the record it last changed on.
-    var changes: [String: (key: UInt64, record: Int)] = [:]
+    var changes: [UInt64: (key: UInt64, record: Int)] = [:]
+    /// Meshes that changed after they first appeared. They stay dynamic, a pause
+    /// demoting them would rerecord the static capture and rebuild them on the way back.
+    var animated: Set<UInt64> = []
     var records = 0
-    var staticIDs: Set<String> = []
-    var dynamicIDs: Set<String> = []
+    var staticIDs: Set<UInt64> = []
+    var dynamicIDs: Set<UInt64> = []
 
     var staticBatch = BatchSummary()
     var dynamicBatch = BatchSummary()
+    var cameraCull = CameraCull()
 
     /// The non empty captures, static first.
     var captures: [LabGLCaptureBuffer]
@@ -113,8 +115,8 @@ extension Akari.LabFXEngine
     geometry = SceneGeometry()
   }
 
-  /// Rerecords the dynamic meshes, and the static
-  /// ones only when which meshes are static changed.
+  /// Deforms the dynamic meshes on the GPU, and rerecords
+  /// the static ones only when which meshes are static changed.
   func recordCaptures(_ meshes: [Akari.Geom.Recorder.RawMesh])
   {
     guard
@@ -127,42 +129,44 @@ extension Akari.LabFXEngine
 
     var staticMeshes: [Akari.Geom.Recorder.RawMesh] = []
     var dynamicMeshes: [Akari.Geom.Recorder.RawMesh] = []
-    var staticIDs = Set<String>(minimumCapacity: meshes.count)
-    var dynamicIDs = Set<String>()
+    var staticIDs = Set<UInt64>(minimumCapacity: meshes.count)
+    var dynamicIDs = Set<UInt64>()
     var dynamicChanged = false
 
     for mesh in meshes
     {
       let key = Self.changeKey(mesh)
       let changedOn: Int
-      if let last = geometry.changes[mesh.id]
+      if let last = geometry.changes[mesh.key]
       {
         changedOn = last.key == key ? last.record : record
+        if changedOn == record { geometry.animated.insert(mesh.key) }
       }
       else
       {
         // new meshes start static, so loading
         // a scene isn't one long animation.
-        changedOn = record - SceneGeometry.holdRecords
+        changedOn = 0
       }
-      geometry.changes[mesh.id] = (key, changedOn)
+      geometry.changes[mesh.key] = (key, changedOn)
 
-      if record - changedOn < SceneGeometry.holdRecords
+      if geometry.animated.contains(mesh.key)
       {
         dynamicMeshes.append(mesh)
-        dynamicIDs.insert(mesh.id)
+        dynamicIDs.insert(mesh.key)
         dynamicChanged = dynamicChanged || changedOn == record
       }
       else
       {
         staticMeshes.append(mesh)
-        staticIDs.insert(mesh.id)
+        staticIDs.insert(mesh.key)
       }
     }
     if geometry.changes.count > meshes.count
     {
       let live = staticIDs.union(dynamicIDs)
       geometry.changes = geometry.changes.filter { live.contains($0.key) }
+      geometry.animated.formIntersection(live)
     }
 
     if staticIDs != geometry.staticIDs || record == 1
@@ -173,7 +177,13 @@ extension Akari.LabFXEngine
     if dynamicIDs != geometry.dynamicIDs || dynamicChanged
     {
       geometry.dynamicIDs = dynamicIDs
-      geometry.dynamicBatch = recordBatch(dynamicMeshes, into: dynamicCapture, recorder: geometry.dynamicRecorder)
+      if geometry.deformer.needsRebuild(dynamicMeshes)
+      {
+        geometry.deformer.rebuild(dynamicMeshes, into: dynamicCapture)
+      }
+      let deformed = geometry.deformer.update(dynamicMeshes)
+      geometry.dynamicBatch = BatchSummary(bounds: deformed.bounds, casterBounds: deformed.casterBounds,
+                                           casterKeys: deformed.casterKeys)
     }
 
     let batches = [geometry.staticBatch, geometry.dynamicBatch]
@@ -189,11 +199,12 @@ extension Akari.LabFXEngine
 
   func recordBatch(_ meshes: [Akari.Geom.Recorder.RawMesh],
                    into capture: LabGLCaptureBuffer,
-                   recorder: Akari.Geom.Recorder) -> BatchSummary
+                   recorder: Akari.Geom.Recorder,
+                   reusing others: [Akari.Geom.Recorder] = []) -> BatchSummary
   {
     labgl.captureClear(capture)
     let sorted = meshes.sorted { Self.mortonKey($0.worldMatrix) < Self.mortonKey($1.worldMatrix) }
-    let items = recorder.record(sorted)
+    let items = recorder.record(sorted, reusing: others)
     guard !items.isEmpty else { return BatchSummary() }
 
     gl.bindTexture(target: GL_TEXTURE_2D, texture: 0)
@@ -213,7 +224,7 @@ extension Akari.LabFXEngine
       { buf in
         batch.append(localVerts: item.verts, localIndices: item.indices,
                      worldMatrix: buf.baseAddress!, normalMatrix: item.normalMatrix,
-                     primId: item.primId)
+                     primId: item.primId, key: Self.casterKey(item))
       }
     }
     batch.draw()
@@ -228,11 +239,25 @@ extension Akari.LabFXEngine
     labgl_capturePlaybackIndirect(dynamicCapture)
   }
 
+  /// Changes whenever the item moves or deforms, for the shadows' moved caster test.
+  private static func casterKey(_ item: Akari.Geom.Recorder.Item) -> UInt64
+  {
+    var key = (14_695_981_039_346_656_037 ^ item.dataRevision) &* 1_099_511_628_211
+    for value in item.worldMatrix
+    {
+      key = (key ^ UInt64(value.bitPattern)) &* 1_099_511_628_211
+    }
+    return key
+  }
+
   /// Hash of what a mesh looks like in the world, changes whenever it animates.
   private static func changeKey(_ mesh: Akari.Geom.Recorder.RawMesh) -> UInt64
   {
     var key: UInt64 = 14_695_981_039_346_656_037
-    func mix(_ bits: UInt64) { key = (key ^ bits) &* 1_099_511_628_211 }
+    func mix(_ bits: UInt64)
+    {
+      key = (key ^ bits) &* 1_099_511_628_211
+    }
     mix(mesh.dataRevision)
     mix(mesh.flipWinding ? 1 : 0)
     for value in mesh.worldMatrix

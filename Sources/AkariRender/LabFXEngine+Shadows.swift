@@ -65,6 +65,7 @@ public extension Akari.LabFXEngine
                               sceneRevision: lastGeometryRevision,
                               casterBounds: casterBounds,
                               casterKeys: casterKeys,
+                              staticGeneration: geometry.staticCapture.map { labgl.captureGeneration($0) } ?? 0,
                               volume: volumetrics.froxels)
   }
 
@@ -82,9 +83,18 @@ public extension Akari.LabFXEngine
                      frameIndex: UInt64)
   {
     shadowsReady = false
-    let captures = geometry.captures
+    let staticCaptures = geometry.staticBatch.isEmpty ? [] : [geometry.staticCapture].compactMap(\.self)
+    // the deformed capture's draws move without a rerecord, so their bounds come along.
+    var dynamicCaptures: [OpaquePointer] = []
+    var dynamicDrawBounds: [[Float]?] = []
+    if !geometry.dynamicBatch.isEmpty, let capture = geometry.dynamicCapture
+    {
+      dynamicCaptures.append(capture)
+      dynamicDrawBounds.append(geometry.dynamicBatch.casterBounds)
+    }
+
     guard
-      !captures.isEmpty,
+      !staticCaptures.isEmpty || !dynamicCaptures.isEmpty,
       let sceneBounds,
       renderParam.GetScene() != nil
     else { return }
@@ -92,7 +102,9 @@ public extension Akari.LabFXEngine
     let shadow = settings.light.shadow
     let diagonal = sceneBounds.max - sceneBounds.min
     let punctualFarDistance = max((diagonal * diagonal).sum().squareRoot(), 1)
-    let views = shadowAtlas.render(captures: captures,
+    let views = shadowAtlas.render(staticCaptures: staticCaptures,
+                                   dynamicCaptures: dynamicCaptures,
+                                   dynamicDrawBounds: dynamicDrawBounds,
                                    camera: camera,
                                    lightDirection: worldSpaceSunDirection(settings.light),
                                    sceneBounds: sceneBounds,

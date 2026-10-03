@@ -79,8 +79,9 @@ extension Akari.LabFXEngine
     var passesActive = true
     /// The selected meshes, rerecorded when the selection or one of them changes.
     var capture: LabGLCaptureBuffer?
-    let recorder = Akari.Geom.Recorder()
+    let recorder = Akari.Geom.Recorder(keepsTopology: false)
     var batch = BatchSummary()
+    var recordedIDs: Set<String> = []
     var needsRecord = true
     var projection = Akari.Matrix4.identity
     var sceneProjection = Akari.Matrix4.identity
@@ -139,8 +140,9 @@ extension Akari.LabFXEngine
     setVector("u_outlineColor", selection.color)
   }
 
-  /// Rerecords the selected meshes when the selection changed or one
-  /// of them moved. Select all draws the scene captures instead.
+  /// Rerecords the selected static meshes when the selection or which of
+  /// them are static changed. The animated ones draw from the deformed
+  /// capture, and select all draws the scene captures instead.
   func recordOutline(_ meshes: [Akari.Geom.Recorder.RawMesh])
   {
     guard let capture = outline.capture, outline.passesActive else { return }
@@ -149,12 +151,15 @@ extension Akari.LabFXEngine
     let selected = meshes.filter
     { mesh in
       Int(mesh.primId) < outline.labels.count && mesh.primId >= 0 && outline.labels[Int(mesh.primId)] > 0
+        && !geometry.animated.contains(mesh.key)
     }
-    let moved = selected.contains { geometry.changes[$0.id]?.record == geometry.records }
-    guard outline.needsRecord || moved else { return }
+    let ids = Set(selected.map(\.id))
+    guard outline.needsRecord || ids != outline.recordedIDs else { return }
 
     outline.needsRecord = false
-    outline.batch = recordBatch(selected, into: capture, recorder: outline.recorder)
+    outline.recordedIDs = ids
+    outline.batch = recordBatch(selected, into: capture, recorder: outline.recorder,
+                                reusing: [geometry.staticRecorder])
   }
 
   func releaseOutline()
@@ -173,7 +178,8 @@ extension Akari.LabFXEngine
   fileprivate func drawOutlineMask()
   {
     let captures = outline.all ? geometry.captures
-                               : outline.batch.isEmpty ? [] : [outline.capture].compactMap(\.self)
+      : [outline.batch.isEmpty ? nil : outline.capture,
+         geometry.dynamicBatch.isEmpty ? nil : geometry.dynamicCapture].compactMap(\.self)
     guard !captures.isEmpty else { return }
 
     gl.matrixMode(GL_PROJECTION)

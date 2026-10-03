@@ -54,8 +54,11 @@ public extension Akari.Geom
     public struct RawMesh
     {
       public var id: String
+      /// The path's hash, what per frame keys on.
+      public var key: UInt64
       public var primId: Int32
       public var dataRevision: UInt64
+      public var topologyRevision: UInt64
       public var flipWinding: Bool
       public var points: Pixar.VtVec3fArray
       public var tris: Pixar.VtVec3iArray
@@ -63,13 +66,16 @@ public extension Akari.Geom
       public var worldMatrix: [Float]
       public var normalMatrix: [Float]
 
-      public init(id: String, primId: Int32, dataRevision: UInt64, flipWinding: Bool,
+      public init(id: String, key: UInt64, primId: Int32, dataRevision: UInt64, topologyRevision: UInt64,
+                  flipWinding: Bool,
                   points: Pixar.VtVec3fArray, tris: Pixar.VtVec3iArray, uvs: Pixar.VtVec2fArray,
                   worldMatrix: [Float], normalMatrix: [Float])
       {
         self.id = id
+        self.key = key
         self.primId = primId
         self.dataRevision = dataRevision
+        self.topologyRevision = topologyRevision
         self.flipWinding = flipWinding
         self.points = points
         self.tris = tris
@@ -83,6 +89,7 @@ public extension Akari.Geom
     public struct Item
     {
       public var primId: Int32
+      public var dataRevision: UInt64
       public var verts: [Float]
       public var indices: [Int32]
       public var worldMatrix: [Float]
@@ -94,24 +101,24 @@ public extension Akari.Geom
     {
       var id: String
       var primId: Int32
-      var dataRevision: UInt64
-      var flipWinding: Bool
-      var verts: [Float]
-      var indices: [Int32]
+      var cached: CachedMesh
       var worldMatrix: [Float]
       var normalMatrix: [Float]
     }
 
-    /// Everything needed to build one mesh.
+    /// Everything needed to build one mesh,
+    /// `topology` when only its points changed.
     private struct BuildInput
     {
       var id: String
       var primId: Int32
       var dataRevision: UInt64
+      var topologyRevision: UInt64
       var flipWinding: Bool
       var pointsFlat: [Float]
       var trisFlat: [Int32]
       var uvsFlat: [Float]
+      var topology: Akari.Geom.Topology?
       var worldMatrix: [Float]
       var normalMatrix: [Float]
     }
@@ -119,17 +126,27 @@ public extension Akari.Geom
     private struct CachedMesh
     {
       var dataRevision: UInt64
+      var topologyRevision: UInt64
       var flipWinding: Bool
+      var topology: Akari.Geom.Topology?
       var verts: [Float]
       var indices: [Int32]
     }
 
     private var cache: [String: CachedMesh] = [:]
+    /// Keeps each mesh's triangulation for when only its points move,
+    /// off for meshes that rarely do, it costs about 50 bytes a triangle.
+    private let keepsTopology: Bool
 
-    public init() {}
+    public init(keepsTopology: Bool = true)
+    {
+      self.keepsTopology = keepsTopology
+    }
 
-    /// Reuses what's cached, builds the rest in parallel.
-    public func record(_ meshes: [RawMesh]) -> [Item]
+    /// Reuses what's cached here or in `others`, builds the rest in
+    /// parallel, reusing a mesh's triangulation when only its points
+    /// moved.
+    public func record(_ meshes: [RawMesh], reusing others: [Recorder] = []) -> [Item]
     {
       var readyItems: [BuiltMesh] = []
       var pendingInputs: [BuildInput] = []
@@ -139,28 +156,35 @@ public extension Akari.Geom
 
       for mesh in meshes
       {
-        // cached for reuse across captures unless this mesh's own
-        // geometry (dataRevision) or flip state actually changed.
-        if let cached = cache[mesh.id],
-           cached.dataRevision == mesh.dataRevision,
-           cached.flipWinding == mesh.flipWinding
+        let candidates = ([cache[mesh.id]] + others.map { $0.cache[mesh.id] }).compactMap(\.self)
+
+        if let cached = candidates.first(where: { $0.dataRevision == mesh.dataRevision && $0.flipWinding == mesh.flipWinding })
         {
           if cached.verts.isEmpty || cached.indices.isEmpty { continue }
-          readyItems.append(BuiltMesh(id: mesh.id, primId: mesh.primId, dataRevision: cached.dataRevision,
-                                      flipWinding: mesh.flipWinding, verts: cached.verts,
-                                      indices: cached.indices, worldMatrix: mesh.worldMatrix,
-                                      normalMatrix: mesh.normalMatrix))
+          readyItems.append(BuiltMesh(id: mesh.id, primId: mesh.primId, cached: cached,
+                                      worldMatrix: mesh.worldMatrix, normalMatrix: mesh.normalMatrix))
+          continue
+        }
+
+        if let topology = candidates.first(where: { $0.topologyRevision == mesh.topologyRevision })?.topology
+        {
+          pendingInputs.append(BuildInput(id: mesh.id, primId: mesh.primId, dataRevision: mesh.dataRevision,
+                                          topologyRevision: mesh.topologyRevision, flipWinding: mesh.flipWinding,
+                                          pointsFlat: Akari.Geom.flatten(points: mesh.points), trisFlat: [],
+                                          uvsFlat: [], topology: topology, worldMatrix: mesh.worldMatrix,
+                                          normalMatrix: mesh.normalMatrix))
           continue
         }
 
         let (pointsFlat, trisFlat, uvsFlat) = Akari.Geom.flatten(points: mesh.points, tris: mesh.tris, uvs: mesh.uvs)
         pendingInputs.append(BuildInput(id: mesh.id, primId: mesh.primId, dataRevision: mesh.dataRevision,
-                                        flipWinding: mesh.flipWinding, pointsFlat: pointsFlat,
-                                        trisFlat: trisFlat, uvsFlat: uvsFlat, worldMatrix: mesh.worldMatrix,
+                                        topologyRevision: mesh.topologyRevision, flipWinding: mesh.flipWinding,
+                                        pointsFlat: pointsFlat, trisFlat: trisFlat, uvsFlat: uvsFlat,
+                                        topology: nil, worldMatrix: mesh.worldMatrix,
                                         normalMatrix: mesh.normalMatrix))
       }
 
-      let builtItems = Self.buildInParallel(pendingInputs)
+      let builtItems = Self.buildInParallel(pendingInputs, keepsTopology: keepsTopology)
 
       var newCache: [String: CachedMesh] = [:]
       var items: [Item] = []
@@ -171,12 +195,12 @@ public extension Akari.Geom
 
       for item in readyItems + builtItems
       {
-        if item.verts.isEmpty || item.indices.isEmpty { continue }
-        newCache[item.id] = CachedMesh(dataRevision: item.dataRevision,
-                                       flipWinding: item.flipWinding,
-                                       verts: item.verts,
-                                       indices: item.indices)
-        items.append(Item(primId: item.primId, verts: item.verts, indices: item.indices,
+        var cached = item.cached
+        if !keepsTopology { cached.topology = nil }
+        newCache[item.id] = cached
+        if item.cached.verts.isEmpty || item.cached.indices.isEmpty { continue }
+        items.append(Item(primId: item.primId, dataRevision: item.cached.dataRevision,
+                          verts: item.cached.verts, indices: item.cached.indices,
                           worldMatrix: item.worldMatrix, normalMatrix: item.normalMatrix))
       }
       cache = newCache
@@ -191,7 +215,7 @@ public extension Akari.Geom
     }
 
     /// Triangulates the cache misses in parallel.
-    private static func buildInParallel(_ inputs: [BuildInput]) -> [BuiltMesh]
+    private static func buildInParallel(_ inputs: [BuildInput], keepsTopology: Bool) -> [BuiltMesh]
     {
       guard !inputs.isEmpty else { return [] }
 
@@ -202,16 +226,21 @@ public extension Akari.Geom
         DispatchQueue.concurrentPerform(iterations: inputs.count)
         { i in
           let input = inputs[i]
+          let topology = input.topology
+            ?? Akari.Geom.topology(trisFlat: input.trisFlat, uvsFlat: input.uvsFlat,
+                                   pointCount: input.pointsFlat.count / 3)
           var verts: [Float] = []
           var indices: [Int32] = []
-          Akari.Geom.buildMesh(pointsFlat: input.pointsFlat, trisFlat: input.trisFlat,
-                               uvsFlat: input.uvsFlat, verts: &verts, indices: &indices,
-                               flipWinding: input.flipWinding)
-          box.buffer[i] = BuiltMesh(id: input.id, primId: input.primId, dataRevision: input.dataRevision,
-                                    flipWinding: input.flipWinding, verts: verts, indices: indices,
+          Akari.Geom.buildMesh(pointsFlat: input.pointsFlat, topology: topology, verts: &verts,
+                               indices: &indices, flipWinding: input.flipWinding)
+          let cached = CachedMesh(dataRevision: input.dataRevision, topologyRevision: input.topologyRevision,
+                                  flipWinding: input.flipWinding, topology: keepsTopology ? topology : nil,
+                                  verts: verts, indices: indices)
+          box.buffer[i] = BuiltMesh(id: input.id, primId: input.primId, cached: cached,
                                     worldMatrix: input.worldMatrix, normalMatrix: input.normalMatrix)
         }
       }
+
       return results.compactMap(\.self)
     }
   }

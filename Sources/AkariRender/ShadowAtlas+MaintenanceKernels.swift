@@ -221,7 +221,7 @@ extension Akari.ShadowAtlas
       {
         for (int x = lo_tile.x; x <= hi_tile.x; ++x)
         {
-          atomicOr(tiles_buf[base + y * \(tilemapRes) + x], \(flagDoUpdate)u);
+          atomicOr(tiles_buf[base + y * \(tilemapRes) + x], \(flagDynamicUpdate)u);
         }
       }
     }
@@ -258,7 +258,7 @@ extension Akari.ShadowAtlas
         for (int x = lo_tile.x; x <= hi_tile.x; ++x)
         {
           atomic_fetch_or_explicit(&tiles_buf[base + y * \(tilemapRes) + x],
-                                   \(flagDoUpdate)u, memory_order_relaxed);
+                                   \(flagDynamicUpdate)u, memory_order_relaxed);
         }
       }
     }
@@ -328,7 +328,7 @@ extension Akari.ShadowAtlas
     {
       return (i == 0 ? u_lightPos0 : i == 1 ? u_lightPos1 : i == 2 ? u_lightPos2 : u_lightPos3).xyz;
     }
-    #define TAG_TILE(i) atomicOr(tiles_buf[i], \(flagDoUpdate)u)
+    #define TAG_TILE(i) atomicOr(tiles_buf[i], \(flagDynamicUpdate)u)
     void main()
     {
       uint gid = gl_GlobalInvocationID.x;
@@ -344,7 +344,7 @@ extension Akari.ShadowAtlas
     #define ivec2 int2
     \(tagUsagePunctualMSLCommon)
     struct U { int boxCount; int lightCount; float4 lightPos[4]; };
-    #define TAG_TILE(i) atomic_fetch_or_explicit(&tiles_buf[i], \(flagDoUpdate)u, memory_order_relaxed)
+    #define TAG_TILE(i) atomic_fetch_or_explicit(&tiles_buf[i], \(flagDynamicUpdate)u, memory_order_relaxed)
     #define lightPosition(i) u.lightPos[i].xyz
     kernel void compute_main(constant U& u [[buffer(0)]],
                              device const float* boxes [[buffer(1)]],
@@ -365,7 +365,8 @@ extension Akari.ShadowAtlas
       int y = int(gid_y);
       int base = slot * \(tilesPerTilemap);
       uint tile = tiles_buf[base + y * \(tilemapRes) + x];
-      if ((tile & \(flagDoUpdate)u) == 0u) return;
+      uint bits = tile & \(flagDoUpdate | flagDynamicUpdate)u;
+      if (bits == 0u) return;
       int offset = \(tilemapRes * tilemapRes);
       int size = \(tilemapRes);
     """
@@ -383,7 +384,7 @@ extension Akari.ShadowAtlas
       for (int lod = 1; lod <= \(lodMax); ++lod)
       {
         size >>= 1;
-        atomicOr(tiles_buf[base + offset + (y >> lod) * size + (x >> lod)], \(flagDoUpdate)u);
+        atomicOr(tiles_buf[base + offset + (y >> lod) * size + (x >> lod)], bits);
         offset += size * size;
       }
     }
@@ -402,7 +403,7 @@ extension Akari.ShadowAtlas
       {
         size >>= 1;
         atomic_fetch_or_explicit(&tiles_atomic[base + offset + (y >> lod) * size + (x >> lod)],
-                                 \(flagDoUpdate)u, memory_order_relaxed);
+                                 bits, memory_order_relaxed);
         offset += size * size;
       }
     }
@@ -415,9 +416,12 @@ extension Akari.ShadowAtlas
         clear_args[0] = \(pageResolution / 16)u;
         clear_args[1] = \(pageResolution / 16)u;
         clear_args[2] = 0u;
+        clear_args_static[0] = \(pageResolution / 16)u;
+        clear_args_static[1] = \(pageResolution / 16)u;
+        clear_args_static[2] = 0u;
       }
       if (view >= \(maxViews)) return;
-      uint toRender = \(flagIsUsed | flagIsAllocated | flagDoUpdate)u;
+      uint resident = \(flagIsUsed | flagIsAllocated)u;
       int slot, base, count, side;
       if (view < \(maxDirectionalTilemaps))
       {
@@ -438,18 +442,23 @@ extension Akari.ShadowAtlas
         count = size * size;
       }
       int x0 = side, y0 = side, x1 = -1, y1 = -1;
+      int sx0 = side, sy0 = side, sx1 = -1, sy1 = -1;
       if (slot >= 0)
       {
         for (int i = 0; i < count; ++i)
         {
-          if ((tiles_buf[base + i] & toRender) != toRender) continue;
+          uint packed = tiles_buf[base + i];
+          if ((packed & resident) != resident || (packed & \(flagDoUpdate | flagDynamicUpdate)u) == 0u) continue;
           int x = i % side, y = i / side;
           x0 = min(x0, x); y0 = min(y0, y); x1 = max(x1, x); y1 = max(y1, y);
+          if ((packed & \(flagDoUpdate)u) == 0u) continue;
+          sx0 = min(sx0, x); sy0 = min(sy0, y); sx1 = max(sx1, x); sy1 = max(sy1, y);
         }
       }
       bool dirty = x1 >= 0;
       render_view[view] = dirty ? uint(view < \(maxDirectionalTilemaps) ? slot : view) : 0xFFFFFFFFu;
       render_rect[view] = dirty ? uint(x0 | (y0 << 5) | (x1 << 10) | (y1 << 15) | (1 << 20)) : 0u;
+      render_rect_static[view] = sx1 >= 0 ? uint(sx0 | (sy0 << 5) | (sx1 << 10) | (sy1 << 15) | (1 << 20)) : 0u;
     """
 
   static let buildRenderViewsGLSL = """
@@ -460,6 +469,8 @@ extension Akari.ShadowAtlas
     layout(std430, binding = 2) buffer RenderView { uint render_view[]; };
     layout(std430, binding = 3) buffer ClearArgs { uint clear_args[]; };
     layout(std430, binding = 4) buffer RenderRect { uint render_rect[]; };
+    layout(std430, binding = 5) buffer RenderRectStatic { uint render_rect_static[]; };
+    layout(std430, binding = 6) buffer ClearArgsStatic { uint clear_args_static[]; };
     void main()
     {
       uint gid = gl_GlobalInvocationID.x;
@@ -475,6 +486,8 @@ extension Akari.ShadowAtlas
                              device uint* render_view [[buffer(3)]],
                              device uint* clear_args [[buffer(4)]],
                              device uint* render_rect [[buffer(5)]],
+                             device uint* render_rect_static [[buffer(6)]],
+                             device uint* clear_args_static [[buffer(7)]],
                              uint3 gid3 [[thread_position_in_grid]])
     {
       uint gid = gid3.x;

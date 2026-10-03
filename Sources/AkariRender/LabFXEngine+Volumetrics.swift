@@ -89,14 +89,15 @@ extension Akari.LabFXEngine
 
     let clipNear = abs(b / (a - 1))
     let clipFar = abs(a + 1) > 1e-7 ? abs(b / (a + 1)) : .infinity
-    let far = clipFar.isFinite ? min(clipFar, volume.maxDistance) : volume.maxDistance
+    let reach = camera.world(meters: volume.maxDistance)
+    let far = clipFar.isFinite ? min(clipFar, reach) : reach
     guard clipNear.isFinite, far.isFinite, far > clipNear else { return }
 
     let tileDivisor = Self.volumeAtlasScale * Self.volumeSliceColumns
     let grid = SIMD2<Float>(Float(max(lastWidth / tileDivisor, 1)),
                             Float(max(lastHeight / tileDivisor, 1)))
 
-    let density = max(volume.density, 0)
+    let density = max(volume.density, 0) / camera.world(meters: 1)
     guard density > 0 else { return }
 
     let gridSize = SIMD2<Int>(Int(grid.x), Int(grid.y))
@@ -112,7 +113,7 @@ extension Akari.LabFXEngine
       volumetrics.boundFroxelDepth = froxelVolume.depthTexture
       setSampler("u_froxelDepth", volumetrics.boundFroxelDepth)
     }
-    
+
     let sunLevelBias = max(volume.sunShadowLevelBias, 0)
 
     volumetrics.pending = SIMD4(density,

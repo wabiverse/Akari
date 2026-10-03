@@ -55,7 +55,7 @@ public extension Bundle
 
     return Bundle(path: "\(base)/Contents/Resources") ?? Bundle(path: base)
   }
-  
+
   static let akari: Bundle = {
     // in bundled app contexts, swift bundler nests compiled resources under
     // Contents/Resources - check there before falling back to .module.
@@ -63,7 +63,7 @@ public extension Bundle
     { return bundle }
     return .module
   }()
-  
+
   static let hdAkari: Bundle = {
     // in bundled app contexts, swift bundler nests compiled resources under
     // Contents/Resources - check there before falling back to .module.
@@ -71,7 +71,7 @@ public extension Bundle
     { return bundle }
     return .module
   }()
-  
+
   static let fonts: Bundle = {
     // in bundled app contexts, swift bundler nests compiled resources under
     // Contents/Resources - check there before falling back to .module.

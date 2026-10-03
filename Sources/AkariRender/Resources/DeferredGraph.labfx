@@ -220,7 +220,7 @@ pass: ssr
   depth test: never
   write depth: no
   use shader: ssr
-  inputs: [gbuffer.position, gbuffer.normal, gbuffer.material, history.history]
+  inputs: [gbuffer.position, gbuffer.normal, gbuffer.material, history.history, ssgiPrep.ssgiDepth]
   outputs: ssr [ssrRadiance, ssrGuide]
 
 pass: ssr temporal
@@ -3373,6 +3373,7 @@ shader: ssr
               u_normal_texture: sampler2d,
               u_material_texture: sampler2d,
               u_history_texture: sampler2d,
+              u_ssgiDepth_texture: sampler2d,
               u_view: mat4 <- auto-view-matrix,
               u_proj: mat4,
               u_prevViewProj: mat4,
@@ -3431,10 +3432,11 @@ shader: ssr
       return T * Ht.x + B * Ht.y + N * Ht.z;
     }
 
-    float sceneDepth(vec2 uv, ivec2 size)
+    float sceneDepth(vec2 uv)
     {
-      vec3 p = texelFetch(u_position_texture, clamp(ivec2(uv * vec2(size)), ivec2(0), size - 1), 0).xyz;
-      return p == vec3(0.0) ? 1e30 : -p.z;
+      ivec2 size = textureSize(u_ssgiDepth_texture, 0);
+      float z = texelFetch(u_ssgiDepth_texture, clamp(ivec2(uv * vec2(size)), ivec2(0), size - 1), 0).x;
+      return z == 0.0 ? 1e30 : -z;
     }
 
     void main()
@@ -3483,7 +3485,7 @@ shader: ssr
       for (int i = 0; i < 32; ++i) {
         float t = tMax * (float(i) + jitter) / 32.0;
         float rayDepth = 1.0 / mix(k0, k1, t);
-        float scene = sceneDepth(mix(s0, s1, t), size);
+        float scene = sceneDepth(mix(s0, s1, t));
         if (t > minT && rayDepth > scene && rayDepth - scene < abs(rayDepth - depthPrev) + 0.02 * scene) {
           tHit = t;
           break;
@@ -3494,7 +3496,7 @@ shader: ssr
       if (tHit < 0.0) return;
       for (int i = 0; i < 4; ++i) {
         float t = 0.5 * (tPrev + tHit);
-        if (1.0 / mix(k0, k1, t) > sceneDepth(mix(s0, s1, t), size)) tHit = t; else tPrev = t;
+        if (1.0 / mix(k0, k1, t) > sceneDepth(mix(s0, s1, t))) tHit = t; else tPrev = t;
       }
 
       vec2 hitUV = mix(s0, s1, tHit);
@@ -3545,15 +3547,17 @@ shader: ssr
       return T * Ht.x + B * Ht.y + N * Ht.z;
     }
 
-    float sceneDepth(float2 uv, int2 size, texture2d<float> positionTex)
+    float sceneDepth(float2 uv, texture2d<float> depthTex)
     {
-      float3 p = positionTex.read(uint2(clamp(int2(uv * float2(size)), int2(0), size - 1))).xyz;
-      return all(p == float3(0.0)) ? 1e30 : -p.z;
+      int2 size = int2(depthTex.get_width(), depthTex.get_height());
+      float z = depthTex.read(uint2(clamp(int2(uv * float2(size)), int2(0), size - 1))).x;
+      return z == 0.0 ? 1e30 : -z;
     }
 
     float4 ssrTrace(float2 fragCoord, uint2 fp, int2 size, float4 n, float3 P,
                     texture2d<float> positionTex, texture2d<float> normalTex, texture2d<float> materialTex,
-                    texture2d<float> historyTex, sampler historySmp, constant Uniforms& u)
+                    texture2d<float> historyTex, sampler historySmp, texture2d<float> depthTex,
+                    constant Uniforms& u)
     {
       float roughness = clamp(materialTex.read(fp).r, 0.045, 1.0);
       if (u.u_ssr.z < 0.5 || n.a < 0.5 || roughness >= u.u_ssr.x + 0.2) return float4(0.0);
@@ -3593,7 +3597,7 @@ shader: ssr
       for (int i = 0; i < 32; ++i) {
         float t = tMax * (float(i) + jitter) / 32.0;
         float rayDepth = 1.0 / mix(k0, k1, t);
-        float scene = sceneDepth(mix(s0, s1, t), size, positionTex);
+        float scene = sceneDepth(mix(s0, s1, t), depthTex);
         if (t > minT && rayDepth > scene && rayDepth - scene < abs(rayDepth - depthPrev) + 0.02 * scene) {
           tHit = t;
           break;
@@ -3604,7 +3608,7 @@ shader: ssr
       if (tHit < 0.0) return float4(0.0);
       for (int i = 0; i < 4; ++i) {
         float t = 0.5 * (tPrev + tHit);
-        if (1.0 / mix(k0, k1, t) > sceneDepth(mix(s0, s1, t), size, positionTex)) tHit = t; else tPrev = t;
+        if (1.0 / mix(k0, k1, t) > sceneDepth(mix(s0, s1, t), depthTex)) tHit = t; else tPrev = t;
       }
 
       float2 hitUV = mix(s0, s1, tHit);
@@ -3635,7 +3639,7 @@ shader: ssr
       o_ssrGuide_texture = float4(n.a < 0.5 ? float3(0.0) : normalize(n.xyz), P.z);
       o_ssrRadiance_texture = ssrTrace(gl_FragCoord.xy, fp, size, n, P,
                                        u_position_texture, u_normal_texture, u_material_texture,
-                                       u_history_texture, u_history_texture_smp, _u);
+                                       u_history_texture, u_history_texture_smp, u_ssgiDepth_texture, _u);
     }
     ```
 

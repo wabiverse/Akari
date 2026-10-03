@@ -37,34 +37,46 @@
  * -----------------------------------------------------------------
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
+#ifndef HDAKARI_SESSION_LIGHT_H
+#define HDAKARI_SESSION_LIGHT_H
 
-/// How the volume should fill the view, through the froxel grid.
-public struct VolumeSettings: Sendable
+#if __has_include(<pxr/pxrns.h>)
+# include <pxr/pxrns.h>
+# include <Usd/stage.h>
+# include <Usd/editContext.h>
+# include <UsdLux/sphereLight.h>
+#else
+# include <pxr/pxr.h>
+# include <pxr/usd/usd/stage.h>
+# include <pxr/usd/usd/editContext.h>
+# include <pxr/usd/usdLux/sphereLight.h>
+#endif
+
+#include <string>
+
+PXR_NAMESPACE_OPEN_SCOPE
+
+/// Authors a sphere light on `stage`'s session layer, leaving its files untouched.
+inline bool HdAkariAddSessionSphereLight(UsdStageWeakPtr const &stage, std::string const &path,
+                                         GfVec3f position, float radius, float intensity, GfVec3f color)
 {
-  /// Fog density per meter.
-  public var density: Float = 0.02
-  /// Henyey Greenstein phase anisotropy.
-  public var anisotropy: Float = 0.3
-  /// View depth in meters the froxel grid reaches, clamped to the camera's far plane.
-  public var maxDistance: Float = 100
-  /// Attenuate the light reaching each froxel by the fog between it and the light.
-  public var shadows = false
-  /// Coarser sun shadow levels for the fog.
-  public var sunShadowLevelBias: Int = 2
-
-  public init()
-  {}
-
-  public init(density: Float,
-              anisotropy: Float = 0.3,
-              maxDistance: Float = 100,
-              shadows: Bool = false,
-              sunShadowLevelBias: Int = 2)
+  if (!stage)
   {
-    self.density = density
-    self.anisotropy = anisotropy
-    self.maxDistance = maxDistance
-    self.shadows = shadows
-    self.sunShadowLevelBias = sunShadowLevelBias
+    return false;
   }
+  UsdEditContext context(stage, stage->GetSessionLayer());
+  UsdLuxSphereLight light = UsdLuxSphereLight::Define(stage, SdfPath(path));
+  if (!light)
+  {
+    return false;
+  }
+  light.CreateRadiusAttr().Set(radius);
+  light.CreateIntensityAttr().Set(intensity);
+  light.CreateColorAttr().Set(color);
+  light.AddTranslateOp().Set(GfVec3d(position));
+  return true;
 }
+
+PXR_NAMESPACE_CLOSE_SCOPE
+
+#endif // HDAKARI_SESSION_LIGHT_H

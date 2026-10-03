@@ -65,6 +65,8 @@
 
 #include "HdAkari/api.h"
 
+#include <cstring>
+
 #include <mutex>
 #include <atomic>
 #include <unordered_map>
@@ -93,6 +95,7 @@ struct HdAkariMeshData
   float metallic = 0.0f;  // UsdPreviewSurface's own default.
   bool visible = true;
   uint64_t dataRevision = 0; // incremented each Sync, GPU cache keys off this.
+  uint64_t topologyRevision = 0; // only moves with the triangles and uvs, not the points.
   int32_t primId = -1;       // the Rprim's id, written to the primId AOV for picking.
 
   size_t TriangleCount() const { return triangleIndices.size(); }
@@ -125,6 +128,38 @@ struct HdAkariLightProbeData
   bool isSphere = false;
   int resolutionX = 0, resolutionY = 0, resolutionZ = 0; // 0 = auto
 };
+
+/// Copies `points` into `dst`, three floats each, and writes their bounds
+/// (min xyz, max xyz) to `bounds`, for the GPU deformer's per frame upload.
+inline void HdAkariCopyPoints(VtVec3fArray const &points, float *dst, float *bounds)
+{
+  const size_t n = points.size();
+  float lo[3] = {3.4e38f, 3.4e38f, 3.4e38f}, hi[3] = {-3.4e38f, -3.4e38f, -3.4e38f};
+  if (n > 0) {
+    const float *src = points.cdata()->data();
+    std::memcpy(dst, src, n * 3 * sizeof(float));
+    for (size_t i = 0; i < n * 3; i += 3) {
+      for (int k = 0; k < 3; ++k) {
+        lo[k] = src[i + k] < lo[k] ? src[i + k] : lo[k];
+        hi[k] = src[i + k] > hi[k] ? src[i + k] : hi[k];
+      }
+    }
+  }
+  for (int k = 0; k < 3; ++k) { bounds[k] = lo[k]; bounds[3 + k] = hi[k]; }
+}
+
+/// A path's hash, the per frame identity of a mesh without its string.
+inline uint64_t HdAkariPathKey(SdfPath const &path)
+{
+  return static_cast<uint64_t>(path.GetHash());
+}
+
+/// Whether two triangulations and their uvs are the same.
+inline bool HdAkariSameTopology(VtVec3iArray const &tris, VtVec3iArray const &otherTris,
+                                VtVec2fArray const &uvs, VtVec2fArray const &otherUvs)
+{
+  return tris == otherTris && uvs == otherUvs;
+}
 
 /// @class HdAkariScene
 ///
@@ -176,6 +211,43 @@ public:
     if (changed) {
       _revision.fetch_add(1, std::memory_order_relaxed);
     }
+  }
+
+  /// Move or show/hide an existing mesh, keeping everything else.
+  /// False when the mesh isn't stored yet.
+  bool UpdateMeshTransform(SdfPath const &id, GfMatrix4d const &xf, bool visible)
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    auto it = _meshes.find(id);
+    if (it == _meshes.end()) return false;
+    auto &m = it->second;
+    if (m.transform != xf || m.visible != visible) {
+      m.transform = xf;
+      m.visible = visible;
+      _revision.fetch_add(1, std::memory_order_relaxed);
+    }
+    return true;
+  }
+
+  /// Swap in new points on an existing mesh, keeping its triangles, uvs
+  /// and material. False when the mesh isn't stored yet.
+  bool UpdateMeshPoints(SdfPath const &id,
+                        VtVec3fArray const &points,
+                        GfMatrix4d const &xf,
+                        bool visible,
+                        uint64_t dataRevision)
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    auto it = _meshes.find(id);
+    if (it == _meshes.end()) return false;
+    auto &m = it->second;
+    m.points = points;
+    m.transform = xf;
+    m.visible = visible;
+    m.dataRevision = dataRevision;
+    _revision.fetch_add(1, std::memory_order_relaxed);
+
+    return true;
   }
 
   /// Copy only the geometry (points + indices) from a previously stored

@@ -110,6 +110,15 @@ public extension Akari
       stageIsZUp = isZUp
     }
 
+    /// The opened usd stage's metersPerUnit.
+    public internal(set) var stageMetersPerUnit: Float = 1
+
+    /// Call once, right after opening the usd stage.
+    public func setStageMetersPerUnit(_ metersPerUnit: Double)
+    {
+      stageMetersPerUnit = metersPerUnit > 0 ? Float(metersPerUnit) : 1
+    }
+
     /// Compute sun direction based on the opened usd stages's upAxis.
     func worldSpaceSunDirection(_ light: LightSettings) -> SIMD3<Float>
     {
@@ -288,9 +297,8 @@ public extension Akari
         probeMaterials = (materialTex, colorTex, emissiveTex)
       }
 
-      let lights = scene.LightSnapshot().prefix(4)
-
-      syncedPointLights = lights.map
+      let eye = view.inverse().transform(.zero)
+      let lights = scene.LightSnapshot().map
       { light in
         let mat = Pixar.GfMatrix4f(light.transform)
         let position: SIMD3<Float> = if let mPtr = mat.GetArray()
@@ -306,6 +314,14 @@ public extension Akari
                                     intensity: light.intensity * exp2(light.exposure),
                                     radius: light.radius)
       }
+      /// the four that light the view the most, by their irradiance at the camera.
+      func weight(_ light: Akari.Lux.PointLight) -> Float
+      {
+        let d = light.position - eye
+        let r2 = light.radius * light.radius
+        return light.intensity * light.color.max() * r2 / max((d * d).sum(), r2)
+      }
+      syncedPointLights = Array(lights.sorted { weight($0) > weight($1) }.prefix(4))
 
       // only capture when geometry or the outlined meshes changed.
       let rev = scene.Revision()
@@ -330,8 +346,10 @@ public extension Akari
         let flipWinding = Matrix.determinant3x3(mPtr) < 0
 
         rawMeshes.append(Akari.Geom.Recorder.RawMesh(id: mesh.id.string,
+                                                     key: Pixar.HdAkariPathKey(mesh.id),
                                                      primId: mesh.primId,
                                                      dataRevision: mesh.dataRevision,
+                                                     topologyRevision: mesh.topologyRevision,
                                                      flipWinding: flipWinding,
                                                      points: mesh.points,
                                                      tris: mesh.triangleIndices,
@@ -509,6 +527,7 @@ public extension Akari
         setPasses(Self.ssrPassNames, active: ssr.thisFrame)
         ssr.passesActive = ssr.thisFrame
       }
+      runtime.setPassActive("ssgi prep", active: ssgi.thisFrame || ssr.thisFrame)
 
       syncVolumetrics()
       setVector("u_aovProjection", SIMD4(projection[2, 2], projection[3, 2], 0, 0))

@@ -39,7 +39,10 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
+import Foundation
 import HdAkari
+import LabCamera
+import LabCameraCxx
 import OpenUSDKit
 
 public extension Akari.GPU
@@ -86,11 +89,54 @@ public extension Akari
     public var view: Matrix4
     /// view -> clip
     public var projection: Matrix4
+    /// The stage's world scale, what one world unit measures.
+    public var metersPerUnit: Float
 
-    public init(view: Matrix4, projection: Matrix4)
+    public init(view: Matrix4, projection: Matrix4, metersPerUnit: Float = 1)
     {
       self.view = view
       self.projection = projection
+      self.metersPerUnit = metersPerUnit
+    }
+
+    public var isPerspective: Bool
+    {
+      let a = projection[2, 2]
+      return abs(a - 1) > 1e-6 && abs(a + 1) > 1e-6
+    }
+
+    /// The physical camera `view` and `projection` describe.
+    public var lens: lc_camera
+    {
+      var camera = lc_camera.defaultCamera
+      camera.mount.setViewTransform(lc_m44f(view.simd))
+      if isPerspective
+      {
+        let a = projection[2, 2]
+        let b = projection[3, 2]
+        camera.optics.znear = abs(b / (a - 1))
+        camera.optics.zfar = abs(b / (a + 1))
+        camera.optics.focal_length = camera.sensor.focalLength(verticalFOV: lc_radians(2 * atan(1 / projection[1, 1])))
+      }
+      return camera
+    }
+
+    /// The near and far clip distances, tightened to what `bounds` spans.
+    public func clipRange(within bounds: (min: SIMD3<Float>, max: SIMD3<Float>)?) -> (near: Float, far: Float)
+    {
+      var camera = lens
+      if let bounds, isPerspective
+      {
+        camera.setClippingPlanes(minNear: camera.optics.znear, maxFar: camera.optics.zfar,
+                                 bound1: lc_v3f(bounds.min), bound2: lc_v3f(bounds.max))
+      }
+      return (camera.optics.znear, camera.optics.zfar)
+    }
+
+    /// `meters` in world units.
+    public func world(meters: Float) -> Float
+    {
+      meters / max(metersPerUnit, 1e-9)
     }
   }
 }

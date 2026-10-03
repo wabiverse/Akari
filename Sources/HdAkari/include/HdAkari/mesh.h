@@ -86,6 +86,10 @@ protected:
 
 private:
   uint64_t _dataGeneration = 0; // bumped each Sync for GPU cache invalidation
+  // what the last full sync triangulated.
+  HdTopology::ID _topologyHash = 0;
+  VtVec2fArray _topologyUvs;
+  uint64_t _topologyRevision = 0;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

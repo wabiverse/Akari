@@ -145,7 +145,7 @@ extension Akari.ShadowAtlas
     let b = projection[3, 2]
     let isPerspective = abs(a - 1) > 1e-6 && abs(a + 1) > 1e-6
     let clipNear: Float = isPerspective ? abs(b / (a - 1)) : 1e-3
-    let clipFar: Float = min(isPerspective ? abs(b / (a + 1)) : 100, settings.maxDistance)
+    let clipFar: Float = min(isPerspective ? abs(b / (a + 1)) : 100, camera.world(meters: settings.maxDistance))
 
     let inverseView = camera.view.inverse()
     let cameraWorldPos = inverseView.transform(.zero)
@@ -289,17 +289,25 @@ extension Akari.ShadowAtlas
       return DirectionalFit(cascades: [], rotation: rotation, isClipmap: true)
     }
 
+    let depthStep = exp2(ceil(log2(max(sceneFar - sceneNear, 1)))) / 8
+    sceneNear = (sceneNear / depthStep).rounded(.down) * depthStep
+    sceneFar = (sceneFar / depthStep).rounded(.up) * depthStep
+
     let margin = max((sceneFar - sceneNear) * 0.01, 1)
     let eyeDepth = sceneFar + margin
     let depthFar = sceneFar - sceneNear + 2 * margin
 
     let inverseView = camera.view.inverse()
 
-    let a = camera.projection[2, 2]
-    let b = camera.projection[3, 2]
-    let perspectiveValid = abs(a - 1) > 1e-6 && abs(a + 1) > 1e-6
-    let nearClip = perspectiveValid ? abs(b / (a - 1)) : 1e-3
-    let farClip = perspectiveValid ? abs(b / (a + 1)) : 100
+    var boundsMin = sceneCorners[0], boundsMax = sceneCorners[0]
+    for p in sceneCorners
+    {
+      boundsMin = pointwiseMin(boundsMin, p)
+      boundsMax = pointwiseMax(boundsMax, p)
+    }
+    let clip = camera.clipRange(within: (boundsMin, boundsMax))
+    let nearClip = camera.isPerspective ? clip.near : 1e-3
+    let farClip = camera.isPerspective ? clip.far : 100
 
     let px = camera.projection[0, 0]
     let py = camera.projection[1, 1]
@@ -343,7 +351,9 @@ extension Akari.ShadowAtlas
     let distanceToFrustumCenter = sqrt(Akari.Matrix.dot(toFrustumCenter, toFrustumCenter))
 
     let bias = Int(settings.levelLodBias.rounded())
-    let minLevel = max(0, Int(floor(log2(max(nearClip, 1e-3))))) + bias
+    // finest a 1m level, however big the world unit.
+    let metricLevel = Int(floor(log2(camera.world(meters: 1))))
+    let minLevel = max(metricLevel, Int(floor(log2(max(nearClip, 1e-3))))) + bias
     var maxLevel = Int(ceil(log2(max(frustumRadius + distanceToFrustumCenter, 1)))) + bias
     maxLevel = max(minLevel, maxLevel) + 1
 

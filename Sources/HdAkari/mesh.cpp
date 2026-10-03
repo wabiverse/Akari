@@ -140,6 +140,13 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
     // only display properties changed, mutate in place, zero copy.
     auto xf = sceneDelegate->GetTransform(id);
     bool vis = sceneDelegate->GetVisible(id);
+    // a moving mesh with nothing about its look dirty skips the material lookup.
+    const HdDirtyBits lookBits = HdChangeTracker::DirtyMaterialId | HdChangeTracker::DirtyPrimvar |
+                                 HdChangeTracker::DirtyDisplayStyle;
+    if (!(*dirtyBits & lookBits) && scene->UpdateMeshTransform(id, xf, vis)) {
+      *dirtyBits = HdChangeTracker::Clean;
+      return;
+    }
     GfVec3f color(0.8f, 0.8f, 0.8f);
     float opacity = 1.0f;
     float roughness = 0.5f;
@@ -169,6 +176,23 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
     scene->UpdateMeshDisplay(id, xf, color, opacity, roughness, metallic, vis);
     *dirtyBits = HdChangeTracker::Clean;
     return;
+  }
+
+  // only the points moved, keep the triangulation and material.
+  const HdDirtyBits rebuildBits = HdChangeTracker::DirtyTopology | HdChangeTracker::DirtyPrimvar;
+  const bool pointsOnly = !(*dirtyBits & HdChangeTracker::DirtyMaterialId) &&
+                          (!(*dirtyBits & rebuildBits) ||
+                           (_topologyRevision != 0 && GetMeshTopology(sceneDelegate).ComputeHash() == _topologyHash));
+  if (pointsOnly) {
+    const VtValue pointsVal = sceneDelegate->Get(id, HdTokens->points);
+    if (pointsVal.IsHolding<VtVec3fArray>() &&
+        scene->UpdateMeshPoints(id, pointsVal.UncheckedGet<VtVec3fArray>(),
+                                sceneDelegate->GetTransform(id), sceneDelegate->GetVisible(id),
+                                _dataGeneration + 1)) {
+      ++_dataGeneration;
+      *dirtyBits = HdChangeTracker::Clean;
+      return;
+    }
   }
 
   // geometry changed -> full rebuild.
@@ -210,6 +234,13 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
 
   // bump revision so the GPU buffer cache knows to rebuild.
   data.dataRevision = ++_dataGeneration;
+  const HdTopology::ID topologyHash = topology.ComputeHash();
+  if (_topologyRevision == 0 || topologyHash != _topologyHash || data.uvs != _topologyUvs) {
+    _topologyHash = topologyHash;
+    _topologyUvs = data.uvs;
+    _topologyRevision = data.dataRevision;
+  }
+  data.topologyRevision = _topologyRevision;
 
   scene->UpdateMesh(std::move(data));
 

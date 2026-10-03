@@ -47,7 +47,7 @@ public extension Akari
   {
     /// Wall clock per frame, averaged over the last second.
     public var frameMilliseconds: Double = 0
-    
+
     /// Frames rendered per second.
     public var framesPerSecond: Double
     {

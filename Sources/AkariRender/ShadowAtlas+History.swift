@@ -84,6 +84,7 @@ extension Akari.ShadowAtlas
     private var lastGridOffset: [SIMD2<Int32>?] = Array(repeating: nil, count: maxDirectionalTilemaps)
     private var lastRotationFingerprint: [UInt64?] = Array(repeating: nil, count: maxDirectionalTilemaps)
     private var lastLevel: [Int32?] = Array(repeating: nil, count: maxDirectionalTilemaps)
+    private var lastDepth: [SIMD3<Float>?] = Array(repeating: nil, count: maxDirectionalTilemaps)
     /// Per directional slot offset.
     private(set) var pendingShift: [SIMD2<Int32>] = Array(repeating: .zero, count: maxDirectionalTilemaps)
 
@@ -135,6 +136,12 @@ extension Akari.ShadowAtlas
         {
           isDirty = true
         }
+        let depth = SIMD3<Float>(cascade.view.transform(.zero).z, cascade.zScale, cascade.zBias)
+        if let previousDepth = lastDepth[offset], previousDepth != depth
+        {
+          isDirty = true
+        }
+        lastDepth[offset] = depth
         if let last = lastGridOffset[offset]
         {
           let delta = gridOffset &- last
@@ -191,7 +198,10 @@ extension Akari.ShadowAtlas
     case boxes(Int)
     case all
 
-    var isNeeded: Bool { self != .none && self != .boxes(0) }
+    var isNeeded: Bool
+    {
+      self != .none && self != .boxes(0)
+    }
   }
 
   /// Finds the casters that moved or changed between scene revisions.
@@ -206,8 +216,9 @@ extension Akari.ShadowAtlas
 
     private var previous: [Caster: Int]?
 
-    /// Old and new boxes of every changed caster, six floats each. nil when
-    /// every shadow has to redraw: the first frame, or more than `limit` changed.
+    /// Old and new boxes of every changed caster, six floats each, merged down
+    /// to `limit` boxes past it. nil on the first frame, when every shadow has
+    /// to redraw.
     mutating func movedBoxes(bounds: [Float], keys: [UInt64], limit: Int) -> [Float]?
     {
       var next: [Caster: Int] = [:]
@@ -224,10 +235,73 @@ extension Akari.ShadowAtlas
       guard let previous else { return nil }
 
       var moved: [Float] = []
-      func add(_ c: Caster) { moved += [c.min.x, c.min.y, c.min.z, c.max.x, c.max.y, c.max.z] }
-      for (caster, count) in next where previous[caster] != count { add(caster) }
-      for (caster, _) in previous where next[caster] == nil { add(caster) }
-      return moved.count / 6 > limit ? nil : moved
+      func add(_ c: Caster)
+      {
+        moved += [c.min.x, c.min.y, c.min.z, c.max.x, c.max.y, c.max.z]
+      }
+      for (caster, count) in next where previous[caster] != count
+      {
+        add(caster)
+      }
+      for (caster, _) in previous where next[caster] == nil
+      {
+        add(caster)
+      }
+      return moved.count / 6 > limit ? Self.merge(moved, into: limit) : moved
+    }
+
+    /// Unions neighboring boxes, in Morton order of their centers,
+    /// into `limit` boxes.
+    private static func merge(_ boxes: [Float], into limit: Int) -> [Float]
+    {
+      let count = boxes.count / 6
+      func box(_ i: Int) -> (min: SIMD3<Float>, max: SIMD3<Float>)
+      {
+        let o = i * 6
+        return (SIMD3(boxes[o], boxes[o + 1], boxes[o + 2]), SIMD3(boxes[o + 3], boxes[o + 4], boxes[o + 5]))
+      }
+
+      var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+      var hi = -lo
+      for i in 0 ..< count
+      {
+        lo = pointwiseMin(lo, box(i).min)
+        hi = pointwiseMax(hi, box(i).max)
+      }
+      let scale = 1023 / pointwiseMax(hi - lo, SIMD3(repeating: 1e-6))
+
+      func spread(_ v: UInt32) -> UInt32
+      {
+        var x = v & 0x3FF
+        x = (x | (x << 16)) & 0x0300_00FF
+        x = (x | (x << 8)) & 0x0300_F00F
+        x = (x | (x << 4)) & 0x030C_30C3
+        x = (x | (x << 2)) & 0x0924_9249
+        return x
+      }
+      let keys = (0 ..< count).map
+      { i in
+        let q = (((box(i).min + box(i).max) * 0.5 - lo) * scale).rounded(.down)
+        return spread(UInt32(q.x)) | (spread(UInt32(q.y)) << 1) | (spread(UInt32(q.z)) << 2)
+      }
+      let order = (0 ..< count).sorted { keys[$0] < keys[$1] }
+
+      var merged: [Float] = []
+      merged.reserveCapacity(limit * 6)
+      for group in 0 ..< limit
+      {
+        let members = order[group * count / limit ..< (group + 1) * count / limit]
+        guard let first = members.first else { continue }
+        var groupMin = box(first).min
+        var groupMax = box(first).max
+        for i in members
+        {
+          groupMin = pointwiseMin(groupMin, box(i).min)
+          groupMax = pointwiseMax(groupMax, box(i).max)
+        }
+        merged += [groupMin.x, groupMin.y, groupMin.z, groupMax.x, groupMax.y, groupMax.z]
+      }
+      return merged
     }
   }
 }

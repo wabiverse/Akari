@@ -41,7 +41,7 @@
 /// How the shadow atlas is carved up and filtered.
 public struct ShadowSettings: Sendable
 {
-  /// Reach of the sun's shadow, measured from the camera.
+  /// Reach of the sun's shadow in meters, measured from the camera.
   public var maxDistance: Float = 30
   /// Constant offset applied to the comparison depth.
   public var depthBias: Float = 0.0015

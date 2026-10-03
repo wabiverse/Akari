@@ -48,7 +48,7 @@ extension Akari.ShadowAtlas
     {
       return uvec3((data >> 0u) & 7u, (data >> 3u) & 7u, (data >> 6u) & 127u);
     }
-    struct Tile { uvec3 page; uint cache_index; bool is_used, do_update, is_allocated, is_rendered, is_cached; };
+    struct Tile { uvec3 page; uint cache_index; bool is_used, do_update, is_allocated, is_rendered, is_cached, is_dynamic; };
     Tile shadow_tile_unpack(uint data)
     {
       Tile t;
@@ -59,6 +59,7 @@ extension Akari.ShadowAtlas
       t.is_allocated = (data & 0x10000000u) != 0u;
       t.is_rendered = (data & 0x40000000u) != 0u;
       t.do_update = (data & 0x20000000u) != 0u;
+      t.is_dynamic = (data & 0x00002000u) != 0u;
       return t;
     }
     uint shadow_tile_pack(Tile t)
@@ -70,6 +71,7 @@ extension Akari.ShadowAtlas
       data |= t.is_cached ? 0x08000000u : 0u;
       data |= t.is_rendered ? 0x40000000u : 0u;
       data |= t.do_update ? 0x20000000u : 0u;
+      data |= t.is_dynamic ? 0x00002000u : 0u;
       return data;
     }
     """
@@ -149,7 +151,7 @@ extension Akari.ShadowAtlas
         {
           int tile_index = tilemapBase + int(tile_start + local_tile);
           Tile tile = shadow_tile_unpack(tiles_buf[tile_index]);
-          bool is_orphaned = !tile.is_used && tile.do_update;
+          bool is_orphaned = !tile.is_used && (tile.do_update || tile.is_dynamic);
           if (is_orphaned)
           {
             if (tile.is_cached) { page_cache_remove(tile); }
@@ -282,7 +284,7 @@ extension Akari.ShadowAtlas
     """
 
   static let commonMSL = """
-    struct Tile { uint3 page; uint cache_index; bool is_used, do_update, is_allocated, is_rendered, is_cached; };
+    struct Tile { uint3 page; uint cache_index; bool is_used, do_update, is_allocated, is_rendered, is_cached, is_dynamic; };
     inline uint shadow_page_pack(uint3 page) { return (page.x << 0u) | (page.y << 3u) | (page.z << 6u); }
     inline uint3 shadow_page_unpack(uint data)
     {
@@ -298,6 +300,7 @@ extension Akari.ShadowAtlas
       t.is_allocated = (data & 0x10000000u) != 0u;
       t.is_rendered = (data & 0x40000000u) != 0u;
       t.do_update = (data & 0x20000000u) != 0u;
+      t.is_dynamic = (data & 0x00002000u) != 0u;
       return t;
     }
     inline uint shadow_tile_pack(thread const Tile& t)
@@ -309,6 +312,7 @@ extension Akari.ShadowAtlas
       data |= t.is_cached ? 0x08000000u : 0u;
       data |= t.is_rendered ? 0x40000000u : 0u;
       data |= t.do_update ? 0x20000000u : 0u;
+      data |= t.is_dynamic ? 0x00002000u : 0u;
       return data;
     }
     """
@@ -387,7 +391,7 @@ extension Akari.ShadowAtlas
         {
           int tile_index = tilemapBase + int(tile_start + local_tile);
           Tile tile = shadow_tile_unpack(tiles_buf[tile_index]);
-          bool is_orphaned = !tile.is_used && tile.do_update;
+          bool is_orphaned = !tile.is_used && (tile.do_update || tile.is_dynamic);
           if (is_orphaned)
           {
             if (tile.is_cached) { page_cache_remove(tile, pages_cached_buf); }
@@ -540,11 +544,12 @@ extension Akari.ShadowAtlas
       uint packed = tiles_buf[index];
       bool resident = (packed & 0x80000000u) != 0u
                    && (packed & 0x10000000u) != 0u
-                   && ((packed & 0x20000000u) == 0u
+                   && ((packed & 0x20002000u) == 0u
                        || (packed & 0x40000000u) != 0u);
       bool to_render = (packed & 0x80000000u) != 0u
                     && (packed & 0x10000000u) != 0u
-                    && (packed & 0x20000000u) != 0u;
+                    && (packed & 0x20002000u) != 0u;
+      bool full_render = to_render && (packed & 0x20000000u) != 0u;
       int page = int((packed >> 6u) & 127u) * \(pagePackRadix)
                + int(packed & 7u) + int((packed >> 3u) & 7u) * 8;
       vec4 entry = resident
@@ -561,6 +566,8 @@ extension Akari.ShadowAtlas
           if (slot_of_view[view] != slot) { continue; }
           render_map[view * \(tilemapRes * tilemapRes) + local] =
             to_render ? uint(page) : 0xFFFFFFFFu;
+          render_map_static[view * \(tilemapRes * tilemapRes) + local] =
+            full_render ? uint(page) : 0xFFFFFFFFu;
         }
       }
       if (slot < \(maxPunctualTilemaps))
@@ -571,6 +578,8 @@ extension Akari.ShadowAtlas
         int view = \(punctualViewBase) + slot * \(lodCount) + lod;
         render_map[view * \(tilemapRes * tilemapRes) + (rel / size) * \(tilemapRes) + rel % size] =
           to_render ? uint(page) : 0xFFFFFFFFu;
+        render_map_static[view * \(tilemapRes * tilemapRes) + (rel / size) * \(tilemapRes) + rel % size] =
+          full_render ? uint(page) : 0xFFFFFFFFu;
       }
     """
 
@@ -580,6 +589,7 @@ extension Akari.ShadowAtlas
     layout(std430, binding = 0) buffer Tiles { uint tiles_buf[]; };
     layout(std430, binding = 2) buffer RenderMap { uint render_map[]; };
     layout(std430, binding = 3) buffer SlotOfView { int slot_of_view[]; };
+    layout(std430, binding = 4) buffer RenderMapStatic { uint render_map_static[]; };
     layout(rgba16f, binding = 0) uniform writeonly image2D u_pageTable;
     void main()
     {
@@ -599,6 +609,7 @@ extension Akari.ShadowAtlas
     kernel void compute_main(device uint* tiles_buf [[buffer(1)]],
                              device uint* render_map [[buffer(3)]],
                              device int* slot_of_view [[buffer(4)]],
+                             device uint* render_map_static [[buffer(5)]],
                              texture2d<float, access::write> u_pageTable [[texture(0)]],
                              uint gid [[thread_position_in_grid]])
     {
@@ -645,8 +656,11 @@ extension Akari.ShadowAtlas
       if (x >= size || y >= size) return;
       uint index = uint(base + y * size + x);
       uint packed = tiles_buf[index];
-      uint toRender = \(flagIsUsed | flagIsAllocated | flagDoUpdate)u;
-      if ((packed & toRender) == toRender) tiles_buf[index] = packed | \(flagIsRendered)u;
+      uint resident = \(flagIsUsed | flagIsAllocated)u;
+      if ((packed & resident) == resident && (packed & \(flagDoUpdate | flagDynamicUpdate)u) != 0u)
+      {
+        tiles_buf[index] = packed | \(flagIsRendered)u;
+      }
     """
 
   static let retireDrawnGLSL = """
@@ -860,6 +874,35 @@ extension Akari.ShadowAtlas
       uint3 gid = gid3;
       \(pageClearBody)
       u_atlas.write(uint4(0xFFFFFFFF), uint2(texel), uint(layer));
+    }
+    """
+
+  /// Copies each listed page's static depth into the atlas, the base the dynamic casters draw over.
+  static let pageCopyGLSL = """
+    #version 430
+    layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+    layout(std430, binding = 0) buffer ClearList { uint clear_list[]; };
+    layout(r32ui, binding = 0) uniform readonly uimage2DArray u_static;
+    layout(r32ui, binding = 1) uniform writeonly uimage2DArray u_atlas;
+    void main()
+    {
+      ivec3 gid = ivec3(gl_GlobalInvocationID);
+      \(pageClearBody)
+      imageStore(u_atlas, ivec3(texel, layer), imageLoad(u_static, ivec3(texel, layer)));
+    }
+    """
+
+  static let pageCopyMSL = """
+    #include <metal_stdlib>
+    using namespace metal;
+    kernel void compute_main(device uint* clear_list [[buffer(1)]],
+                             texture2d_array<uint, access::read> u_static [[texture(0)]],
+                             texture2d_array<uint, access::write> u_atlas [[texture(1)]],
+                             uint3 gid3 [[thread_position_in_grid]])
+    {
+      uint3 gid = gid3;
+      \(pageClearBody)
+      u_atlas.write(u_static.read(uint2(texel), uint(layer)), uint2(texel), uint(layer));
     }
     """
 }

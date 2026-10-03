@@ -253,7 +253,7 @@ extension Akari.ShadowAtlas
         ? SIMD4(lights[slot].position.x,
                 lights[slot].position.y,
                 lights[slot].position.z,
-                lights[slot].radius)
+                lights[slot].reach)
         : SIMD4<Float>(repeating: 0)
       setUniform(kernel, Self.lightPosRadiusNames[slot], GL_FLOAT_VEC4, posRadius)
     }

@@ -174,7 +174,8 @@ public extension Akari
 
       lastCamera = (view: view, projection: projection)
 
-      let unjitteredCamera = Akari.Camera(view: Matrix4(view), projection: Matrix4(projection))
+      let unjitteredCamera = Akari.Camera(view: Matrix4(view), projection: Matrix4(projection),
+                                          metersPerUnit: labfx.stageMetersPerUnit)
       var camera = unjitteredCamera
       if settings.features.contains(.temporalAA)
       {

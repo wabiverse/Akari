@@ -17,7 +17,8 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.9.3"),
     .package(url: "https://github.com/wabiverse/Lattice.git", branch: "main"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.2.0"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.2.1"),
+    .package(url: "https://codeberg.org/furbytm/LabCamera.git", branch: "dev"),
   ],
   targets: [
     // TODO: support externally provided openusd builds.
@@ -68,6 +69,8 @@ let package = Package(
         // .product(name: "LatticeUSD", package: "Lattice"),
         .product(name: "LabGL", package: "SwiftLabGL"),
         .product(name: "LabFX", package: "SwiftLabGL"),
+        .product(name: "LabCamera", package: "LabCamera"),
+        .product(name: "LabCameraCxx", package: "LabCamera"),
       ],
       resources: [
         .process("Resources")

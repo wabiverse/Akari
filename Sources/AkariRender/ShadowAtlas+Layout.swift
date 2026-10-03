@@ -85,9 +85,11 @@ extension Akari.ShadowAtlas
   static let maxPunctualViews = maxPunctualTilemaps * lodCount
   static let maxTilemaps = maxPunctualTilemaps + maxDirectionalTilemaps
   static let maxTiles = maxTilemaps * tilesPerTilemap
-  /// GPU chunk culling per run.
-  static let maxRuns = (maxViews + 1) / 2
-  /// Moved caster boxes tracked per frame, past this every shadow redraws.
+  /// GPU chunk culling per run, one run per view at worst plus the instanced punctual slot.
+  static let maxRuns = maxViews + 1
+  /// Culled replay slots below this belong to the camera.
+  static let cullSlotBase = 1
+  /// Moved caster boxes tracked per frame, past this neighbors are merged.
   static let maxMovedCasters = 256
 
   /// Pages per atlas layer, one per amplified view.
@@ -106,6 +108,8 @@ extension Akari.ShadowAtlas
   static let flagDoUpdate: UInt32 = 1 << 29
   static let flagIsRendered: UInt32 = 1 << 30
   static let flagIsUsed: UInt32 = 1 << 31
+  /// Only moved dynamic casters touched the tile, it's redrawn from its static page.
+  static let flagDynamicUpdate: UInt32 = 1 << 13
 
   /// Frames in flight, the depth of every written ring.
   static let bufferRing = 3

@@ -51,6 +51,10 @@ extension Akari.ShadowAtlas
     var pagesCached: GLuint = 0
     var renderMap: GLuint = 0
     var clearArgs: GLuint = 0
+    /// The tiles to render whose static depth is stale too, and their dirty rect per view.
+    var renderMapStatic: GLuint = 0
+    var clearArgsStatic: GLuint = 0
+    var renderRectStatic: GLuint = 0
     /// Per tilemap depth range, as ordered ints so it can be atomically min/maxed.
     var tilemapsClip: GLuint = 0
     /// This frame's dirty tile rect per view, packed as buildRenderViews writes it.
@@ -60,7 +64,8 @@ extension Akari.ShadowAtlas
 
     var all: [GLuint]
     {
-      [tiles, pagesFree, pagesInfo, pagesCached, renderMap, clearArgs, tilemapsClip, renderRect]
+      [tiles, pagesFree, pagesInfo, pagesCached, renderMap, clearArgs, tilemapsClip, renderRect,
+       renderMapStatic, clearArgsStatic, renderRectStatic]
     }
   }
 
@@ -75,6 +80,7 @@ extension Akari.ShadowAtlas
     /// Per view, nonzero when this frame's draw rendered it.
     var drawnView: GLuint = 0
     var clearList: GLuint = 0
+    var clearListStatic: GLuint = 0
     var runViews: GLuint = 0
     var runXf: GLuint = 0
     var punctualViews: GLuint = 0
@@ -84,8 +90,8 @@ extension Akari.ShadowAtlas
 
     var buffers: [GLuint]
     {
-      [gridShift, levelParams, slotOfView, drawnView, clearList, runViews, runXf, punctualViews, viewXf,
-       movedBoxes]
+      [gridShift, levelParams, slotOfView, drawnView, clearList, clearListStatic, runViews, runXf, punctualViews,
+       viewXf, movedBoxes]
     }
   }
 
@@ -182,6 +188,11 @@ extension Akari.ShadowAtlas
                                   layers: GLsizei(Self.poolLayers),
                                   format: GLenum(GL_R32UI))
     guard atlas != 0 else { return fail("atlas texture allocation failed") }
+    staticAtlas = gl.createTextureArray(width: GLsizei(Self.pagesPerLayer * Self.pageResolution),
+                                        height: GLsizei(Self.pageResolution),
+                                        layers: GLsizei(Self.poolLayers),
+                                        format: GLenum(GL_R32UI))
+    guard staticAtlas != 0 else { return fail("static atlas texture allocation failed") }
 
     var rt: GLuint = 0
     gl.genRenderTarget(hasDepth: GLboolean(1), target: &rt)
@@ -206,14 +217,20 @@ extension Akari.ShadowAtlas
     buffers.clearArgs = makeBuffer(readWrite, UInt32.self, count: 3)
     buffers.tilemapsClip = makeBuffer(readWrite, Int32.self, count: Self.maxTilemaps * 2)
     buffers.renderRect = makeBuffer(readWrite, UInt32.self, count: Self.maxViews)
+    buffers.renderMapStatic = makeBuffer(readWrite, UInt32.self, count: Self.maxViews * Self.tilemapRes * Self.tilemapRes)
+    buffers.clearArgsStatic = makeBuffer(readWrite, UInt32.self, count: 3)
+    buffers.renderRectStatic = makeBuffer(readWrite, UInt32.self, count: Self.maxViews)
     buffers.renderViewReadback = gl.createComputeReadback(sizeBytes: GLsizei(Self.maxViews * MemoryLayout<UInt32>.size),
                                                           ringSize: 3)
     guard
       buffers.renderMap != 0,
       buffers.clearArgs != 0,
       buffers.renderRect != 0,
+      buffers.renderMapStatic != 0,
+      buffers.clearArgsStatic != 0,
+      buffers.renderRectStatic != 0,
       buffers.renderViewReadback != 0,
-      !frames.contains(where: { $0.clearList == 0 || $0.slotOfView == 0 || $0.drawnView == 0 })
+      !frames.contains(where: { $0.clearList == 0 || $0.clearListStatic == 0 || $0.slotOfView == 0 || $0.drawnView == 0 })
     else { return fail("render-map/clear-list/slot-map buffer allocation failed") }
     guard !frames.contains(where: { $0.levelParams == 0 }) else { return fail("level-params buffer allocation failed") }
     guard !frames.contains(where: { $0.gridShift == 0 }) else { return fail("grid-shift SSBO allocation failed") }
@@ -227,7 +244,7 @@ extension Akari.ShadowAtlas
   public func release()
   {
     if atlasTarget != 0 { gl.deleteRenderTarget(atlasTarget) }
-    for var tex in [atlas, atlasDepth, pageTable] + frames.map(\.data) where tex != 0
+    for var tex in [atlas, staticAtlas, atlasDepth, pageTable] + frames.map(\.data) where tex != 0
     {
       gl.deleteTextures(count: 1, textures: &tex)
     }
@@ -252,7 +269,7 @@ extension Akari.ShadowAtlas
       gl.deleteInstanceViewports(count: 1, handles: &handle)
     }
 
-    atlasTarget = 0; atlas = 0; atlasDepth = 0; data = 0; pageTable = 0
+    atlasTarget = 0; atlas = 0; staticAtlas = 0; atlasDepth = 0; data = 0; pageTable = 0
     frames = []; ringCursor = 0
     buffers = Buffers()
     culling = []
@@ -267,7 +284,7 @@ extension Akari.ShadowAtlas
     casterMotion = CasterMotion()
     casterRedraw = .none
     casterRedrawRevision = .max
-    lastSceneBounds = []
+    lastStaticGeneration = .max
     punctualHistory = PunctualHistory()
     directionalHistory = DirectionalHistory()
     sunMotion = SunMotion()
@@ -367,6 +384,8 @@ extension Akari.ShadowAtlas
                  slotOfView: makeBuffer(read, Int32.self, count: Self.maxDirectionalTilemaps),
                  drawnView: makeBuffer(read, Int32.self, count: Self.maxViews),
                  clearList: makeBuffer(LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE, UInt32.self, count: Self.maxPage),
+                 clearListStatic: makeBuffer(LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE, UInt32.self,
+                                             count: Self.maxPage),
                  runViews: makeBuffer(read, Int32.self, count: Self.maxRuns * Self.maxAmplificationViews),
                  runXf: makeBuffer(read, Float.self, count: Self.maxRuns * Self.maxAmplificationViews * 16),
                  punctualViews: makeBuffer(read, Int32.self, count: Self.maxPunctualViews),

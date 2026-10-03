@@ -239,7 +239,7 @@ extension Akari.ShadowAtlas
     }
 
     // a full redraw already shifted every tile stale.
-    if kernels.tagUpdate != 0, case .boxes(let movedCount) = redraw, movedCount > 0
+    if kernels.tagUpdate != 0, case let .boxes(movedCount) = redraw, movedCount > 0
     {
       let kernel = kernels.tagUpdate
       let r = sun.rotation
@@ -285,6 +285,8 @@ extension Akari.ShadowAtlas
     gl.setComputeShaderReadback(kernel, bindingIndex: 2, readback: readback)
     gl.setComputeShaderBuffer(kernel, binding: 3, buffer: buffers.clearArgs)
     gl.setComputeShaderBuffer(kernel, binding: 4, buffer: buffers.renderRect)
+    gl.setComputeShaderBuffer(kernel, binding: 5, buffer: buffers.renderRectStatic)
+    gl.setComputeShaderBuffer(kernel, binding: 6, buffer: buffers.clearArgsStatic)
     gl.dispatchCompute(kernel,
                        groupsX: GLuint((Self.maxViews + 63) / 64),
                        groupsY: 1,
@@ -294,14 +296,18 @@ extension Akari.ShadowAtlas
   func dispatchPageTable()
   {
     guard kernels.pageTable != 0, pageTable != 0 else { return }
-    gl.setComputeShaderBuffer(kernels.renderMapClear, binding: 0, buffer: buffers.renderMap)
-    gl.dispatchCompute(kernels.renderMapClear,
-                       groupsX: GLuint((Self.maxViews * Self.tilemapRes * Self.tilemapRes + 63) / 64),
-                       groupsY: 1,
-                       groupsZ: 1)
+    for map in [buffers.renderMap, buffers.renderMapStatic]
+    {
+      gl.setComputeShaderBuffer(kernels.renderMapClear, binding: 0, buffer: map)
+      gl.dispatchCompute(kernels.renderMapClear,
+                         groupsX: GLuint((Self.maxViews * Self.tilemapRes * Self.tilemapRes + 63) / 64),
+                         groupsY: 1,
+                         groupsZ: 1)
+    }
     gl.setComputeShaderBuffer(kernels.pageTable, binding: 0, buffer: buffers.tiles)
     gl.setComputeShaderBuffer(kernels.pageTable, binding: 2, buffer: buffers.renderMap)
     gl.setComputeShaderBuffer(kernels.pageTable, binding: 3, buffer: frame.slotOfView)
+    gl.setComputeShaderBuffer(kernels.pageTable, binding: 4, buffer: buffers.renderMapStatic)
     gl.setComputeShaderImage(kernels.pageTable,
                              index: 0,
                              texture: pageTable,

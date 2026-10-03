@@ -86,8 +86,15 @@ public extension Akari
       /// Center + radius, largest first so smaller ones blend over them.
       var spheres: [SIMD4<Float>] = []
 
-      var volumeCount: Int { Int(dims.x) * Int(dims.y) * Int(dims.z) }
-      var probeCount: Int { volumeCount + spheres.count }
+      var volumeCount: Int
+      {
+        Int(dims.x) * Int(dims.y) * Int(dims.z)
+      }
+
+      var probeCount: Int
+      {
+        volumeCount + spheres.count
+      }
 
       var cell: SIMD3<Float>
       {
@@ -95,7 +102,10 @@ public extension Akari
       }
 
       /// How far along the normal a shading point steps before picking its probes.
-      var normalBias: Float { cell.min() * 0.25 }
+      var normalBias: Float
+      {
+        cell.min() * 0.25
+      }
     }
 
     struct LayoutKey: Equatable
@@ -112,7 +122,10 @@ public extension Akari
       var sphereBase: GLuint = 0
       var sphereFilter: GLuint = 0
 
-      var all: [GLuint] { [clear, project, sphereBase, sphereFilter] }
+      var all: [GLuint]
+      {
+        [clear, project, sphereBase, sphereFilter]
+      }
     }
 
     static let atlasWidth = 2048
@@ -130,7 +143,11 @@ public extension Akari
     static let shProbesPerRow = 256
 
     /// Volume probe L1 spherical harmonics, four texels per probe.
-    public var volumeSH: GLuint { sh[shIndex] }
+    public var volumeSH: GLuint
+    {
+      sh[shIndex]
+    }
+
     /// Octahedral sphere probe radiance, one tile of roughness levels per probe.
     public private(set) var sphereAtlas: GLuint = 0
     /// Per sphere probe, center + radius then validity.
@@ -138,7 +155,10 @@ public extension Akari
     /// Set once every probe has been captured and lit.
     public private(set) var isReady = false
     /// Cube faces the current layout needs captured, zero before the first layout.
-    public var captureTotal: Int { layoutKey == nil ? 0 : layout.probeCount * 6 }
+    public var captureTotal: Int
+    {
+      layoutKey == nil ? 0 : layout.probeCount * 6
+    }
 
     var layout = Layout()
     var layoutKey: LayoutKey?
@@ -213,13 +233,19 @@ public extension Akari
           layout = next
           isReady = false
           uploadSphereInfo()
-          for tex in sh { clear(tex, width: Self.shProbesPerRow * 4, height: Self.maxVolumeProbes / Self.shProbesPerRow) }
+          for tex in sh
+          {
+            clear(tex, width: Self.shProbesPerRow * 4, height: Self.maxVolumeProbes / Self.shProbesPerRow)
+          }
           clear(sphereAtlas, width: Self.octTile.x * Self.octTilesPerRow,
                 height: Self.octTile.y * Self.maxSphereProbes / Self.octTilesPerRow)
         }
         let extent = sceneBounds.max - sceneBounds.min
         near = max((extent * extent).sum().squareRoot() * 1e-4, 1e-4)
-        for tex in captureTextures { clear(tex, width: Self.atlasWidth, height: Self.atlasHeight) }
+        for tex in captureTextures
+        {
+          clear(tex, width: Self.atlasWidth, height: Self.atlasHeight)
+        }
         captured = 0
         sunKey = nil
       }
@@ -273,7 +299,8 @@ public extension Akari
 
     func probePosition(_ probe: Int) -> SIMD3<Float>
     {
-      guard probe < layout.volumeCount else
+      guard probe < layout.volumeCount
+      else
       {
         let s = layout.spheres[probe - layout.volumeCount]
         return SIMD3(s.x, s.y, s.z)

@@ -63,6 +63,13 @@ public extension Akari
         self.intensity = intensity
         self.radius = radius
       }
+
+      /// Where the light's irradiance, intensity * (radius / distance)^2,
+      /// falls under a thousandth, the farthest its shadow can show.
+      public var reach: Float
+      {
+        radius * (max(intensity, 0) * max(max(color.x, color.y), color.z) * 1000).squareRoot()
+      }
     }
   }
 }

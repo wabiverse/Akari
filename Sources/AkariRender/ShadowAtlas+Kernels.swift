@@ -58,6 +58,7 @@ extension Akari.ShadowAtlas
     var allocate: GLuint = 0
     var pageTable: GLuint = 0
     var pageClear: GLuint = 0
+    var pageCopy: GLuint = 0
     var retireDrawn: GLuint = 0
     var cull: GLuint = 0
     var cullPunctual: GLuint = 0
@@ -74,7 +75,7 @@ extension Akari.ShadowAtlas
     {
       [beginFrame, tilemapShift, tagUsagePunctual, tagUsageDirectional, tagUsageVolume,
        dilateUsageDirectional, dilateUsagePunctual, maskLod, free, defrag, allocate,
-       pageTable, pageClear, retireDrawn, cull, cullPunctual, renderMapClear, buildClearList,
+       pageTable, pageClear, pageCopy, retireDrawn, cull, cullPunctual, renderMapClear, buildClearList,
        clipmapClear, tilemapBounds, tagUpdate, tagUpdatePunctual, tagPropagate, buildRenderViews]
     }
 
@@ -82,7 +83,7 @@ extension Akari.ShadowAtlas
     func waitForRequired() -> Bool
     {
       [beginFrame, tilemapShift, tagUsagePunctual, tagUsageDirectional, dilateUsageDirectional,
-       dilateUsagePunctual, maskLod, free, defrag, allocate, pageTable].allSatisfy
+       dilateUsagePunctual, maskLod, free, defrag, allocate, pageTable, pageCopy].allSatisfy
       {
         $0 != 0 && gl.waitComputeShader($0) != 0
       }
@@ -107,6 +108,7 @@ extension Akari.ShadowAtlas
       gl.setComputeShaderThreadgroupSize(defrag, x: 1, y: 1, z: 1)
       gl.setComputeShaderThreadgroupSize(pageTable, x: 64, y: 1, z: 1)
       gl.setComputeShaderThreadgroupSize(pageClear, x: 16, y: 16, z: 1)
+      gl.setComputeShaderThreadgroupSize(pageCopy, x: 16, y: 16, z: 1)
       gl.setComputeShaderThreadgroupSize(retireDrawn, x: 64, y: 1, z: 1)
       gl.setComputeShaderThreadgroupSize(cull, x: 64, y: 1, z: 1)
       gl.setComputeShaderThreadgroupSize(cullPunctual, x: 64, y: 1, z: 1)
@@ -142,6 +144,7 @@ extension Akari.ShadowAtlas
     k.allocate = compile("allocate", allocateGLSL, allocateMSL)
     k.pageTable = compile("page-table", pageTableGLSL, pageTableMSL)
     k.pageClear = compile("page-clear", pageClearGLSL, pageClearMSL)
+    k.pageCopy = compile("page-copy", pageCopyGLSL, pageCopyMSL)
     k.retireDrawn = compile("retire-drawn", retireDrawnGLSL, retireDrawnMSL)
     k.cull = compile("cull", cullGLSL, cullMSL)
     k.cullPunctual = compile("cull-punctual", cullPunctualGLSL, cullPunctualMSL)

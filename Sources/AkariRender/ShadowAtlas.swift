@@ -101,6 +101,9 @@ public extension Akari
     public internal(set) var sun = Sun()
     /// Shared page pool.
     public internal(set) var atlas: GLuint = 0
+    /// Each page's depth from the static casters alone, what a page only
+    /// dynamic casters moved over is redrawn on top of.
+    var staticAtlas: GLuint = 0
     /// Per tilemap slot data.
     public internal(set) var data: GLuint = 0
     public internal(set) var pageTable: GLuint = 0
@@ -133,8 +136,7 @@ public extension Akari
     /// Decided by `markPageUsage` for `casterRedrawRevision`, read by `render`.
     var casterRedraw = CasterRedraw.none
     var casterRedrawRevision: UInt64 = .max
-    /// Directional depth ranges follow the scene bounds, a change restales every page.
-    var lastSceneBounds: [SIMD3<Float>] = []
+    var lastStaticGeneration: UInt64 = .max
 
     public init()
     {}
@@ -154,6 +156,7 @@ public extension Akari
                               sceneRevision: UInt64,
                               casterBounds: [Float],
                               casterKeys: [UInt64],
+                              staticGeneration: UInt64,
                               volume: VolumeFroxels? = nil)
     {
       guard
@@ -175,11 +178,17 @@ public extension Akari
       {
         casterRedraw = findCasterRedraw(casterBounds: casterBounds, casterKeys: casterKeys)
         casterRedrawRevision = sceneRevision
+        // the static pages hold the old static capture, only a full redraw replaces them.
+        if staticGeneration != lastStaticGeneration
+        {
+          casterRedraw = .all
+          lastStaticGeneration = staticGeneration
+        }
         if casterRedraw == .all || kernels.tagUpdatePunctual == 0 { punctualDirty = -1 }
       }
 
       dispatchBeginFrame(dirty: punctualDirty)
-      if sceneChanged, case .boxes(let count) = casterRedraw
+      if sceneChanged, case let .boxes(count) = casterRedraw
       {
         dispatchTagUpdatePunctual(boxCount: count, lights: lights, lightCount: lightCount)
       }
@@ -217,7 +226,9 @@ public extension Akari
     }
 
     /// Fits every active tilemap and draws its stale views.
-    public func render(captures: [OpaquePointer],
+    public func render(staticCaptures: [OpaquePointer],
+                       dynamicCaptures: [OpaquePointer],
+                       dynamicDrawBounds: [[Float]?],
                        camera: Camera,
                        lightDirection: SIMD3<Float>,
                        sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
@@ -232,13 +243,7 @@ public extension Akari
 
       let castersMoved = sceneRevision != lastRenderSceneRevision
       lastRenderSceneRevision = sceneRevision
-      var redraw = castersMoved ? (casterRedrawRevision == sceneRevision ? casterRedraw : .all) : .none
-      let bounds = [sceneBounds.min, sceneBounds.max]
-      if bounds != lastSceneBounds
-      {
-        redraw = .all
-        lastSceneBounds = bounds
-      }
+      let redraw = castersMoved ? (casterRedrawRevision == sceneRevision ? casterRedraw : .all) : .none
 
       let corners = Self.sceneCorners(sceneBounds)
       let technique = Self.resolveTechnique(camera: camera)
@@ -276,9 +281,10 @@ public extension Akari
       let punctualFaces: [[PunctualFace]] = (0 ..< Self.maxPunctualLights).map
       { slot in
         guard slot < lightCount else { return [] }
+        let near = max(lights[slot].radius, 0.02)
         return Self.fitPunctual(lightPosition: lights[slot].position,
-                                near: max(lights[slot].radius, 0.02),
-                                far: punctualFarDistance)
+                                near: near,
+                                far: max(min(punctualFarDistance, lights[slot].reach), near * 2))
       }
 
       let inverseView = camera.view.inverse()
@@ -305,10 +311,12 @@ public extension Akari
 
       let forceDirectional = sunChanged || redraw.isNeeded
       let forcePunctual = camera.view.simd != directionalHistory.view.simd || punctualHistory.invalidated
-                          || redraw.isNeeded
+        || redraw.isNeeded
       punctualHistory.invalidated = punctualHistory.pendingDirty != 0
 
-      let drawn = drawViews(captures: captures, directional: directional,
+      let drawn = drawViews(staticCaptures: staticCaptures, dynamicCaptures: dynamicCaptures,
+                            dynamicDrawBounds: dynamicDrawBounds,
+                            directional: directional,
                             directionalSlots: directionalSlots, punctualFaces: punctualFaces,
                             forced: forceDirectional ? Set(directionalSlots) : [],
                             forcePunctual: forcePunctual)
