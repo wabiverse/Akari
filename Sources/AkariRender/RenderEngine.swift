@@ -177,12 +177,18 @@ public extension Akari
       let unjitteredCamera = Akari.Camera(view: Matrix4(view), projection: Matrix4(projection),
                                           metersPerUnit: labfx.stageMetersPerUnit)
       var camera = unjitteredCamera
+      labfx.updateRenderScale(settings: settings)
+      labfx.configureUpscale(settings: settings)
+      labfx.taaJitter = .zero
       if settings.features.contains(.temporalAA)
       {
         let index = frameIndex % UInt64(min(max(settings.samples, 1), 16)) + 1
         let jitter = SIMD2(Self.halton(index, 2), Self.halton(index, 3)) - 0.5
-        camera.projection = Matrix4.translation(SIMD3(2 * jitter.x / Float(width),
-                                                      2 * jitter.y / Float(height), 0)) * camera.projection
+        let renderWidth = Float(max(Int(Float(width) * labfx.renderScale), 1))
+        let renderHeight = Float(max(Int(Float(height) * labfx.renderScale), 1))
+        camera.projection = Matrix4.translation(SIMD3(2 * jitter.x / renderWidth,
+                                                      2 * jitter.y / renderHeight, 0)) * camera.projection
+        labfx.taaJitter = jitter
       }
 
       let target = Akari.GPU.HydraTarget(color: color,

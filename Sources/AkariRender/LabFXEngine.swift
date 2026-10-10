@@ -64,6 +64,62 @@ public extension Akari
     var runtime = lab.fx.Runtime()
     var lastWidth = 0
     var lastHeight = 0
+    /// Every pass up to the resolve renders at this fraction of the target, TAA upsamples the rest.
+    public internal(set) var renderScale: Float = 1
+    /// What the scene buffers were last staged at.
+    private var stagedRenderScale: Float = 1
+    /// MetalFX upscales to this fraction of the target before the `downsample` pass, 1 when it's off.
+    public internal(set) var supersampleScale: Float = 1
+    private var stagedSupersampleScale: Float = 1
+    var supersampleWidth = 1
+    var supersampleHeight = 1
+    var dynamicResolution = DynamicResolution()
+    var upscaleMode = UpscaleMode.taa
+    /// The textures the upscale callback reads, looked up before the graph runs.
+    var upscaleTextures = UpscaleTextures()
+    var upscaleRegistered = false
+    /// MetalFX turned an upscale down, the TAA pass takes over.
+    var upscaleFailed = false
+    /// The temporal history starts over this frame.
+    var temporalReset: Bool
+    {
+      temporal.reset
+    }
+    /// The G-buffer's size, `renderScale` of the target's.
+    var renderWidth = 0
+    var renderHeight = 0
+    /// The half res effect buffers size, half of the smaller of the G-buffer and target.
+    var halfWidth = 1
+    var halfHeight = 1
+    /// This frame's projection jitter, in G-buffer pixels.
+    public var taaJitter = SIMD2<Float>(repeating: 0)
+
+    /// Buffers at the G-buffer's size, and at half of it.
+    private static let renderBuffers = ["gbuffer", "color"]
+    private static let halfRenderBuffers = ["ssgiPrep", "ssgiPyramid", "ssgi", "ssgiAccum", "ssgiHistory", "pointShadow",
+                                            "volumeScatter", "volumeIntegrated", "ssr", "ssrAccum", "ssrHistory"]
+
+    /// Pins the scene buffers to `renderScale` of `width` by `height`, for the next build or resize.
+    private func stageRenderSize(width: Int, height: Int)
+    {
+      stagedRenderScale = renderScale
+      stagedSupersampleScale = supersampleScale
+      renderWidth = max(Int(Float(width) * renderScale), 1)
+      renderHeight = max(Int(Float(height) * renderScale), 1)
+      for name in Self.renderBuffers
+      {
+        runtime.stageBufferSize(name, width: Int32(renderWidth), height: Int32(renderHeight))
+      }
+      halfWidth = max(min(renderWidth, width) / 2, 1)
+      halfHeight = max(min(renderHeight, height) / 2, 1)
+      for name in Self.halfRenderBuffers
+      {
+        runtime.stageBufferSize(name, width: Int32(halfWidth), height: Int32(halfHeight))
+      }
+      supersampleWidth = supersampleScale > 1 ? Int(Float(width) * supersampleScale) : 1
+      supersampleHeight = supersampleScale > 1 ? Int(Float(height) * supersampleScale) : 1
+      runtime.stageBufferSize("supersample", width: Int32(supersampleWidth), height: Int32(supersampleHeight))
+    }
 
     /// Cached scene revision, skips capture when geometry is unchanged.
     var lastGeometryRevision: UInt64 = 0
@@ -91,6 +147,10 @@ public extension Akari
     let froxelVolume = Akari.FroxelVolume()
 
     var syncedPointLights: [Akari.Lux.PointLight] = []
+    /// The lights that shade, `syncedPointLights` are the shadowed front of them.
+    var litPointLights: [Akari.Lux.PointLight] = []
+    var pointLightTexture: GLuint = 0
+    static let maxPointLights = 64
 
     /// Volume + sphere light probes baked from the scene capture.
     let lightProbes = Akari.LightProbes()
@@ -153,6 +213,8 @@ public extension Akari
       var thisFrame = false
       /// Frames of history behind the current pixel.
       var samples = 0
+      /// This frame starts the history over.
+      var reset = true
     }
 
     private struct ScreenSpaceGI
@@ -220,6 +282,7 @@ public extension Akari
       if width != lastWidth || height != lastHeight
       {
         labgl.resize(windowHandle, width: Int32(width), height: Int32(height))
+        stageRenderSize(width: width, height: height)
         runtime.resize(rootWidth: Int32(width), rootHeight: Int32(height))
         // buffer rebuild wipes the baked IBL textures,
         // so rerun the IBL passes on the next frame to
@@ -232,12 +295,34 @@ public extension Akari
         lastWidth = width
         lastHeight = height
       }
+      else if renderScale != stagedRenderScale || supersampleScale != stagedSupersampleScale
+      {
+        // only the scene buffers change size, the baked IBL and the rest stay.
+        stageRenderSize(width: width, height: height)
+        for name in Self.renderBuffers + Self.halfRenderBuffers + ["supersample"]
+        {
+          runtime.rebuildBuffer(name)
+        }
+        temporal.prevViewProjection = nil
+        volumetrics.previousViewProjection = nil
+        ssgi.needsReset = true
+        ssr.needsReset = true
+      }
 
       if iblNeedsBake { setPasses(Self.iblPassNames, active: true) }
 
       if !temporal.thisFrame { temporal.prevViewProjection = nil }
       temporal.thisFrame = false
       setVector("u_taa", SIMD4(0, 1, 1, 0))
+      setVector("u_renderScale", SIMD4(Float(renderWidth) / Float(width),
+                                       Float(renderHeight) / Float(height),
+                                       0, 0))
+      setVector("u_supersampleScale", SIMD4(Float(supersampleWidth) / Float(width),
+                                            Float(supersampleHeight) / Float(height),
+                                            0, 0))
+      setVector("u_halfScale", SIMD4(Float(renderWidth) / Float(halfWidth),
+                                     Float(renderHeight) / Float(halfHeight),
+                                     0, 0))
 
       ssgi.thisFrame = false
       setVector("u_ssgi", SIMD4(0, 0, 0, 0))
@@ -314,55 +399,68 @@ public extension Akari
                                     intensity: light.intensity * exp2(light.exposure),
                                     radius: light.radius)
       }
-      /// the four that light the view the most, by their irradiance at the camera.
+      /// the ones that light the view the most, by their irradiance at the camera.
       func weight(_ light: Akari.Lux.PointLight) -> Float
       {
         let d = light.position - eye
         let r2 = light.radius * light.radius
         return light.intensity * light.color.max() * r2 / max((d * d).sum(), r2)
       }
-      syncedPointLights = Array(lights.sorted { weight($0) > weight($1) }.prefix(4))
+      // practicals (LEDs and the like) sit in their own fixture, so only lights
+      // reaching past a meter cast shadows, and those take the first slots.
+      let sorted = lights.sorted { weight($0) > weight($1) }
+      let minShadowReach = 1 / stageMetersPerUnit
+      let shadowed = Array(sorted.indices.filter { sorted[$0].reach >= minShadowReach }.prefix(4))
+      syncedPointLights = shadowed.map { sorted[$0] }
+      litPointLights = Array((syncedPointLights + sorted.indices.filter { !shadowed.contains($0) }.map { sorted[$0] })
+        .prefix(Self.maxPointLights))
 
-      // only capture when geometry or the outlined meshes changed.
-      let rev = scene.Revision()
-      let geometryChanged = rev != lastGeometryRevision
-      guard geometryChanged || (outline.needsRecord && outline.passesActive) else { return }
-      lastGeometryRevision = rev
+      let drained = scene.DrainMeshChanges()
+      var changed: [Akari.Geom.Recorder.RawMesh] = []
+      var removed = Array(drained.removed)
+      changed.reserveCapacity(drained.updated.size())
 
-      let meshes = scene.Snapshot()
-
-      var rawMeshes: [Akari.Geom.Recorder.RawMesh] = []
-      rawMeshes.reserveCapacity(meshes.count)
-
-      for mesh in meshes
+      for mesh in drained.updated
       {
-        if mesh.points.empty() || mesh.triangleIndices.empty() { continue }
-
+        let key = Pixar.HdAkariPathKey(mesh.id)
         let mat = Pixar.GfMatrix4f(mesh.transform)
-        guard let mPtr = mat.GetArray() else { continue }
+        guard
+          !mesh.points.empty(),
+          !mesh.triangleIndices.empty(),
+          let mPtr = mat.GetArray()
+        else
+        {
+          removed.append(key)
+          continue
+        }
 
         let worldMatrix = Array(UnsafeBufferPointer(start: mPtr, count: 16))
         let normalMatrix = Matrix.normalMatrix3x3(mPtr)
         let flipWinding = Matrix.determinant3x3(mPtr) < 0
 
-        rawMeshes.append(Akari.Geom.Recorder.RawMesh(id: mesh.id.string,
-                                                     key: Pixar.HdAkariPathKey(mesh.id),
-                                                     primId: mesh.primId,
-                                                     dataRevision: mesh.dataRevision,
-                                                     topologyRevision: mesh.topologyRevision,
-                                                     flipWinding: flipWinding,
-                                                     points: mesh.points,
-                                                     tris: mesh.triangleIndices,
-                                                     uvs: mesh.uvs,
-                                                     worldMatrix: worldMatrix,
-                                                     normalMatrix: normalMatrix))
+        changed.append(Akari.Geom.Recorder.RawMesh(id: mesh.id.string,
+                                                   key: key,
+                                                   primId: mesh.primId,
+                                                   dataRevision: mesh.dataRevision,
+                                                   topologyRevision: mesh.topologyRevision,
+                                                   flipWinding: flipWinding,
+                                                   points: mesh.points,
+                                                   tris: mesh.triangleIndices,
+                                                   uvs: mesh.uvs,
+                                                   worldMatrix: worldMatrix,
+                                                   normalMatrix: normalMatrix))
       }
+      lastGeometryRevision = scene.Revision()
 
-      if geometryChanged
+      if !changed.isEmpty || !removed.isEmpty || geometry.records == 0
       {
-        recordCaptures(rawMeshes)
+        recordCaptures(changed: changed, removed: removed)
       }
-      recordOutline(rawMeshes)
+      else
+      {
+        geometry.deformer.settle()
+      }
+      recordOutline(changed: changed, removed: removed)
     }
 
     /// Rasterizes the G-buffer now instead of waiting
@@ -376,6 +474,11 @@ public extension Akari
       for name in Self.gbufferPassNames
       {
         runtime.renderPass(name)
+        if name == "geometry", encodeLateCull()
+        {
+          runtime.setMeshCaptureCulledSlot("mesh", slot: Self.cameraLateCullSlot)
+          runtime.renderPass(name)
+        }
         runtime.setPassActive(name, active: false)
       }
     }
@@ -407,10 +510,11 @@ public extension Akari
       setFloat("u_zUp", stageIsZUp ? 1 : 0)
 
       setFloat("u_punctualShadowEnabled", shadowsEnabled && shadowsReady ? 1 : 0)
-      setFloat("u_pointLightCount", Float(syncedPointLights.count))
+      setFloat("u_pointLightCount", Float(litPointLights.count))
+      setFloat("u_shadowedPointLightCount", Float(syncedPointLights.count))
       for slot in 0 ..< 4
       {
-        let p = slot < syncedPointLights.count ? syncedPointLights[slot] : nil
+        let p = slot < litPointLights.count ? litPointLights[slot] : nil
         setVector("u_pointLightPosIntensity\(slot)",
                   SIMD4(p?.position.x ?? 0,
                         p?.position.y ?? 0,
@@ -422,6 +526,37 @@ public extension Akari
                         p?.color.z ?? 0,
                         p?.radius ?? 1))
       }
+      uploadPointLights()
+    }
+
+    /// Every lit point light, two texels a light, for the lighting pass.
+    private func uploadPointLights()
+    {
+      if pointLightTexture == 0
+      {
+        gl.genTextures(count: 1, textures: &pointLightTexture)
+        gl.bindTexture(target: GL_TEXTURE_2D, texture: pointLightTexture)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_NEAREST))
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GLint(GL_NEAREST))
+        gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA32F,
+                      width: 2, height: GLsizei(Self.maxPointLights), border: 0,
+                      format: GL_RGBA, type: GL_FLOAT, pixels: nil)
+      }
+      guard pointLightTexture != 0 else { return }
+
+      let texels = litPointLights.flatMap
+      {
+        [$0.position.x, $0.position.y, $0.position.z, $0.intensity,
+         $0.color.x, $0.color.y, $0.color.z, $0.radius]
+      }
+      if !texels.isEmpty
+      {
+        gl.bindTexture(target: GL_TEXTURE_2D, texture: pointLightTexture)
+        gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: 0,
+                         width: 2, height: GLsizei(litPointLights.count),
+                         format: GL_RGBA, type: GL_FLOAT, pixels: texels)
+      }
+      setSampler("u_pointLightData", pointLightTexture)
     }
 
     /// Turns the temporal resolve on for this frame.
@@ -442,6 +577,8 @@ public extension Akari
       setMatrix("u_prevViewProj", previous ?? viewProjection)
       setMatrix("u_currViewProj", viewProjection)
       setVector("u_taa", SIMD4(1, previous == nil ? 1 : 0, 1 / Float(temporal.samples), 0))
+      setVector("u_taaJitter", SIMD4(taaJitter.x, taaJitter.y, 0, 0))
+      temporal.reset = previous == nil
       temporal.prevViewProjection = viewProjection
       temporal.thisFrame = true
     }
@@ -453,7 +590,7 @@ public extension Akari
       let radius = max((diagonal * diagonal).sum().squareRoot() * 0.15, 1e-3)
       setVector("u_ssgi", SIMD4(radius, radius * 0.2, 1, ssgi.needsReset || !ssgi.passesActive ? 1 : 0))
 
-      let size = SIMD2<Float>(Float(max(lastWidth, 1)), Float(max(lastHeight, 1)))
+      let size = SIMD2<Float>(Float(halfWidth * 2), Float(halfHeight * 2))
       setVector("u_ssgiSize", SIMD4(size.x, size.y, 1 / size.x, 1 / size.y))
       setVector("u_horizonScan", SIMD4(maxRoughness, 1, 0, 0))
       ssgi.needsReset = false
@@ -532,6 +669,7 @@ public extension Akari
       syncVolumetrics()
       setVector("u_aovProjection", SIMD4(projection[2, 2], projection[3, 2], 0, 0))
 
+      prepareUpscale()
       runtime.render()
 
       // bake the IBL once.
@@ -636,6 +774,7 @@ public extension Akari
       }
       graph = parsed
 
+      stageRenderSize(width: width, height: height)
       guard runtime.build(parsed, rootWidth: Int32(width), rootHeight: Int32(height))
       else
       {

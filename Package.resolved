@@ -1,5 +1,5 @@
 {
-  "originHash" : "bab4a92f87f7ca27eb2caa57d3287f2e83ea48f45cb44cd412c157eb2016c22b",
+  "originHash" : "998bed9648af08dd373eb62b71aad2025a773574be32fec1899fc121169840c7",
   "pins" : [
     {
       "identity" : "androidkit",
@@ -71,6 +71,15 @@
       "state" : {
         "revision" : "7464f1ae0b3be541558bbc633f782595e2cb915f",
         "version" : "2.0.9"
+      }
+    },
+    {
+      "identity" : "nanocolor",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/furbytm/Nanocolor.git",
+      "state" : {
+        "revision" : "95946f5af63df8af5a8378dd4ff4c50131d8bbe9",
+        "version" : "1.0.0"
       }
     },
     {
@@ -159,8 +168,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "9c6fb14227f55d8f711ce3847dc2f419fb0ecacb",
-        "version" : "1.15.1"
+        "revision" : "4038b6a4f74a1426f47eb1dd5b4bb5628a15d597",
+        "version" : "1.16.1"
       }
     },
     {
@@ -258,8 +267,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/furbytm/SwiftLabGL.git",
       "state" : {
-        "revision" : "5659b254e8e315174266083f6beb562738879538",
-        "version" : "0.2.1"
+        "revision" : "3d1afff0a91f2ae2a5c523fd1c25b52dc4a2afc2",
+        "version" : "0.2.3"
       }
     },
     {

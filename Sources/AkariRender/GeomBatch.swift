@@ -77,13 +77,14 @@ public extension Akari.Geom
     /// Per caster, a key that changes whenever it moves or deforms.
     public private(set) var casterKeys: [UInt64] = []
 
-    public init(estimatedTriangles: Int)
-    {
-      // one vert and one index per triangle corner.
-      let worstCase = max(estimatedTriangles, 1) * 3
+    private let expands: Bool
 
-      maxVerts = min(worstCase, Int(Int32.max) / Self.vertexStride)
-      maxIndices = min(worstCase, Int(Int32.max) / MemoryLayout<Int32>.stride)
+    /// - Parameter expands: writes a vertex per index, for the shadows.
+    public init(vertexCount: Int, indexCount: Int, expands: Bool = false)
+    {
+      self.expands = expands
+      maxVerts = min(max(expands ? indexCount : vertexCount, 1), Int(Int32.max) / Self.vertexStride)
+      maxIndices = min(max(indexCount, 1), Int(Int32.max) / MemoryLayout<Int32>.stride)
     }
 
     deinit
@@ -135,7 +136,7 @@ public extension Akari.Geom
                        primId: Int32,
                        key: UInt64)
     {
-      let vertCount = localVerts.count / 8
+      let vertCount = expands ? localIndices.count : localVerts.count / 8
       if vOff + vertCount * Self.vertexFloats > maxVerts * Self.vertexFloats || iOff + localIndices.count > maxIndices
       {
         draw()
@@ -156,7 +157,7 @@ public extension Akari.Geom
         var d = vertBuf + vOff
         for v in 0 ..< vertCount
         {
-          let s = v * 8
+          let s = (expands ? Int(localIndices[v]) : v) * 8
           let px = src[s + 0], py = src[s + 1], pz = src[s + 2]
           let nx = src[s + 3], ny = src[s + 4], nz = src[s + 5]
 
@@ -172,10 +173,11 @@ public extension Akari.Geom
           d[2] = wz
           d[3] = 1
 
+          // a static vertex's previous position is where it is.
           d[4] = id
-          d[5] = 0
-          d[6] = 0
-          d[7] = 1
+          d[5] = wx
+          d[6] = wy
+          d[7] = wz
 
           d[8] = src[s + 6]
           d[9] = src[s + 7]
@@ -204,7 +206,7 @@ public extension Akari.Geom
         let dst = idxBuf + iOff
         for j in 0 ..< src.count
         {
-          dst[j] = src[j] &+ baseVertex
+          dst[j] = (expands ? Int32(j) : src[j]) &+ baseVertex
         }
       }
       if iOff - chunkStarts[chunkStarts.count - 1] >= Self.chunkIndices

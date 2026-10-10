@@ -61,11 +61,14 @@ extension Akari.ShadowAtlas
     var renderRect: GLuint = 0
     /// Per directional view, its tilemap slot when it has tiles to render.
     var renderViewReadback: GLuint = 0
+    /// Per view, its stale tiles and how many of them fit this frame's budget.
+    var dirtyCount: GLuint = 0
+    var allowance: GLuint = 0
 
     var all: [GLuint]
     {
       [tiles, pagesFree, pagesInfo, pagesCached, renderMap, clearArgs, tilemapsClip, renderRect,
-       renderMapStatic, clearArgsStatic, renderRectStatic]
+       renderMapStatic, clearArgsStatic, renderRectStatic, dirtyCount, allowance]
     }
   }
 
@@ -220,6 +223,8 @@ extension Akari.ShadowAtlas
     buffers.renderMapStatic = makeBuffer(readWrite, UInt32.self, count: Self.maxViews * Self.tilemapRes * Self.tilemapRes)
     buffers.clearArgsStatic = makeBuffer(readWrite, UInt32.self, count: 3)
     buffers.renderRectStatic = makeBuffer(readWrite, UInt32.self, count: Self.maxViews)
+    buffers.dirtyCount = makeBuffer(readWrite, UInt32.self, count: Self.maxViews)
+    buffers.allowance = makeBuffer(readWrite, UInt32.self, count: Self.maxViews)
     buffers.renderViewReadback = gl.createComputeReadback(sizeBytes: GLsizei(Self.maxViews * MemoryLayout<UInt32>.size),
                                                           ringSize: 3)
     guard
@@ -229,6 +234,8 @@ extension Akari.ShadowAtlas
       buffers.renderMapStatic != 0,
       buffers.clearArgsStatic != 0,
       buffers.renderRectStatic != 0,
+      buffers.dirtyCount != 0,
+      buffers.allowance != 0,
       buffers.renderViewReadback != 0,
       !frames.contains(where: { $0.clearList == 0 || $0.clearListStatic == 0 || $0.slotOfView == 0 || $0.drawnView == 0 })
     else { return fail("render-map/clear-list/slot-map buffer allocation failed") }
@@ -280,10 +287,9 @@ extension Akari.ShadowAtlas
 
     resourcesReady = false
     lastSceneRevision = .max
-    lastRenderSceneRevision = .max
+    frameFit = FrameFit()
     casterMotion = CasterMotion()
     casterRedraw = .none
-    casterRedrawRevision = .max
     lastStaticGeneration = .max
     punctualHistory = PunctualHistory()
     directionalHistory = DirectionalHistory()

@@ -72,14 +72,16 @@ extension Akari.ShadowAtlas
     {
       float4 position [[position]];
       uint   view [[user(akari_view)]];
+      float2 uv [[user(akari_uv)]];
       float  clip [[clip_distance]] [4];
     };
     struct FragIn
     {
       float4 position [[position]];
       uint   view [[user(akari_view)]];
+      float2 uv [[user(akari_uv)]];
     };
-    struct U { int u_viewBase; };
+    struct U { int u_viewBase; int u_alphaTest; };
     inline void clipToRect(thread VertOut& out, const device uint* render_rect, uint view)
     {
       uint rect = render_rect[view];
@@ -108,6 +110,7 @@ extension Akari.ShadowAtlas
                              constant LabGLBuiltins& B [[buffer(3)]])
     {
       VertOut out;
+      out.uv = in.a_texcoord;
       out.position = B.u_modelviewProjection * in.a_position;
       out.position.z = (out.position.z + out.position.w) * 0.5;
       out.view = uint(u.u_viewBase);
@@ -123,6 +126,7 @@ extension Akari.ShadowAtlas
                                        ushort ampId [[amplification_id]])
     {
       VertOut out;
+      out.uv = in.a_texcoord;
       out.position = viewsXf[ampId] * in.a_position;
       out.view = uint(u.u_viewBase) + uint(ampId);
       clipToRect(out, render_rect, out.view);
@@ -141,6 +145,7 @@ extension Akari.ShadowAtlas
                                                 uint instance [[instance_id]])
     {
       VertOut out;
+      out.uv = in.a_texcoord;
       if (u.u_viewBase < 0)
       {
         out.view = instance_view[instance];
@@ -165,6 +170,7 @@ extension Akari.ShadowAtlas
                                       constant float4x4& model [[buffer(4)]])
     {
       VertOut out;
+      out.uv = in.a_texcoord;
       out.position = (viewsXf[0] * model) * in.a_position;
       out.position.z = (out.position.z + out.position.w) * 0.5;
       out.view = uint(u.u_viewBase);
@@ -178,11 +184,24 @@ extension Akari.ShadowAtlas
                       memory_coherence_device> atlas [[texture(0)]];
     };
 
+    struct MaterialImages
+    {
+      texture2d<float> atlas [[id(0)]];
+    };
+
     fragment void frag_main(FragIn in [[stage_in]],
                             const device uint* render_map [[buffer(0)]],
                             constant AtlasImages& images [[buffer(1)]],
-                            const device int* slot_of_view [[buffer(4)]])
+                            constant U& u [[buffer(2)]],
+                            const device int* slot_of_view [[buffer(4)]],
+                            constant MaterialImages& materials [[buffer(6)]])
     {
+      if (u.u_alphaTest != 0)
+      {
+        constexpr sampler linear(filter::linear, mip_filter::linear, address::clamp_to_edge);
+        float4 mat = materials.atlas.sample(linear, in.uv);
+        if (mat.b < (mat.a > 0.0 ? mat.a : 0.5)) return;
+      }
       int2 texel = int2(in.position.xy);
       int2 tile = texel >> \(pageShift);
       int view = int(in.view);

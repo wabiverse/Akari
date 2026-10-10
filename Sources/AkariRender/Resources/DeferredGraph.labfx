@@ -9,7 +9,8 @@ buffer: gbuffer
     [ diffuse, f16x4, scale: 1.0
       position, f32x4, scale: 1.0
       normal, f16x4, scale: 1.0
-      material, f16x4, scale: 1.0 ]
+      material, f16x4, scale: 1.0
+      velocity, f16x2, scale: 1.0 ]
 
 buffer: envCube
   textures:
@@ -95,6 +96,11 @@ buffer: taa
   textures:
     [ final, f16x4, scale: 1.0 ]
 
+buffer: supersample
+  has depth: no
+  textures:
+    [ supersample, f16x4, scale: 1.0 ]
+
 buffer: history
   has depth: no
   latency: ring 2
@@ -137,7 +143,7 @@ pass: clear gbuffer
   draw: no
   clear depth: yes
   clear outputs: yes
-  outputs: gbuffer [diffuse, position, normal, material]
+  outputs: gbuffer [diffuse, position, normal, material, velocity]
 
 pass: sky
   draw: compute
@@ -152,7 +158,7 @@ pass: geometry
   depth test: greater
   write depth: yes
   use shader: mesh
-  outputs: gbuffer [diffuse, position, normal, material]
+  outputs: gbuffer [diffuse, position, normal, material, velocity]
 
 pass: geometry dynamic
   callback: draw-dynamic-geometry
@@ -160,7 +166,7 @@ pass: geometry dynamic
   depth test: greater
   write depth: yes
   use shader: mesh
-  outputs: gbuffer [diffuse, position, normal, material]
+  outputs: gbuffer [diffuse, position, normal, material, velocity]
 
 pass: ssgi prep
   draw: quad
@@ -265,7 +271,27 @@ pass: taa
   depth test: never
   write depth: no
   use shader: taa
-  inputs: [color.final, history.history, gbuffer.position, gbuffer.normal]
+  inputs: [color.final, history.history, gbuffer.position, gbuffer.normal, gbuffer.velocity]
+  outputs: taa [ final ]
+
+pass: upscale
+  callback: metalfx-upscale
+  depth test: never
+  write depth: no
+  outputs: taa [ final ]
+
+pass: upscale supersample
+  callback: metalfx-upscale
+  depth test: never
+  write depth: no
+  outputs: supersample [ supersample ]
+
+pass: downsample
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: supersample-downsample
+  inputs: [supersample.supersample]
   outputs: taa [ final ]
 
 pass: taa history
@@ -343,8 +369,9 @@ pass: blit
 
 shader: mesh
   uniforms: [ u_material_atlas: sampler2d, u_color_atlas: sampler2d,
-              u_normal_atlas: sampler2d, u_emissive_atlas: sampler2d ]
-  varying:  [ posEye: vec3, normalEye: vec3, uv: vec2, primId: float ]
+              u_normal_atlas: sampler2d, u_emissive_atlas: sampler2d,
+              u_prevViewProj: mat4, u_currViewProj: mat4 ]
+  varying:  [ posEye: vec3, normalEye: vec3, uv: vec2, primId: float, currClip: vec4, prevClip: vec4 ]
 
   vsh:
     attributes:
@@ -362,6 +389,8 @@ shader: mesh
       var.normalEye = normalize(u_normalMatrix * a_normal);
       var.uv = a_uv;
       var.primId = a_color.r;
+      var.currClip = u_currViewProj * vec4(a_position, 1.0);
+      var.prevClip = u_prevViewProj * vec4(a_color.yzw, 1.0);
       gl_Position = u_modelviewProjection * vec4(a_position, 1.0);
     }
     ```
@@ -373,6 +402,8 @@ shader: mesh
     var.normalEye = normalize(u_normalMatrix * a_normal);
     var.uv = a_uv;
     var.primId = a_color.r;
+    var.currClip = u_currViewProj * float4(a_position, 1.0);
+    var.prevClip = u_prevViewProj * float4(a_color.yzw, 1.0);
     gl_Position = u_modelviewProjection * float4(a_position, 1.0);
     ```
 
@@ -402,6 +433,8 @@ shader: mesh
       o_position_texture = vec4(var.posEye, var.primId);
       o_normal_texture = vec4(normalEye, 1.0);
       o_material_texture = vec4(mat.r, mat.g, emission.r, emission.g);
+      vec2 motion = (var.prevClip.xy / var.prevClip.w - var.currClip.xy / var.currClip.w) * 0.5;
+      o_velocity_texture = vec4(motion, 0.0, 0.0);
     }
     ```
 
@@ -428,6 +461,8 @@ shader: mesh
     o_position_texture = float4(var.posEye, var.primId);
     o_normal_texture = float4(normalEye, 1.0);
     o_material_texture = float4(mat.r, mat.g, emission.r, emission.g);
+    float2 motion = (var.prevClip.xy / var.prevClip.w - var.currClip.xy / var.currClip.w) * 0.5;
+    o_velocity_texture = float4(motion, 0.0, 0.0);
     ```
 
 shader: deferred-shade
@@ -456,6 +491,8 @@ shader: deferred-shade
               u_shadowLodRange: vec4,
               u_punctualShadowEnabled: float,
               u_pointLightCount: float,
+              u_shadowedPointLightCount: float,
+              u_pointLightData: sampler2d,
               u_pointLightPosIntensity0: vec4,
               u_pointLightPosIntensity1: vec4,
               u_pointLightPosIntensity2: vec4,
@@ -477,6 +514,7 @@ shader: deferred-shade
               u_ssrAccum_texture: sampler2d,
               u_ssrGuide_texture: sampler2d,
               u_ssr: vec4,
+              u_halfScale: vec4,
               u_horizonScan: vec4,
               u_probe_volume: sampler2d,
               u_probe_sphere: sampler2d,
@@ -723,7 +761,7 @@ shader: deferred-shade
       if (u_volume.z < 0.5) return vec4(0.0, 0.0, 0.0, 1.0);
       vec2 atlasSize = vec2(textureSize(u_volumeIntegrated_texture, 0));
       vec2 grid = u_volumeRange.zw;
-      vec2 f = clamp(fragCoord / 16.0, vec2(0.5), grid - 0.5);
+      vec2 f = clamp(fragCoord / (8.0 * u_halfScale.xy), vec2(0.5), grid - 0.5);
       float u = sqrt(clamp((viewDepth - u_volumeRange.x) / (u_volumeRange.y - u_volumeRange.x), 0.0, 1.0)) * 64.0;
       int b = min(int(u), 63);
       return mix(volumeBoundary(b, f, grid, atlasSize), volumeBoundary(b + 1, f, grid, atlasSize), u - float(b));
@@ -733,7 +771,7 @@ shader: deferred-shade
     {
       if (u_ssgi.z < 0.5) return vec4(0.0, 0.0, 0.0, 1.0);
       ivec2 halfSize = textureSize(accum, 0);
-      vec2 hc = (vec2(pixel) + 0.5) * 0.5 - 0.5;
+      vec2 hc = (vec2(pixel) + 0.5) / u_halfScale.xy - 0.5;
       ivec2 base = ivec2(floor(hc));
       vec2 f = hc - vec2(base);
       vec4 sum = vec4(0.0);
@@ -755,7 +793,7 @@ shader: deferred-shade
     {
       if (u_punctualShadowEnabled < 0.5) return vec4(1.0);
       ivec2 halfSize = textureSize(u_pointShadow_texture, 0);
-      vec2 hc = (vec2(pixel) + 0.5) * 0.5 - 0.5;
+      vec2 hc = (vec2(pixel) + 0.5) / u_halfScale.xy - 0.5;
       ivec2 base = ivec2(floor(hc));
       vec2 f = hc - vec2(base);
       vec4 sum = vec4(0.0);
@@ -777,7 +815,7 @@ shader: deferred-shade
     {
       if (u_ssr.z < 0.5) return vec4(0.0);
       ivec2 halfSize = textureSize(u_ssrAccum_texture, 0);
-      vec2 hc = (vec2(pixel) + 0.5) * 0.5 - 0.5;
+      vec2 hc = (vec2(pixel) + 0.5) / u_halfScale.xy - 0.5;
       ivec2 base = ivec2(floor(hc));
       vec2 f = hc - vec2(base);
       vec4 sum = vec4(0.0);
@@ -800,13 +838,15 @@ shader: deferred-shade
                             float roughness, vec3 f0, vec3 diffuseColor, vec4 shadows)
     {
       vec3 color = vec3(0.0);
-      int count = int(min(u_pointLightCount, 4.0));
+      int count = int(min(u_pointLightCount, 64.0));
       for (int i = 0; i < count; ++i) {
-        vec4 posIntensity = pointLightPosIntensity(i);
-        vec4 colorRadius = pointLightColorRadius(i);
+        vec4 posIntensity = texelFetch(u_pointLightData, ivec2(0, i), 0);
+        vec4 colorRadius = texelFetch(u_pointLightData, ivec2(1, i), 0);
 
         vec3 toLight = posIntensity.xyz - worldPos;
         float distSq = max(dot(toLight, toLight), colorRadius.w * colorRadius.w);
+        if (distSq > colorRadius.w * colorRadius.w * posIntensity.w
+                      * max(colorRadius.x, max(colorRadius.y, colorRadius.z)) * 1000.0) continue;
         vec3 L = normalize(toLight);
         float cosTheta = dot(N, L);
         float sinSigmaSqr = min(colorRadius.w * colorRadius.w / distSq, 0.9999);
@@ -833,7 +873,7 @@ shader: deferred-shade
         vec3 Fr = D * Vis * F * (PI * sinSigmaSqr * NoLs * normalization);
         vec3 Fd = (kD * diffuseColor / PI) * irradiance;
 
-        color += (Fd + Fr) * colorRadius.xyz * posIntensity.w * shadows[i];
+        color += (Fd + Fr) * colorRadius.xyz * posIntensity.w * (i < int(u_shadowedPointLightCount) ? shadows[i] : 1.0);
       }
       return color;
     }
@@ -1182,7 +1222,7 @@ shader: deferred-shade
       if (u.u_volume.z < 0.5) return float4(0.0, 0.0, 0.0, 1.0);
       float2 atlasSize = float2(integrated.get_width(), integrated.get_height());
       float2 grid = u.u_volumeRange.zw;
-      float2 f = clamp(fragCoord / 16.0, float2(0.5), grid - 0.5);
+      float2 f = clamp(fragCoord / (8.0 * u.u_halfScale.xy), float2(0.5), grid - 0.5);
       float t = sqrt(saturate((viewDepth - u.u_volumeRange.x) / (u.u_volumeRange.y - u.u_volumeRange.x))) * 64.0;
       int b = min(int(t), 63);
       return mix(volumeBoundary(b, f, grid, atlasSize, integrated, integratedSmp),
@@ -1195,7 +1235,7 @@ shader: deferred-shade
     {
       if (u.u_ssgi.z < 0.5) return float4(0.0, 0.0, 0.0, 1.0);
       int2 halfSize = int2(accum.get_width(), accum.get_height());
-      float2 hc = (float2(pixel) + 0.5) * 0.5 - 0.5;
+      float2 hc = (float2(pixel) + 0.5) / u.u_halfScale.xy - 0.5;
       int2 base = int2(floor(hc));
       float2 f = hc - float2(base);
       float4 sum = float4(0.0);
@@ -1218,7 +1258,7 @@ shader: deferred-shade
     {
       if (u.u_punctualShadowEnabled < 0.5) return float4(1.0);
       int2 halfSize = int2(shadows.get_width(), shadows.get_height());
-      float2 hc = (float2(pixel) + 0.5) * 0.5 - 0.5;
+      float2 hc = (float2(pixel) + 0.5) / u.u_halfScale.xy - 0.5;
       int2 base = int2(floor(hc));
       float2 f = hc - float2(base);
       float4 sum = float4(0.0);
@@ -1241,7 +1281,7 @@ shader: deferred-shade
     {
       if (u.u_ssr.z < 0.5) return float4(0.0);
       int2 halfSize = int2(radianceTex.get_width(), radianceTex.get_height());
-      float2 hc = (float2(pixel) + 0.5) * 0.5 - 0.5;
+      float2 hc = (float2(pixel) + 0.5) / u.u_halfScale.xy - 0.5;
       int2 base = int2(floor(hc));
       float2 f = hc - float2(base);
       float4 sum = float4(0.0);
@@ -1341,16 +1381,18 @@ shader: deferred-shade
 
     float3 pointLightRadiance(float3 worldPos, float3 N, float3 V, float NoV,
                               float roughness, float3 f0, float3 diffuseColor,
-                              float4 shadows, constant Uniforms& u)
+                              float4 shadows, texture2d<float> lightData, constant Uniforms& u)
     {
       float3 color = float3(0.0);
-      int count = int(min(u.u_pointLightCount, 4.0));
+      int count = int(min(u.u_pointLightCount, 64.0));
       for (int i = 0; i < count; ++i) {
-        float4 posIntensity = pointLightPosIntensity(i, u);
-        float4 colorRadius = pointLightColorRadius(i, u);
+        float4 posIntensity = lightData.read(uint2(0, i));
+        float4 colorRadius = lightData.read(uint2(1, i));
 
         float3 toLight = posIntensity.xyz - worldPos;
         float distSq = max(dot(toLight, toLight), colorRadius.w * colorRadius.w);
+        if (distSq > colorRadius.w * colorRadius.w * posIntensity.w
+                      * max(colorRadius.x, max(colorRadius.y, colorRadius.z)) * 1000.0) continue;
         float3 L = normalize(toLight);
         float cosTheta = dot(N, L);
         float sinSigmaSqr = min(colorRadius.w * colorRadius.w / distSq, 0.9999);
@@ -1377,7 +1419,7 @@ shader: deferred-shade
         float3 Fr = D * Vis * F * (PI * sinSigmaSqr * NoLs * normalization);
         float3 Fd = (kD * diffuseColor / PI) * irradiance;
 
-        color += (Fd + Fr) * colorRadius.xyz * posIntensity.w * shadows[i];
+        color += (Fd + Fr) * colorRadius.xyz * posIntensity.w * (i < int(u.u_shadowedPointLightCount) ? shadows[i] : 1.0);
       }
       return color;
     }
@@ -1470,7 +1512,8 @@ shader: deferred-shade
 
         color += pointLightRadiance(worldPos, N, V, NoV, roughness, f0, diffuseColor,
                                     pointShadowUpsample(gbufferPixel, posEye, normalEye, u_pointShadow_texture,
-                                                        u_pointShadowGuide_texture, _u), _u);
+                                                        u_pointShadowGuide_texture, _u),
+                                    u_pointLightData, _u);
 
         float2 dfgTexel = 0.5 / float2(u_dfg_texture.get_width(), u_dfg_texture.get_height());
         float3 dfg = texture(u_dfg_texture, clamp(float2(NoV, perceptualRoughness), dfgTexel, 1.0 - dfgTexel)).rgb;
@@ -1525,7 +1568,9 @@ shader: point-shadow
               u_view: mat4 <- auto-view-matrix,
               u_invProj: mat4,
               u_punctualShadowEnabled: float,
+              u_halfScale: vec4,
               u_pointLightCount: float,
+              u_shadowedPointLightCount: float,
               u_pointLightPosIntensity0: vec4,
               u_pointLightPosIntensity1: vec4,
               u_pointLightPosIntensity2: vec4,
@@ -1647,7 +1692,7 @@ shader: point-shadow
       vec2 nearFar = texelFetch(u_shadow_data, ivec2(5, tilemapIndex), 0).xy;
 
       float ratio = clamp(2.0 * 1.4142135 / 8192.0 / max(filmFootprint / distanceToLight, 1e-8), 1e-8, 1.0);
-      int start = int(clamp(-log2(ratio), 0.0, 5.0));
+      int start = int(clamp(-log2(ratio) + 1.0, 0.0, 5.0));
       int lod = -1;
       int tilesPerSide = 32;
       int cacheKey = -1;
@@ -1706,7 +1751,7 @@ shader: point-shadow
     void main()
     {
       ivec2 fullSize = textureSize(u_position_texture, 0);
-      ivec2 fp = min(ivec2(gl_FragCoord.xy) * 2, fullSize - 1);
+      ivec2 fp = min(ivec2(floor(gl_FragCoord.xy) * u_halfScale.xy), fullSize - 1);
       vec4 n = texelFetch(u_normal_texture, fp, 0);
       vec3 posEye = texelFetch(u_position_texture, fp, 0).xyz;
       o_pointShadowGuide_texture = vec4(normalize(n.xyz), posEye.z);
@@ -1721,7 +1766,7 @@ shader: point-shadow
       float filmFootprint = abs(posEye.z) * 2.0 * u_invProj[1][1] / float(fullSize.y);
 
       vec4 shadows = vec4(1.0);
-      int count = int(min(u_pointLightCount, 4.0));
+      int count = int(min(u_shadowedPointLightCount, 4.0));
       for (int i = 0; i < count; ++i) {
         vec4 posIntensity = pointLightPosIntensity(i);
         vec4 colorRadius = pointLightColorRadius(i);
@@ -1829,7 +1874,7 @@ shader: point-shadow
       float2 nearFar = dataTex.read(uint2(5, tilemapIndex)).xy;
 
       float ratio = clamp(2.0 * 1.4142135 / 8192.0 / max(filmFootprint / distanceToLight, 1e-8), 1e-8, 1.0);
-      int start = int(clamp(-log2(ratio), 0.0, 5.0));
+      int start = int(clamp(-log2(ratio) + 1.0, 0.0, 5.0));
       int lod = -1;
       int tilesPerSide = 32;
       int cacheKey = -1;
@@ -1889,7 +1934,7 @@ shader: point-shadow
     //@main
     {
       int2 fullSize = int2(u_position_texture.get_width(), u_position_texture.get_height());
-      uint2 fp = uint2(min(int2(gl_FragCoord.xy) * 2, fullSize - 1));
+      uint2 fp = uint2(min(int2(floor(gl_FragCoord.xy) * u_halfScale.xy), fullSize - 1));
       float4 n = u_normal_texture.read(fp);
       float3 posEye = u_position_texture.read(fp).xyz;
       o_pointShadowGuide_texture = float4(normalize(n.xyz), posEye.z);
@@ -1907,7 +1952,7 @@ shader: point-shadow
         float filmFootprint = abs(posEye.z) * 2.0 * u_invProj[1][1] / float(fullSize.y);
 
         float4 shadows = float4(1.0);
-        int count = int(min(u_pointLightCount, 4.0));
+        int count = int(min(u_shadowedPointLightCount, 4.0));
         for (int i = 0; i < count; ++i) {
           float4 posIntensity = pointLightPosIntensity(i, _u);
           float4 colorRadius = pointLightColorRadius(i, _u);
@@ -1929,11 +1974,13 @@ shader: taa
               u_history_texture: sampler2d,
               u_position_texture: sampler2d,
               u_normal_texture: sampler2d,
+              u_velocity_texture: sampler2d,
               u_view: mat4 <- auto-view-matrix,
               u_invProj: mat4,
               u_prevViewProj: mat4,
               u_currViewProj: mat4,
-              u_taa: vec4 ]
+              u_taa: vec4,
+              u_taaJitter: vec4 ]
   varying:  [ texCoord: vec2 ]
 
   vsh:
@@ -1997,12 +2044,40 @@ shader: taa
       return finiteColor(result / weight);
     }
 
+    vec3 downsampleInput(vec2 lowPos, ivec2 size, float s)
+    {
+      float sigma = 0.5 * s;
+      int r = int(ceil(1.5 * s));
+      ivec2 c = ivec2(floor(lowPos));
+      vec3 sum = vec3(0.0);
+      float wsum = 0.0;
+      for (int y = -3; y <= 3; ++y) {
+        for (int x = -3; x <= 3; ++x) {
+          if (abs(x) > r || abs(y) > r) continue;
+          ivec2 p = c + ivec2(x, y);
+          vec2 d = vec2(p) + 0.5 - u_taaJitter.xy - lowPos;
+          float w = exp(-dot(d, d) / (2.0 * sigma * sigma));
+          sum += texelFetch(u_final_texture, clamp(p, ivec2(0), size - 1), 0).rgb * w;
+          wsum += w;
+        }
+      }
+      return sum / max(wsum, 1e-6);
+    }
+
     void main()
     {
-      ivec2 pixel = ivec2(gl_FragCoord.xy);
+      ivec2 outSize = textureSize(u_history_texture, 0);
       ivec2 size = textureSize(u_final_texture, 0);
-      vec3 current = texelFetch(u_final_texture, pixel, 0).rgb;
-      if (u_taa.x < 0.5) { o_final_texture = vec4(current, 1.0); return; }
+      vec2 uv = (gl_FragCoord.xy) / vec2(outSize);
+      vec2 lowPos = uv * vec2(size);
+      ivec2 pixel = clamp(ivec2(lowPos), ivec2(0), size - 1);
+      bool downsample = size.x > outSize.x;
+      vec3 current = downsample ? downsampleInput(lowPos, size, float(size.x) / float(outSize.x))
+                                : texelFetch(u_final_texture, pixel, 0).rgb;
+      if (u_taa.x < 0.5) {
+        o_final_texture = vec4(downsample ? current : texture(u_final_texture, uv).rgb, 1.0);
+        return;
+      }
 
       vec3 m1 = vec3(0.0), m2 = vec3(0.0);
       for (int y = -1; y <= 1; ++y) {
@@ -2019,7 +2094,7 @@ shader: taa
 
       vec3 posEye = texelFetch(u_position_texture, pixel, 0).xyz;
       if (texelFetch(u_normal_texture, pixel, 0).a < 0.5) {
-        vec2 ndc = (vec2(pixel) + 0.5) / vec2(size) * 2.0 - 1.0;
+        vec2 ndc = uv * 2.0 - 1.0;
         vec4 e = u_invProj * vec4(ndc, 1.0, 1.0);
         posEye = e.xyz / e.w;
       }
@@ -2027,12 +2102,16 @@ shader: taa
       vec4 prevClip = u_prevViewProj * world;
       vec4 currClip = u_currViewProj * world;
       vec2 motion = (prevClip.xy / prevClip.w - currClip.xy / currClip.w) * 0.5;
-      vec2 prevUV = (vec2(pixel) + 0.5) / vec2(size) + motion;
+      if (texelFetch(u_normal_texture, pixel, 0).a >= 0.5) motion = texelFetch(u_velocity_texture, pixel, 0).xy;
+      vec2 prevUV = uv + motion;
       bool offscreen = prevClip.w <= 0.0 || any(lessThan(prevUV, vec2(0.0))) || any(greaterThan(prevUV, vec2(1.0)));
 
+      vec2 d = (lowPos - (vec2(pixel) + 0.5 - u_taaJitter.xy)) * vec2(outSize) / vec2(size);
+      float closeness = exp(-2.0 * dot(d, d));
       vec3 cur = rgbToYCoCg(current);
-      vec3 history = clamp(rgbToYCoCg(historyCatmullRom(clamp(prevUV, 0.0, 1.0), vec2(size))), boxMin, boxMax);
-      float alpha = (u_taa.y > 0.5 || offscreen) ? 1.0 : u_taa.z;
+      vec3 history = clamp(rgbToYCoCg(historyCatmullRom(clamp(prevUV, 0.0, 1.0), vec2(outSize))), boxMin, boxMax);
+      float upscale = float(outSize.x * outSize.y) / float(size.x * size.y);
+      float alpha = (u_taa.y > 0.5 || offscreen) ? 1.0 : min(1.0, u_taa.z * upscale * closeness);
       float wc = alpha / (1.0 + cur.x);
       float wh = (1.0 - alpha) / (1.0 + history.x);
       o_final_texture = vec4(yCoCgToRgb((cur * wc + history * wh) / (wc + wh)), 1.0);
@@ -2079,13 +2158,39 @@ shader: taa
       return finiteColor(result / weight);
     }
 
+    float3 downsampleInput(texture2d<float> tex, float2 lowPos, int2 size, float s, float2 jitter)
+    {
+      float sigma = 0.5 * s;
+      int r = int(ceil(1.5 * s));
+      int2 c = int2(floor(lowPos));
+      float3 sum = float3(0.0);
+      float wsum = 0.0;
+      for (int y = -3; y <= 3; ++y) {
+        for (int x = -3; x <= 3; ++x) {
+          if (abs(x) > r || abs(y) > r) continue;
+          int2 p = c + int2(x, y);
+          float2 d = float2(p) + 0.5 - jitter - lowPos;
+          float w = exp(-dot(d, d) / (2.0 * sigma * sigma));
+          sum += tex.read(uint2(clamp(p, int2(0), size - 1))).rgb * w;
+          wsum += w;
+        }
+      }
+      return sum / max(wsum, 1e-6);
+    }
+
     //@main
     {
-      int2 pixel = int2(gl_FragCoord.xy);
+      int2 outSize = int2(u_history_texture.get_width(), u_history_texture.get_height());
       int2 size = int2(u_final_texture.get_width(), u_final_texture.get_height());
-      float3 current = u_final_texture.read(uint2(pixel)).rgb;
+      float2 uv = gl_FragCoord.xy / float2(outSize);
+      float2 lowPos = uv * float2(size);
+      int2 pixel = clamp(int2(lowPos), int2(0), size - 1);
+      bool downsample = size.x > outSize.x;
+      float3 current = downsample ? downsampleInput(u_final_texture, lowPos, size, float(size.x) / float(outSize.x),
+                                                    u_taaJitter.xy)
+                                  : u_final_texture.read(uint2(pixel)).rgb;
       if (u_taa.x < 0.5) {
-        o_final_texture = float4(current, 1.0);
+        o_final_texture = float4(downsample ? current : u_final_texture.sample(u_final_texture_smp, uv).rgb, 1.0);
       } else {
         float3 m1 = float3(0.0), m2 = float3(0.0);
         for (int y = -1; y <= 1; ++y) {
@@ -2102,7 +2207,7 @@ shader: taa
 
         float3 posEye = u_position_texture.read(uint2(pixel)).xyz;
         if (u_normal_texture.read(uint2(pixel)).a < 0.5) {
-          float2 ndc = (float2(pixel) + 0.5) / float2(size) * 2.0 - 1.0;
+          float2 ndc = uv * 2.0 - 1.0;
           float4 e = u_invProj * float4(ndc, 1.0, 1.0);
           posEye = e.xyz / e.w;
         }
@@ -2115,14 +2220,18 @@ shader: taa
         float4 prevClip = u_prevViewProj * float4(world, 1.0);
         float4 currClip = u_currViewProj * float4(world, 1.0);
         float2 motion = (prevClip.xy / prevClip.w - currClip.xy / currClip.w) * 0.5;
-        float2 prevUV = (float2(pixel) + 0.5) / float2(size) + motion;
+        if (u_normal_texture.read(uint2(pixel)).a >= 0.5) motion = u_velocity_texture.read(uint2(pixel)).xy;
+        float2 prevUV = uv + motion;
         bool offscreen = prevClip.w <= 0.0 || any(prevUV < float2(0.0)) || any(prevUV > float2(1.0));
 
+        float2 d = (lowPos - (float2(pixel) + 0.5 - u_taaJitter.xy)) * float2(outSize) / float2(size);
+        float closeness = exp(-2.0 * dot(d, d));
         float3 cur = rgbToYCoCg(current);
         float3 history = clamp(rgbToYCoCg(historyCatmullRom(u_history_texture, u_history_texture_smp,
-                                                            clamp(prevUV, 0.0, 1.0), float2(size))),
+                                                            clamp(prevUV, 0.0, 1.0), float2(outSize))),
                                boxMin, boxMax);
-        float alpha = (u_taa.y > 0.5 || offscreen) ? 1.0 : u_taa.z;
+        float upscale = float(outSize.x * outSize.y) / float(size.x * size.y);
+        float alpha = (u_taa.y > 0.5 || offscreen) ? 1.0 : min(1.0, u_taa.z * upscale * closeness);
         float wc = alpha / (1.0 + cur.x);
         float wh = (1.0 - alpha) / (1.0 + history.x);
         o_final_texture = float4(yCoCgToRgb((cur * wc + history * wh) / (wc + wh)), 1.0);
@@ -2168,6 +2277,93 @@ shader: taa-copy
     o_history_texture = u_final_texture.read(uint2(gl_FragCoord.xy));
     ```
 
+shader: supersample-downsample
+  uniforms: [ u_supersample_texture: sampler2d,
+              u_supersampleScale: vec4 ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    void main()
+    {
+      vec2 size = vec2(textureSize(u_supersample_texture, 0));
+      vec2 s = u_supersampleScale.xy;
+      vec2 highPos = gl_FragCoord.xy * s;
+      vec2 base = floor(highPos - 0.5) - 1.5;
+      vec2 pos[3];
+      vec2 weight[3];
+      for (int k = 0; k < 3; ++k) {
+        vec2 c = base + 2.0 * float(k);
+        vec2 da = (c - highPos) / (0.5 * s);
+        vec2 db = (c + 1.0 - highPos) / (0.5 * s);
+        vec2 wa = exp(-0.5 * da * da);
+        vec2 wb = exp(-0.5 * db * db);
+        weight[k] = max(wa + wb, vec2(1e-8));
+        pos[k] = c + wb / weight[k];
+      }
+      vec4 sum = vec4(0.0);
+      float wsum = 0.0;
+      for (int y = 0; y < 3; ++y) {
+        for (int x = 0; x < 3; ++x) {
+          float w = weight[x].x * weight[y].y;
+          sum += texture(u_supersample_texture, vec2(pos[x].x, pos[y].y) / size) * w;
+          wsum += w;
+        }
+      }
+      o_final_texture = sum / wsum;
+    }
+    ```
+
+    source msl:
+    ```msl
+    float2 size = float2(u_supersample_texture.get_width(), u_supersample_texture.get_height());
+    float2 s = u_supersampleScale.xy;
+    float2 highPos = gl_FragCoord.xy * s;
+    float2 base = floor(highPos - 0.5) - 1.5;
+    float2 pos[3];
+    float2 weight[3];
+    for (int k = 0; k < 3; ++k) {
+      float2 c = base + 2.0 * float(k);
+      float2 da = (c - highPos) / (0.5 * s);
+      float2 db = (c + 1.0 - highPos) / (0.5 * s);
+      float2 wa = exp(-0.5 * da * da);
+      float2 wb = exp(-0.5 * db * db);
+      weight[k] = max(wa + wb, float2(1e-8));
+      pos[k] = c + wb / weight[k];
+    }
+    float4 sum = float4(0.0);
+    float wsum = 0.0;
+    for (int y = 0; y < 3; ++y) {
+      for (int x = 0; x < 3; ++x) {
+        float w = weight[x].x * weight[y].y;
+        sum += u_supersample_texture.sample(u_supersample_texture_smp, float2(pos[x].x, pos[y].y) / size) * w;
+        wsum += w;
+      }
+    }
+    o_final_texture = sum / wsum;
+    ```
+
 shader: ssgi-prep
   uniforms: [ u_position_texture: sampler2d,
               u_normal_texture: sampler2d,
@@ -2176,7 +2372,8 @@ shader: ssgi-prep
               u_view: mat4 <- auto-view-matrix,
               u_prevViewProj: mat4,
               u_taa: vec4,
-              u_ssgi: vec4 ]
+              u_ssgi: vec4,
+              u_halfScale: vec4 ]
   varying:  [ texCoord: vec2 ]
 
   vsh:
@@ -2211,7 +2408,7 @@ shader: ssgi-prep
     void main()
     {
       ivec2 fullSize = textureSize(u_position_texture, 0);
-      ivec2 fp = min(ivec2(gl_FragCoord.xy) * 2, fullSize - 1);
+      ivec2 fp = min(ivec2(floor(gl_FragCoord.xy) * u_halfScale.xy), fullSize - 1);
       vec4 n = texelFetch(u_normal_texture, fp, 0);
       if (u_ssgi.z < 0.5 || n.a < 0.5) {
         o_ssgiDepth_texture = vec4(0.0);
@@ -2242,7 +2439,7 @@ shader: ssgi-prep
     //@main
     {
       int2 fullSize = int2(u_position_texture.get_width(), u_position_texture.get_height());
-      uint2 fp = uint2(min(int2(gl_FragCoord.xy) * 2, fullSize - 1));
+      uint2 fp = uint2(min(int2(floor(gl_FragCoord.xy) * u_halfScale.xy), fullSize - 1));
       float4 n = u_normal_texture.read(fp);
       if (u_ssgi.z < 0.5 || n.a < 0.5) {
         o_ssgiDepth_texture = float4(0.0);
@@ -2933,6 +3130,7 @@ shader: volume-scatter
               u_shadowLodRange: vec4,
               u_punctualShadowEnabled: float,
               u_pointLightCount: float,
+              u_shadowedPointLightCount: float,
               u_pointLightPosIntensity0: vec4,
               u_pointLightPosIntensity1: vec4,
               u_pointLightPosIntensity2: vec4,
@@ -3379,6 +3577,7 @@ shader: ssr
               u_prevViewProj: mat4,
               u_taa: vec4,
               u_ssr: vec4,
+              u_halfScale: vec4,
               frameIndex: int ]
   varying:  [ texCoord: vec2 ]
 
@@ -3442,7 +3641,7 @@ shader: ssr
     void main()
     {
       ivec2 size = textureSize(u_position_texture, 0);
-      ivec2 fp = min(ivec2(gl_FragCoord.xy) * 2, size - 1);
+      ivec2 fp = min(ivec2(floor(gl_FragCoord.xy) * u_halfScale.xy), size - 1);
       vec4 n = texelFetch(u_normal_texture, fp, 0);
       vec3 P = texelFetch(u_position_texture, fp, 0).xyz;
       float roughness = clamp(texelFetch(u_material_texture, fp, 0).r, 0.045, 1.0);
@@ -3633,7 +3832,7 @@ shader: ssr
     //@main
     {
       int2 size = int2(u_position_texture.get_width(), u_position_texture.get_height());
-      uint2 fp = uint2(min(int2(gl_FragCoord.xy) * 2, size - 1));
+      uint2 fp = uint2(min(int2(floor(gl_FragCoord.xy) * u_halfScale.xy), size - 1));
       float4 n = u_normal_texture.read(fp);
       float3 P = u_position_texture.read(fp).xyz;
       o_ssrGuide_texture = float4(n.a < 0.5 ? float3(0.0) : normalize(n.xyz), P.z);
@@ -3653,7 +3852,8 @@ shader: ssr-temporal
               u_prevViewProj: mat4,
               u_currViewProj: mat4,
               u_taa: vec4,
-              u_ssr: vec4 ]
+              u_ssr: vec4,
+              u_halfScale: vec4 ]
   varying:  [ texCoord: vec2 ]
 
   vsh:
@@ -3695,7 +3895,7 @@ shader: ssr-temporal
         o_ssrAccum_texture = vec4(0.0);
         return;
       }
-      ivec2 fp = min(hp * 2, fullSize - 1);
+      ivec2 fp = min(ivec2(vec2(hp) * u_halfScale.xy), fullSize - 1);
       float roughness = texelFetch(u_material_texture, fp, 0).r;
       float spread = clamp(4.0 * roughness, 0.0, 1.0);
       float depthScale = 1.0 / max(0.01 * abs(gc.w), 1e-3);
@@ -3756,7 +3956,7 @@ shader: ssr-temporal
       if (u_ssr.z < 0.5 || all(gc.xyz == float3(0.0))) {
         o_ssrAccum_texture = float4(0.0);
       } else {
-        uint2 fp = uint2(min(hp * 2, fullSize - 1));
+        uint2 fp = uint2(min(int2(float2(hp) * u_halfScale.xy), fullSize - 1));
         float roughness = u_material_texture.read(fp).r;
         float spread = saturate(4.0 * roughness);
         float depthScale = 1.0 / max(0.01 * abs(gc.w), 1e-3);
@@ -3845,7 +4045,8 @@ shader: outline-mask
               u_outlineLabels: sampler2d,
               u_position_texture: sampler2d,
               u_normal_texture: sampler2d,
-              u_outline: vec4 ]
+              u_outline: vec4,
+              u_renderScale: vec4 ]
   varying:  [ posEye: vec3, uv: vec2, primId: float ]
 
   vsh:
@@ -3885,7 +4086,7 @@ shader: outline-mask
       float label = id >= 0 && float(id) < u_outline.z
         ? texelFetch(u_outlineLabels, ivec2(id % width, id / width), 0).r : 0.0;
       if (label <= 0.0) discard;
-      ivec2 pixel = ivec2(gl_FragCoord.xy);
+      ivec2 pixel = ivec2(gl_FragCoord.xy * u_renderScale.xy);
       vec4 scene = texelFetch(u_position_texture, pixel, 0);
       int sceneId = int(round(scene.w));
       float sceneLabel = sceneId >= 0 && float(sceneId) < u_outline.z
@@ -3908,7 +4109,7 @@ shader: outline-mask
       label = u_outlineLabels.read(uint2(id % width, id / width)).r;
     }
     if (label <= 0.0) discard_fragment();
-    uint2 pixel = uint2(gl_FragCoord.xy);
+    uint2 pixel = uint2(gl_FragCoord.xy * u_renderScale.xy);
     float4 scene = u_position_texture.read(pixel);
     int sceneId = int(round(scene.w));
     float sceneLabel = 0.0;
@@ -4108,7 +4309,8 @@ shader: outline-composite
 shader: aov
   uniforms: [ u_position_texture: sampler2d,
               u_normal_texture: sampler2d,
-              u_aovProjection: vec4 ]
+              u_aovProjection: vec4,
+              u_renderScale: vec4 ]
   varying:  [ texCoord: vec2 ]
 
   vsh:
@@ -4136,7 +4338,7 @@ shader: aov
     ```glsl
     void main()
     {
-      ivec2 pixel = ivec2(gl_FragCoord.xy);
+      ivec2 pixel = ivec2(gl_FragCoord.xy * u_renderScale.xy);
       vec4 p = texelFetch(u_position_texture, pixel, 0);
       bool hit = texelFetch(u_normal_texture, pixel, 0).a >= 0.5;
       float ndc = (u_aovProjection.x * p.z + u_aovProjection.y) / max(-p.z, 1e-6);
@@ -4148,7 +4350,7 @@ shader: aov
 
     source msl:
     ```msl
-    uint2 pixel = uint2(gl_FragCoord.xy);
+    uint2 pixel = uint2(gl_FragCoord.xy * u_renderScale.xy);
     float4 p = u_position_texture.read(pixel);
     bool hit = u_normal_texture.read(pixel).a >= 0.5;
     float ndc = (u_aovProjection.x * p.z + u_aovProjection.y) / max(-p.z, 1e-6);

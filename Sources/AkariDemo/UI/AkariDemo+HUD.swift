@@ -45,192 +45,206 @@ import SwiftCrossUI
 
 extension AkariDemo
 {
-  /// The interactive settings panel overlaid on the viewport.
+  /// The render settings, docked beside the viewport.
   @MainActor
   struct HUD: View
   {
     @State private var state: AkariDemo.HUDState
-    let driver: any Akari.HydraFrameDriver
 
-    init(engine: Akari.RenderEngine, driver: any Akari.HydraFrameDriver)
+    init(state: AkariDemo.HUDState)
     {
-      _state = State(wrappedValue: AkariDemo.HUDState(engine: engine))
-      self.driver = driver
+      _state = State(wrappedValue: state)
     }
 
     var body: some View
     {
-      VStack(alignment: .leading)
-      {
-        Text("AKARI 灯り")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundColor(Color(white: 0.62))
-        FPSCounter(driver: driver)
-
-        ScrollView
-        {
-          VStack(alignment: .leading, spacing: 3)
-          {
-            sectionHeader("COLOR PIPELINE")
-            viewTransformRow
-            qualityRow
-            sliderRow("Exposure", String(format: "%+.1f EV", state.exposure),
-                      state.$exposure, in: -4 ... 4)
-            sliderRow("Gamma", String(format: "%.2f", state.gamma),
-                      state.$gamma, in: 0.4 ... 2.5)
-
-            sectionHeader("SAMPLING")
-            sliderRow("Samples", String(format: "%d", Int(state.samples)),
-                      state.$samples, in: 1 ... 64)
-            sliderRow("Render Samples", String(format: "%d", Int(state.renderSamples)),
-                      state.$renderSamples, in: 1 ... 128)
-
-            Group
-            {
-              sectionHeader("LIGHTING")
-              sliderRow("Environment Sun Height", String(format: "%.2f", state.environmentSunHeight),
-                        state.$environmentSunHeight, in: -1 ... 1)
-              sliderRow("Sun Angle", String(format: "%.2f°", state.environmentSunAngle),
-                        state.$environmentSunAngle, in: 0 ... 20)
-              sliderRow("Clipmap LOD Bias", String(format: "%+.0f", state.shadowLevelLodBias),
-                        state.$shadowLevelLodBias, in: -4 ... 4)
-              sliderRow("Max Shadow Distance", String(format: "%.0f m", state.shadowMaxDistance),
-                        state.$shadowMaxDistance, in: 2 ... 200)
-            }
-
-            sectionHeader("REFLECTIONS")
-            sliderRow("Max Roughness", String(format: "%.2f", state.reflectionMaxRoughness),
-                      state.$reflectionMaxRoughness, in: 0 ... 1)
-
-            Group
-            {
-              sectionHeader("VOLUMETRICS")
-              sliderRow("Fog Density", String(format: "%.3f", state.volumeDensity),
-                        state.$volumeDensity, in: 0 ... 0.2)
-              sliderRow("Fog Anisotropy", String(format: "%+.2f", state.volumeAnisotropy),
-                        state.$volumeAnisotropy, in: -0.9 ... 0.9)
-              sliderRow("Fog Distance", String(format: "%.0f m", state.volumeMaxDistance),
-                        state.$volumeMaxDistance, in: 5 ... 500)
-              Toggle("Volume shadows", isOn: state.volumeShadowsBinding)
-                .toggleStyle(.switch)
-            }
-
-            Group
-            {
-              sectionHeader("FEATURES")
-
-              Text("\(state.activePassCount)")
-                .font(.system(size: 30, weight: .bold).monospaced())
-              Text("frame graph passes active")
-                .font(.system(size: 12))
-                .foregroundColor(Color(white: 0.62))
-
-              featuresSection
-
-              Text("edits rebuild the frame graph live")
-                .font(.system(size: 10))
-                .foregroundColor(Color(white: 0.5))
-            }
-          }
-        }
-      }
-      .padding(14)
-      .background(Color(white: 0.14, opacity: 0.66))
-      .cornerRadius(10)
-      .foregroundColor(Color(white: 0.96))
-      .padding(16)
-    }
-
-    private var viewTransformRow: some View
-    {
-      HStack(spacing: 6)
-      {
-        key("View transform")
-        Picker(of: Akari.Color.ViewTransform.allCases,
-               selection: state.$viewTransform.onChange { _ in state.apply() })
-      }
-    }
-
-    private var qualityRow: some View
-    {
-      HStack(spacing: 6)
-      {
-        key("Quality")
-        Picker(of: RenderQuality.allCases,
-               selection: state.$quality.onChange
-               { q in
-                 if let q { state.applyPreset(q) }
-                 state.apply()
-               })
-      }
-    }
-
-    /// A labelled slider that pushes the edit into the engine on change.
-    private func sliderRow(_ label: String,
-                           _ readout: String,
-                           _ binding: Binding<Double>,
-                           in range: ClosedRange<Double>) -> some View
-    {
-      VStack(alignment: .leading, spacing: 2)
+      VStack(alignment: .leading, spacing: 0)
       {
         HStack(spacing: 6)
         {
-          key(label)
-          value(readout)
+          Text("Render")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(Properties.text)
+            .frame(minWidth: 0.0, maxWidth: .infinity, alignment: .leading)
+          Text("AKARI 灯り")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundColor(Properties.label)
         }
-        Slider(value: binding.onChange { _ in state.apply() }, in: range)
-          .frame(width: 160)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+
+        ScrollView
+        {
+          VStack(alignment: .leading, spacing: 4)
+          {
+            Properties.row("Quality")
+            {
+              Dropdown(options: RenderQuality.allCases,
+                       selection: state.$quality.onChange
+                       { q in
+                         if let q { state.applyPreset(q) }
+                         state.apply()
+                       })
+            }
+            .padding(.vertical, 4)
+
+            PropertiesPanel("Sampling")
+            {
+              PropertiesPanel("Viewport", nested: true)
+              {
+                slider("Samples", state.$samples, in: 1 ... 64, step: 1) { "\(Int($0))" }
+                Properties.check("Temporal Reprojection", state.binding(for: .temporalAA))
+              }
+              PropertiesPanel("Render", nested: true)
+              {
+                slider("Samples", state.$renderSamples, in: 1 ... 128, step: 1) { "\(Int($0))" }
+              }
+            }
+
+            PropertiesPanel("Performance")
+            {
+              Properties.row("Upscaler")
+              {
+                Dropdown(options: Upscaler.allCases, selection: state.$upscaler.onChange { _ in state.apply() })
+              }
+              slider("Supersampling", state.$supersampling, in: 1 ... 2, step: 0.01)
+              {
+                String(format: "%.2f×", RenderSettings.supersamplingStep(Float($0)))
+              }
+              Properties.check("Dynamic Resolution", state.binding(for: .dynamicResolution))
+            }
+
+            PropertiesPanel("Shadows", toggle: state.binding(for: .shadowMaps))
+            {
+              slider("Clipmap LOD Bias", state.$shadowLevelLodBias, in: -4 ... 4, step: 1)
+              {
+                String(format: "%+.0f", $0)
+              }
+              slider("Max Distance", state.$shadowMaxDistance, in: 2 ... 200, step: 1)
+              {
+                String(format: "%.0f m", $0)
+              }
+            }
+
+            PropertiesPanel("Raytracing", expanded: false, toggle: state.binding(for: .hardwareRayTracing))
+            {
+              Properties.check("Screen Space Reflections", state.binding(for: .screenSpaceReflections))
+              slider("Max Roughness", state.$reflectionMaxRoughness, in: 0 ... 1, step: 0.01)
+              {
+                String(format: "%.2f", $0)
+              }
+              Properties.check("Screen Space GI", state.binding(for: .screenSpaceGI))
+            }
+
+            PropertiesPanel("World")
+            {
+              slider("Sun Height", state.$environmentSunHeight, in: -1 ... 1, step: 0.01)
+              {
+                String(format: "%.2f", $0)
+              }
+              slider("Sun Angle", state.$environmentSunAngle, in: 0 ... 20, step: 0.1)
+              {
+                String(format: "%.1f°", $0)
+              }
+              Properties.check("Image Based Lighting", state.binding(for: .imageBasedLighting))
+              Properties.check("Light Probes", state.binding(for: .lightProbes))
+            }
+
+            PropertiesPanel("Volumes", toggle: state.binding(for: .volumetrics))
+            {
+              slider("Density", state.$volumeDensity, in: 0 ... 0.2, step: 0.001)
+              {
+                String(format: "%.3f", $0)
+              }
+              slider("Anisotropy", state.$volumeAnisotropy, in: -0.9 ... 0.9, step: 0.01)
+              {
+                String(format: "%+.2f", $0)
+              }
+              slider("Max Distance", state.$volumeMaxDistance, in: 5 ... 500, step: 1)
+              {
+                String(format: "%.0f m", $0)
+              }
+              Properties.check("Shadows", state.volumeShadowsBinding)
+            }
+
+            PropertiesPanel("Bloom", expanded: false, toggle: state.binding(for: .bloom))
+            {
+              note("Glow around the brightest highlights.")
+            }
+
+            PropertiesPanel("Depth of Field", expanded: false, toggle: state.binding(for: .depthOfField))
+            {
+              note("Focus blur from the camera's lens.")
+            }
+
+            PropertiesPanel("Color Management")
+            {
+              Properties.row("View")
+              {
+                Dropdown(options: Akari.Color.ViewTransform.allCases,
+                         selection: state.$viewTransform.onChange { _ in state.apply() })
+              }
+              slider("Exposure", state.$exposure, in: -4 ... 4, step: 0.1)
+              {
+                String(format: "%+.1f EV", $0)
+              }
+              slider("Gamma", state.$gamma, in: 0.4 ... 2.5, step: 0.01)
+              {
+                String(format: "%.2f", $0)
+              }
+            }
+
+            Text("\(state.activePassCount) frame graph passes, edits rebuild live")
+              .font(.system(size: 10))
+              .foregroundColor(Color(white: 0.5))
+              .padding(.top, 4)
+              .padding(.leading, 6)
+          }
+          .padding(6)
+        }
       }
+      .frame(width: Double(Properties.width))
+      .background(Properties.region)
     }
 
-    private var featuresSection: some View
+    /// A slider row that pushes the edit into the engine on change.
+    private func slider(_ label: String,
+                        _ binding: Binding<Double>,
+                        in range: ClosedRange<Double>,
+                        step: Double,
+                        _ format: @escaping (Double) -> String) -> some View
     {
-      HStack(alignment: .top, spacing: 16)
+      Properties.row(label)
       {
-        VStack(alignment: .leading, spacing: 3)
-        {
-          featureToggle(.imageBasedLighting, "IBL")
-          featureToggle(.lightProbes, "Light probes")
-          featureToggle(.shadowMaps, "Shadow maps")
-          featureToggle(.screenSpaceReflections, "Screen space reflections")
-        }
-        VStack(alignment: .leading, spacing: 3)
-        {
-          featureToggle(.screenSpaceGI, "Screen space GI")
-          featureToggle(.temporalAA, "TAA")
-          featureToggle(.bloom, "Bloom")
-          featureToggle(.depthOfField, "Depth of field")
-          featureToggle(.volumetrics, "Volumetrics")
-          featureToggle(.hardwareRayTracing, "Hardware RT")
-          featureToggle(.fireflies, "Fireflies (demo)")
-        }
+        SliderField(value: binding.onChange { _ in state.apply() }, range: range, step: step, format: format)
       }
     }
 
-    private func sectionHeader(_ title: String) -> some View
+    private func note(_ text: String) -> some View
     {
-      Text(title)
-        .font(.system(size: 10, weight: .bold))
-        .foregroundColor(Color(white: 0.55))
-        .padding(.top, 8)
+      HStack(spacing: 8)
+      {
+        Spacer().frame(width: Double(Properties.labelWidth))
+        Text(text)
+          .font(.system(size: 10))
+          .foregroundColor(Color(white: 0.55))
+      }
     }
+  }
 
-    private func key(_ title: String) -> some View
-    {
-      Text(title)
-        .font(.system(size: 11))
-        .foregroundColor(Color(white: 0.58))
-    }
+  /// The viewport's corner readout, as overlay text.
+  @MainActor
+  struct ViewportOverlay: View
+  {
+    let driver: any Akari.HydraFrameDriver
 
-    private func value(_ text: String) -> some View
+    var body: some View
     {
-      Text(text)
-        .font(.system(size: 11, weight: .medium).monospaced())
-    }
-
-    private func featureToggle(_ feature: RenderFeatures, _ label: String) -> some View
-    {
-      Toggle(label, isOn: state.binding(for: feature))
+      VStack(alignment: .leading, spacing: 0)
+      {
+        FPSCounter(driver: driver)
+      }
+      .padding(16)
     }
   }
 }

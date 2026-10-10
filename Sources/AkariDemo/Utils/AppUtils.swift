@@ -79,7 +79,7 @@ public enum AppUtils
     print("[akari] registered plugInfo -> \(url.path)")
   }
 
-  public static func buildStage() -> UsdStage
+  public static func buildStage() -> (stage: UsdStage, fileURL: URL)
   {
     let usda = """
       #usda 1.0
@@ -138,7 +138,7 @@ public enum AppUtils
     try? usda.write(to: url, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(at: url) }
 
-    return UsdStage.open(url.path)
+    return (stage: UsdStage.open(url.path), fileURL: url)
   }
 
   public static func usdScenePathFromArguments() -> String?
@@ -155,11 +155,11 @@ public enum AppUtils
     return nil
   }
 
-  public static func openOrCreateStage() -> UsdStage
+  public static func openOrCreateStage() -> (stage: UsdStage, fileURL: URL)
   {
     if let path = usdScenePathFromArguments()
     {
-      UsdStage.open(path)
+      (stage: UsdStage.open(path), fileURL: URL(filePath: path))
     }
     else
     {

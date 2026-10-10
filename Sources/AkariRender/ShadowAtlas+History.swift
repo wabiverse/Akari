@@ -190,6 +190,21 @@ extension Akari.ShadowAtlas
     }
   }
 
+  /// What `markPageUsage` fit for `render` to draw this frame.
+  struct FrameFit
+  {
+    var directional: [Cascade] = []
+    var slots: [Int] = []
+    var punctualFaces: [[PunctualFace]] = []
+    var lightDirection = SIMD3<Float>(0, 0, 1)
+    var cameraWorld = SIMD3<Float>.zero
+    var sunChanged = false
+    var forcePunctual = false
+    var isCurrent = false
+    var castersMoved = false
+    var redraw = CasterRedraw.none
+  }
+
   /// What a scene change left stale in the shadow pages.
   enum CasterRedraw: Equatable
   {

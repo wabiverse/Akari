@@ -75,6 +75,13 @@ struct HdAkariAtlasCell
   float opacityThreshold = 0.0f;                      // >0 means alpha-test/cutout, not blend.
 };
 
+/// A square pixel region of the atlas
+/// baked since the last drain.
+struct HdAkariAtlasRect
+{
+  int x = 0, y = 0, size = 0;
+};
+
 /// @class HdAkariTextureAtlas
 ///
 /// Bakes UsdPreviewSurface roughness/metallic/opacity maps, including
@@ -117,6 +124,28 @@ public:
 
   /// True once new cells have been baked since the last call.
   bool ConsumeDirty() { return _dirty.exchange(false, std::memory_order_acq_rel); }
+
+  /// The regions baked since the last
+  /// call, for uploading just those.
+  std::vector<HdAkariAtlasRect> DrainDirtyRects()
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    std::vector<HdAkariAtlasRect> out;
+    out.swap(_dirtyRects);
+    return out;
+  }
+
+  /// Frees the CPU pixels once they're uploaded and nothing is mid bake,
+  /// a later bake starts from zeroed buffers and only its rect uploads.
+  void ReleasePixelsIfIdle()
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_pending.empty() || !_dirtyRects.empty()) return;
+    std::vector<uint8_t>().swap(_pixels);
+    std::vector<uint8_t>().swap(_colorPixels);
+    std::vector<uint8_t>().swap(_normalPixels);
+    std::vector<uint8_t>().swap(_emissivePixels);
+  }
 
   /// Raw pointer to the RGBA8 (GL_UNSIGNED_BYTE) pixel buffer.
   uint8_t const SWIFT_RETURNS_INDEPENDENT_VALUE *PixelData() const
@@ -169,6 +198,7 @@ private:
   std::vector<uint8_t> _colorPixels; // same thing, for diffuseColor.
   std::vector<uint8_t> _normalPixels;   // tangent space normal, flat where untextured.
   std::vector<uint8_t> _emissivePixels; // emissiveColor.
+  std::vector<HdAkariAtlasRect> _dirtyRects;
   std::atomic<bool> _dirty{false};
   std::once_flag _sizeOnce;
   std::atomic<int> _gridSize{kDefaultGridSize};

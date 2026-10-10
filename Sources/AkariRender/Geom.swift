@@ -191,7 +191,7 @@ public extension Akari
       let triCount = triIndices.count / 3
       let ptCount = min(pointsFlat.count / 3, topology.vertexFaceStart.count - 1)
 
-      verts.reserveCapacity(verts.count + triCount * 24)
+      verts.reserveCapacity(verts.count + ptCount * 8)
       indices.reserveCapacity(indices.count + triCount * 3)
 
       func point(_ i: Int32) -> SIMD3<Float>
@@ -250,13 +250,36 @@ public extension Akari
         }
       }
 
+      // corners sharing a point, uv and normal weld into one vertex.
+      let base = Int32(verts.count / 8)
+      var head = [Int32](repeating: -1, count: ptCount)
+      var next: [Int32] = []
+      var owner: [Int32] = []
+      next.reserveCapacity(ptCount)
+      owner.reserveCapacity(ptCount)
+
       func emitCorner(_ idx: Int, _ c: Int)
       {
         let p = Int(triIndices[idx * 3 + c])
-        let n = vertexIsSmooth[p] ? smooth[p] : faceNormals[idx]
+        let face = vertexIsSmooth[p] ? -1 : Int32(idx)
         let uo = (idx * 3 + c) * 2
         let uv = SIMD2<Float>(triUvs[uo], triUvs[uo + 1])
+        var slot = head[p]
+        while slot >= 0
+        {
+          let o = Int(slot + base) * 8
+          if owner[Int(slot)] == face, verts[o + 6] == uv.x, verts[o + 7] == uv.y
+          {
+            indices.append(slot + base)
+            return
+          }
+          slot = next[Int(slot)]
+        }
+        let n = face < 0 ? smooth[p] : faceNormals[idx]
         indices.append(appendVertex(p, n, uv, pointsFlat, &verts))
+        next.append(head[p])
+        owner.append(face)
+        head[p] = Int32(next.count - 1)
       }
 
       for idx in 0 ..< triCount

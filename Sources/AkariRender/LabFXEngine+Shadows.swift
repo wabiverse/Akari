@@ -44,7 +44,8 @@ import LabGL
 
 public extension Akari.LabFXEngine
 {
-  /// Tags the shadow pages this frame's G-buffer and froxels sample.
+  /// Fits the shadow views to this frame, then tags
+  /// the pages its G-buffer and froxels sample.
   ///
   /// - Parameters:
   ///   - camera: the view the G-buffer was just rendered from.
@@ -54,27 +55,33 @@ public extension Akari.LabFXEngine
     guard settings.features.contains(.shadowMaps) else { return }
 
     let posTex = runtime.texture("gbuffer", named: "position")
-    guard posTex != 0 else { return }
+    guard
+      posTex != 0,
+      let sceneBounds
+    else { return }
 
     shadowAtlas.markPageUsage(gbufferPosition: posTex,
                               camera: camera,
-                              screenWidth: lastWidth,
-                              screenHeight: lastHeight,
+                              screenWidth: renderWidth,
+                              screenHeight: renderHeight,
+                              lightDirection: worldSpaceSunDirection(settings.light),
+                              sceneBounds: sceneBounds,
                               settings: settings.light.shadow,
                               lights: syncedPointLights,
+                              punctualFarDistance: Self.punctualFarDistance(sceneBounds),
                               sceneRevision: lastGeometryRevision,
                               casterBounds: casterBounds,
                               casterKeys: casterKeys,
-                              staticGeneration: geometry.staticCapture.map { labgl.captureGeneration($0) } ?? 0,
+                              staticGeneration: geometry.staticShadowCapture.map { labgl.captureGeneration($0) } ?? 0,
                               volume: volumetrics.froxels)
   }
 
-  /// Fits the sun cascades into the shadow atlas and redraws whichever
-  /// tiles went stale, then binds them for the deferred resolve.
+  /// Redraws whichever tiles `markShadowPageUsage` found
+  /// stale, then binds them for the deferred resolve.
   ///
   /// - Parameters:
   ///   - renderParam: hydra render param.
-  ///   - camera: the view the cascades are fitted to.
+  ///   - camera: the view the cascades were fitted to.
   ///   - settings: the frame's render settings.
   ///   - frameIndex: per frame counter, drives atlas eviction.
   func renderShadows(renderParam: Pixar.HdAkariRenderParam,
@@ -83,11 +90,11 @@ public extension Akari.LabFXEngine
                      frameIndex: UInt64)
   {
     shadowsReady = false
-    let staticCaptures = geometry.staticBatch.isEmpty ? [] : [geometry.staticCapture].compactMap(\.self)
+    let staticCaptures = geometry.staticBatch.isEmpty ? [] : [geometry.staticShadowCapture].compactMap(\.self)
     // the deformed capture's draws move without a rerecord, so their bounds come along.
     var dynamicCaptures: [OpaquePointer] = []
     var dynamicDrawBounds: [[Float]?] = []
-    if !geometry.dynamicBatch.isEmpty, let capture = geometry.dynamicCapture
+    if !geometry.dynamicBatch.isEmpty, let capture = geometry.deformer.shadowCapture ?? geometry.dynamicCapture
     {
       dynamicCaptures.append(capture)
       dynamicDrawBounds.append(geometry.dynamicBatch.casterBounds)
@@ -95,25 +102,16 @@ public extension Akari.LabFXEngine
 
     guard
       !staticCaptures.isEmpty || !dynamicCaptures.isEmpty,
-      let sceneBounds,
+      sceneBounds != nil,
       renderParam.GetScene() != nil
     else { return }
 
     let shadow = settings.light.shadow
-    let diagonal = sceneBounds.max - sceneBounds.min
-    let punctualFarDistance = max((diagonal * diagonal).sum().squareRoot(), 1)
+    shadowAtlas.materialAtlas = probeMaterials.material
     let views = shadowAtlas.render(staticCaptures: staticCaptures,
                                    dynamicCaptures: dynamicCaptures,
                                    dynamicDrawBounds: dynamicDrawBounds,
-                                   camera: camera,
-                                   lightDirection: worldSpaceSunDirection(settings.light),
-                                   sceneBounds: sceneBounds,
-                                   casterBounds: casterBounds,
-                                   sceneRevision: lastGeometryRevision,
-                                   frameIndex: frameIndex,
-                                   settings: shadow,
-                                   lights: syncedPointLights,
-                                   punctualFarDistance: punctualFarDistance)
+                                   casterBounds: casterBounds)
     bindShadowViews(views, settings: shadow)
     shadowsReady = true
 
@@ -123,6 +121,13 @@ public extension Akari.LabFXEngine
     gl.loadMatrix(Akari.Matrix4.reversedDepth(camera.projection).m)
     gl.matrixMode(GL_MODELVIEW)
     gl.loadMatrix(camera.view.m)
+  }
+
+  /// A power of two, so animated bounds don't move the cube far planes and restale them.
+  private static func punctualFarDistance(_ bounds: (min: SIMD3<Float>, max: SIMD3<Float>)) -> Float
+  {
+    let diagonal = bounds.max - bounds.min
+    return exp2(ceil(log2(max((diagonal * diagonal).sum().squareRoot(), 1))))
   }
 
   internal func ensureShadowBindings()

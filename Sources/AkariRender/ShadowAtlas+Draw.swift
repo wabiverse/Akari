@@ -103,7 +103,8 @@ extension Akari.ShadowAtlas
     }
 
     let res = GLsizei(Self.tilemapRes * Self.pageResolution)
-    func drawPass(_ indices: Range<Int>, into image: GLuint, renderMap: GLuint, renderRect: GLuint)
+    func drawPass(_ indices: Range<Int>, into image: GLuint, renderMap: GLuint, renderRect: GLuint,
+                  alphaTest: Bool)
     {
       guard !indices.isEmpty else { return }
       beginAtlasPass()
@@ -112,6 +113,12 @@ extension Akari.ShadowAtlas
       gl.useShader(depthShader)
       gl.setShaderBuffer(depthShader, index: 0, buffer: renderMap)
       gl.setShaderImageArgument(depthShader, bufferIndex: 1, texture: image)
+      // LabGL lays uniforms out in first set order, so set them in `U`'s.
+      var base: Int32 = 0
+      gl.setShaderUniform(depthShader, name: "u_viewBase", type: GL_INT, data: &base)
+      var test: Int32 = alphaTest && materialAtlas != 0 ? 1 : 0
+      gl.setShaderUniform(depthShader, name: "u_alphaTest", type: GL_INT, data: &test)
+      if test != 0 { gl.setShaderImageArgument(depthShader, bufferIndex: 6, texture: materialAtlas) }
       gl.setShaderBuffer(depthShader, index: 4, buffer: frame.slotOfView)
       gl.setShaderVertexBuffer(depthShader, index: 5, buffer: renderRect)
       gl.setShaderVertexBuffer(depthShader, index: 7, buffer: frame.viewXf)
@@ -155,10 +162,10 @@ extension Akari.ShadowAtlas
 
     dispatchPageClear()
     drawPass(0 ..< staticCaptures.count, into: staticAtlas,
-             renderMap: buffers.renderMapStatic, renderRect: buffers.renderRectStatic)
+             renderMap: buffers.renderMapStatic, renderRect: buffers.renderRectStatic, alphaTest: true)
     dispatchPageCopy()
     drawPass(staticCaptures.count ..< captures.count, into: atlas,
-             renderMap: buffers.renderMap, renderRect: buffers.renderRect)
+             renderMap: buffers.renderMap, renderRect: buffers.renderRect, alphaTest: false)
 
     return views
   }
@@ -425,6 +432,7 @@ extension Akari.ShadowAtlas
     gl.setComputeShaderBuffer(kernel, binding: 1, buffer: frame.slotOfView)
     gl.setComputeShaderBuffer(kernel, binding: 2, buffer: frame.drawnView)
     gl.setComputeShaderBuffer(kernel, binding: 3, buffer: buffers.renderRect)
+    gl.setComputeShaderBuffer(kernel, binding: 4, buffer: buffers.renderRectStatic)
     gl.dispatchCompute(kernel,
                        groupsX: GLuint((Self.maxViews * Self.tilemapRes * Self.tilemapRes + 63) / 64),
                        groupsY: 1, groupsZ: 1)

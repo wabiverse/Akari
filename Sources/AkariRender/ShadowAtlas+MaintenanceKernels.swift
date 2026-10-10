@@ -409,6 +409,130 @@ extension Akari.ShadowAtlas
     }
     """
 
+  /// The tilemap slot, first tile and side of one render view's tiles.
+  static let viewTilesBody = """
+      int slot, base, side;
+      if (view < \(maxDirectionalTilemaps))
+      {
+        slot = slot_of_view[view];
+        base = slot * \(tilesPerTilemap);
+        side = \(tilemapRes);
+      }
+      else
+      {
+        int pv = view - \(punctualViewBase);
+        int lod = pv % \(lodCount);
+        int size = \(tilemapRes);
+        base = (pv / \(lodCount)) * \(tilesPerTilemap);
+        for (int l = 0; l < lod; ++l) { base += size * size; size >>= 1; }
+        slot = pv / \(lodCount);
+        side = size;
+      }
+      uint resident = \(flagIsUsed | flagIsAllocated)u;
+      uint stale = \(flagDoUpdate | flagDynamicUpdate)u;
+      uint full = \(flagDoUpdate)u;
+    """
+
+  static let countDirtyBody = """
+      int view = int(gid);
+      if (view >= \(maxViews)) return;
+      \(viewTilesBody)
+      uint n = 0u;
+      if (slot >= 0)
+      {
+        for (int i = 0; i < side * side; ++i)
+        {
+          uint packed = tiles_buf[base + i];
+          if ((packed & resident) == resident && (packed & full) != 0u) ++n;
+        }
+      }
+      dirty_count[view] = n;
+    """
+
+  static let countDirtyGLSL = """
+    #version 430
+    layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+    layout(std430, binding = 0) buffer Tiles { uint tiles_buf[]; };
+    layout(std430, binding = 1) buffer SlotOfView { int slot_of_view[]; };
+    layout(std430, binding = 2) buffer DirtyCount { uint dirty_count[]; };
+    void main()
+    {
+      uint gid = gl_GlobalInvocationID.x;
+      \(countDirtyBody)
+    }
+    """
+
+  static let countDirtyMSL = """
+    #include <metal_stdlib>
+    using namespace metal;
+    kernel void compute_main(device uint* tiles_buf [[buffer(1)]],
+                             device int* slot_of_view [[buffer(2)]],
+                             device uint* dirty_count [[buffer(3)]],
+                             uint3 gid3 [[thread_position_in_grid]])
+    {
+      uint gid = gid3.x;
+      \(countDirtyBody)
+    }
+    """
+
+  /// Hands the frame's tile budget out coarsest level
+  /// first, directional then punctual per level.
+  static let allotBudgetBody = """
+      if (gid != 0u) return;
+      int directional = 0;
+      for (int v = 0; v < \(maxDirectionalTilemaps); ++v)
+      {
+        if (slot_of_view[v] >= 0) directional = v + 1;
+      }
+      for (int v = 0; v < \(maxViews); ++v) allowance[v] = 0u;
+      uint remaining = \(renderTileBudget)u;
+      int ranks = max(directional, \(lodCount));
+      for (int r = 0; r < ranks; ++r)
+      {
+        int dv = directional - 1 - r;
+        if (dv >= 0)
+        {
+          uint a = min(dirty_count[dv], remaining);
+          allowance[dv] = a;
+          remaining -= a;
+        }
+        if (r >= \(lodCount)) continue;
+        for (int s = 0; s < \(maxPunctualTilemaps); ++s)
+        {
+          int pv = \(punctualViewBase) + s * \(lodCount) + \(lodMax) - r;
+          uint a = min(dirty_count[pv], remaining);
+          allowance[pv] = a;
+          remaining -= a;
+        }
+      }
+    """
+
+  static let allotBudgetGLSL = """
+    #version 430
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+    layout(std430, binding = 0) buffer SlotOfView { int slot_of_view[]; };
+    layout(std430, binding = 1) buffer DirtyCount { uint dirty_count[]; };
+    layout(std430, binding = 2) buffer Allowance { uint allowance[]; };
+    void main()
+    {
+      uint gid = gl_GlobalInvocationID.x;
+      \(allotBudgetBody)
+    }
+    """
+
+  static let allotBudgetMSL = """
+    #include <metal_stdlib>
+    using namespace metal;
+    kernel void compute_main(device int* slot_of_view [[buffer(1)]],
+                             device uint* dirty_count [[buffer(2)]],
+                             device uint* allowance [[buffer(3)]],
+                             uint3 gid3 [[thread_position_in_grid]])
+    {
+      uint gid = gid3.x;
+      \(allotBudgetBody)
+    }
+    """
+
   static let buildRenderViewsBody = """
       int view = int(gid);
       if (view == 0)
@@ -421,42 +545,68 @@ extension Akari.ShadowAtlas
         clear_args_static[2] = 0u;
       }
       if (view >= \(maxViews)) return;
-      uint resident = \(flagIsUsed | flagIsAllocated)u;
-      int slot, base, count, side;
-      if (view < \(maxDirectionalTilemaps))
+      \(viewTilesBody)
+      int lo = 0, hi = side, rows = side;
+      uint allow = allowance[view];
+      if (slot >= 0 && allow < dirty_count[view])
       {
-        slot = slot_of_view[view];
-        base = slot * \(tilesPerTilemap);
-        side = \(tilemapRes);
-        count = side * side;
-      }
-      else
-      {
-        int pv = view - \(punctualViewBase);
-        int lod = pv % \(lodCount);
-        int size = \(tilemapRes);
-        base = (pv / \(lodCount)) * \(tilesPerTilemap);
-        for (int l = 0; l < lod; ++l) { base += size * size; size >>= 1; }
-        slot = pv / \(lodCount);
-        side = size;
-        count = size * size;
+        if (view < \(maxDirectionalTilemaps))
+        {
+          int c = side / 2;
+          uint n = 0u;
+          lo = c; hi = c;
+          for (int r = 1; r <= c; ++r)
+          {
+            for (int k = c - r; k < c + r; ++k)
+            {
+              for (int e = 0; e < 4; ++e)
+              {
+                int x = e == 0 ? k : e == 1 ? k : e == 2 ? c - r : c + r - 1;
+                int y = e == 0 ? c - r : e == 1 ? c + r - 1 : k;
+                if (e >= 2 && (k == c - r || k == c + r - 1)) continue;
+                uint packed = tiles_buf[base + y * side + x];
+                if ((packed & resident) == resident && (packed & full) != 0u) ++n;
+              }
+            }
+            if (n > allow) break;
+            lo = c - r; hi = c + r;
+          }
+        }
+        else
+        {
+          uint n = 0u;
+          rows = 0;
+          for (int y = 0; y < side; ++y)
+          {
+            for (int x = 0; x < side; ++x)
+            {
+              uint packed = tiles_buf[base + y * side + x];
+              if ((packed & resident) == resident && (packed & full) != 0u) ++n;
+            }
+            if (n > allow) break;
+            rows = y + 1;
+          }
+        }
       }
       int x0 = side, y0 = side, x1 = -1, y1 = -1;
       int sx0 = side, sy0 = side, sx1 = -1, sy1 = -1;
       if (slot >= 0)
       {
-        for (int i = 0; i < count; ++i)
+        for (int i = 0; i < side * side; ++i)
         {
-          uint packed = tiles_buf[base + i];
-          if ((packed & resident) != resident || (packed & \(flagDoUpdate | flagDynamicUpdate)u) == 0u) continue;
           int x = i % side, y = i / side;
+          uint packed = tiles_buf[base + i];
+          if ((packed & resident) != resident || (packed & stale) == 0u) continue;
+          bool redraw = (packed & full) != 0u;
+          if (redraw && (x < lo || x >= hi || y < lo || y >= hi || y >= rows)) continue;
           x0 = min(x0, x); y0 = min(y0, y); x1 = max(x1, x); y1 = max(y1, y);
-          if ((packed & \(flagDoUpdate)u) == 0u) continue;
+          if (!redraw) continue;
           sx0 = min(sx0, x); sy0 = min(sy0, y); sx1 = max(sx1, x); sy1 = max(sy1, y);
         }
       }
       bool dirty = x1 >= 0;
-      render_view[view] = dirty ? uint(view < \(maxDirectionalTilemaps) ? slot : view) : 0xFFFFFFFFu;
+      render_view[view] = slot >= 0 && (dirty || dirty_count[view] > 0u)
+        ? uint(view < \(maxDirectionalTilemaps) ? slot : view) : 0xFFFFFFFFu;
       render_rect[view] = dirty ? uint(x0 | (y0 << 5) | (x1 << 10) | (y1 << 15) | (1 << 20)) : 0u;
       render_rect_static[view] = sx1 >= 0 ? uint(sx0 | (sy0 << 5) | (sx1 << 10) | (sy1 << 15) | (1 << 20)) : 0u;
     """
@@ -471,6 +621,8 @@ extension Akari.ShadowAtlas
     layout(std430, binding = 4) buffer RenderRect { uint render_rect[]; };
     layout(std430, binding = 5) buffer RenderRectStatic { uint render_rect_static[]; };
     layout(std430, binding = 6) buffer ClearArgsStatic { uint clear_args_static[]; };
+    layout(std430, binding = 7) buffer DirtyCount { uint dirty_count[]; };
+    layout(std430, binding = 8) buffer Allowance { uint allowance[]; };
     void main()
     {
       uint gid = gl_GlobalInvocationID.x;
@@ -488,6 +640,8 @@ extension Akari.ShadowAtlas
                              device uint* render_rect [[buffer(5)]],
                              device uint* render_rect_static [[buffer(6)]],
                              device uint* clear_args_static [[buffer(7)]],
+                             device uint* dirty_count [[buffer(8)]],
+                             device uint* allowance [[buffer(9)]],
                              uint3 gid3 [[thread_position_in_grid]])
     {
       uint gid = gid3.x;

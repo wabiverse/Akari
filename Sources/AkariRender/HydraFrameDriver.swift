@@ -39,7 +39,7 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
-import CNanocolor
+import Nanocolor
 import Foundation
 import HydraKit
 import OpenUSDKit
@@ -162,9 +162,9 @@ public extension Akari
 
       // display sRGB in, akari composites before hydra's color correction.
       let c = engine.selectionOutlineColor
-      let rgb = nc_ref_TransformColor(nc_ref_GetNamedColorSpace("lin_rec709_scene"),
-                                      nc_ref_GetNamedColorSpace("srgb_rec709_scene"),
-                                      nc_ref_RGB(r: c[0], g: c[1], b: c[2]))
+      let rgb = transformColor(to: namedColorSpace("lin_rec709_scene")!,
+                               from: namedColorSpace("srgb_rec709_scene")!,
+                               RGB(r: c[0], g: c[1], b: c[2]))
       let color = SIMD4(rgb.r, rgb.g, rgb.b, c[3])
       akari.selection = selectionLabels.map
       {

@@ -99,7 +99,7 @@ public extension Akari
                                projection: ctx.camera.projection,
                                unjitteredProjection: ctx.unjitteredCamera.projection,
                                selection: ctx.selection)
-      ctx.labfx.cullStaticGeometry(viewProjection: ctx.camera.projection * ctx.camera.view)
+      ctx.labfx.cullStaticGeometry(projection: ctx.camera.projection, view: ctx.camera.view)
 
       ctx.labfx.renderGbufferEarly()
     }

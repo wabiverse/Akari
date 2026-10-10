@@ -53,6 +53,15 @@ public enum RenderQuality: String, Sendable, CaseIterable
   case cinematic
 }
 
+/// Brings the scene from its render resolution up to the target's.
+public enum Upscaler: String, Sendable, CaseIterable
+{
+  /// TAA resolve, or a bilinear stretch with TAA off.
+  case taaResolve
+  /// MetalFX temporal upscaling with TAA on, spatial with it off.
+  case metalFX
+}
+
 /// The complete description of how Akari should render a frame.
 public struct RenderSettings: Sendable
 {
@@ -78,6 +87,19 @@ public struct RenderSettings: Sendable
   public var renderSamples: Int = 64
   /// GPU backend (`Metal`, `OpenGL`, `Vulkan`).
   public var backend: Akari.GPU.Backend = .preferredForCurrentPlatform
+  /// Upscales resolution with the selected technique.
+  public var upscaler: Upscaler = .metalFX
+  /// Resolution multiplier and downsamples, 1 is off.
+  public var supersampling: Float = 1
+
+  /// The supersampling factors, per axis: 1.78x, 2.25x and 4x the pixels.
+  public static let supersamplingSteps: [Float] = [1, 4 / 3, 1.5, 2]
+
+  /// `factor` snapped to the nearest of `supersamplingSteps`.
+  public static func supersamplingStep(_ factor: Float) -> Float
+  {
+    supersamplingSteps.min { abs($0 - factor) < abs($1 - factor) } ?? 1
+  }
 
   public init()
   {}
@@ -113,7 +135,7 @@ public struct RenderSettings: Sendable
     switch quality
     {
       case .low:
-        [.imageBasedLighting, .shadowMaps, .temporalAA]
+        [.imageBasedLighting, .shadowMaps, .temporalAA, .dynamicResolution]
       case .medium:
         .game60fps
       case .high:
@@ -135,6 +157,19 @@ extension RenderQuality: CustomStringConvertible
       case .medium: "Medium"
       case .high: "High"
       case .cinematic: "Cinematic"
+    }
+  }
+}
+
+extension Upscaler: CustomStringConvertible
+{
+  /// Human label for UI (pickers, HUD).
+  public var description: String
+  {
+    switch self
+    {
+      case .taaResolve: "TAA Resolve"
+      case .metalFX: "MetalFX"
     }
   }
 }

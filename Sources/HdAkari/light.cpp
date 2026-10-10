@@ -53,14 +53,17 @@
 # include <pxr/base/vt/value.h>
 #endif
 
+#include <cmath>
+
 #include "HdAkari/light.h"
 #include "HdAkari/renderParam.h"
 #include "HdAkari/scene.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-HdAkariLight::HdAkariLight(SdfPath const &id)
-  : HdLight(id)
+HdAkariLight::HdAkariLight(SdfPath const &id, TfToken const &type)
+  : HdLight(id),
+    _type(type)
 {}
 
 HdAkariLight::~HdAkariLight() = default;
@@ -115,6 +118,18 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
   if (radiusVal.IsHolding<float>())
   {
     data.radius = radiusVal.UncheckedGet<float>();
+  }
+
+  // cylinders and disks shade as the sphere of the same emitting area.
+  if (_type == HdPrimTypeTokens->cylinderLight)
+  {
+    const VtValue lengthVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->length);
+    const float length = lengthVal.IsHolding<float>() ? lengthVal.UncheckedGet<float>() : 1.0f;
+    data.radius = std::sqrt(data.radius * length * 0.5f);
+  }
+  else if (_type == HdPrimTypeTokens->diskLight)
+  {
+    data.radius *= 0.5f;
   }
 
   data.dataRevision = ++_dataGeneration;

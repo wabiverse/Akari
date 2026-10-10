@@ -81,7 +81,7 @@ extension Akari.LabFXEngine
     var capture: LabGLCaptureBuffer?
     let recorder = Akari.Geom.Recorder(keepsTopology: false)
     var batch = BatchSummary()
-    var recordedIDs: Set<String> = []
+    var recordedIDs: Set<UInt64> = []
     var needsRecord = true
     var projection = Akari.Matrix4.identity
     var sceneProjection = Akari.Matrix4.identity
@@ -143,18 +143,26 @@ extension Akari.LabFXEngine
   /// Rerecords the selected static meshes when the selection or which of
   /// them are static changed. The animated ones draw from the deformed
   /// capture, and select all draws the scene captures instead.
-  func recordOutline(_ meshes: [Akari.Geom.Recorder.RawMesh])
+  func recordOutline(changed: [Akari.Geom.Recorder.RawMesh], removed: [UInt64])
   {
     guard let capture = outline.capture, outline.passesActive else { return }
     guard !outline.all else { outline.needsRecord = false; return }
 
-    let selected = meshes.filter
-    { mesh in
-      Int(mesh.primId) < outline.labels.count && mesh.primId >= 0 && outline.labels[Int(mesh.primId)] > 0
-        && !geometry.animated.contains(mesh.key)
+    func isSelected(_ primId: Int32) -> Bool
+    {
+      Int(primId) < outline.labels.count && primId >= 0 && outline.labels[Int(primId)] > 0
     }
-    let ids = Set(selected.map(\.id))
+    guard
+      outline.needsRecord
+        || changed.contains(where: { isSelected($0.primId) })
+        || removed.contains(where: outline.recordedIDs.contains)
+    else { return }
+
+    let ids = Set(geometry.primIds.compactMap { key, primId in
+      isSelected(primId) && !geometry.animated.contains(key) ? key : nil
+    })
     guard outline.needsRecord || ids != outline.recordedIDs else { return }
+    let selected = ids.compactMap { geometry.meshes[$0] }
 
     outline.needsRecord = false
     outline.recordedIDs = ids

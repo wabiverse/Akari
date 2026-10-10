@@ -340,7 +340,7 @@ extension Akari.ShadowAtlas
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
       float footprint = max(u_params.x * distToCamera, 1e-6) / distanceToLight;
       float ratio = clamp(shadowPixelRadius / max(footprint, 1e-8), 0.0, 1.0);
-      int level = int(clamp(-log2(max(ratio, 1e-8)), 0.0, float(\(lodMax))));
+      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)), 0.0, float(\(lodMax))));
       int tilesPerSide = \(tilemapRes) >> level;
       vec2 uv = clamp(fL.xy / max(abs(fL.z), 1e-6) * 0.5 + 0.5, 0.0, 0.999999);
       ivec2 tile = clamp(ivec2(uv * float(tilesPerSide)), ivec2(0), ivec2(tilesPerSide - 1));
@@ -412,7 +412,7 @@ extension Akari.ShadowAtlas
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
       float footprint = max(filmFootprint, 1e-6) / distanceToLight;
       float ratio = clamp(shadowPixelRadius / max(footprint, 1e-8), 0.0, 1.0);
-      int level = int(clamp(-log2(max(ratio, 1e-8)), 0.0, float(\(lodMax))));
+      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)), 0.0, float(\(lodMax))));
       int tilesPerSide = \(tilemapRes) >> level;
       float2 uv = clamp(fL.xy / max(abs(fL.z), 1e-6) * 0.5 + 0.5, 0.0, 0.999999);
       int2 tile = clamp(int2(uv * float(tilesPerSide)), int2(0), int2(tilesPerSide - 1));
@@ -645,7 +645,7 @@ extension Akari.ShadowAtlas
       vec3 fL = akpFaceLocal(face, lL);
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
       float ratio = clamp(shadowPixelRadius / max(max(footprint, 1e-6) / distanceToLight, 1e-8), 0.0, 1.0);
-      int level = int(clamp(-log2(max(ratio, 1e-8)), 0.0, float(\(lodMax))));
+      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)), 0.0, float(\(lodMax))));
       int tilesPerSide = \(tilemapRes) >> level;
       vec2 uv = clamp(fL.xy / max(abs(fL.z), 1e-6) * 0.5 + 0.5, 0.0, 0.999999);
       ivec2 tile = clamp(ivec2(uv * float(tilesPerSide)), ivec2(0), ivec2(tilesPerSide - 1));
@@ -760,7 +760,7 @@ extension Akari.ShadowAtlas
       float3 fL = akpFaceLocal(face, lL);
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
       float ratio = clamp(shadowPixelRadius / max(max(footprint, 1e-6) / distanceToLight, 1e-8), 0.0, 1.0);
-      int level = int(clamp(-log2(max(ratio, 1e-8)), 0.0, float(\(lodMax))));
+      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)), 0.0, float(\(lodMax))));
       int tilesPerSide = \(tilemapRes) >> level;
       float2 uv = clamp(fL.xy / max(abs(fL.z), 1e-6) * 0.5 + 0.5, 0.0, 0.999999);
       int2 tile = clamp(int2(uv * float(tilesPerSide)), int2(0), int2(tilesPerSide - 1));

@@ -52,7 +52,7 @@ public extension Akari.LabFXEngine
   ///   - settings: the frame's render settings.
   func updateLightProbes(renderParam: Pixar.HdAkariRenderParam, settings: RenderSettings)
   {
-    let captures = geometry.captures
+    let captures = geometry.shadowCaptures
     guard
       !captures.isEmpty,
       let sceneBounds,

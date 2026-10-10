@@ -60,7 +60,7 @@ class HdAkariLight final : public HdLight
 {
 public:
   HDAKARI_API
-  explicit HdAkariLight(SdfPath const &id);
+  HdAkariLight(SdfPath const &id, TfToken const &type);
 
   ~HdAkariLight() override;
 
@@ -76,6 +76,8 @@ public:
   void Finalize(HdRenderParam *renderParam) override;
 
 private:
+  TfToken _type;
+
   HdAkariLight(const HdAkariLight &) = delete;
   HdAkariLight &operator=(const HdAkariLight &) = delete;
 

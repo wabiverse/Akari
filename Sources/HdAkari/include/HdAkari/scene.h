@@ -70,6 +70,8 @@
 #include <mutex>
 #include <atomic>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -169,6 +171,14 @@ inline bool HdAkariSameTopology(VtVec3iArray const &tris, VtVec3iArray const &ot
 /// threads), the render pass reads a snapshot to draw. One per render
 /// delegate from the render param.
 ///
+/// The meshes Hydra touched since the last drain, the ones still
+/// visible, and the path keys of the ones removed or hidden.
+struct HdAkariMeshChanges
+{
+  std::vector<HdAkariMeshData> updated;
+  std::vector<uint64_t> removed;
+};
+
 class SWIFT_SHARED_REFERENCE(HdAkariSceneRetain, HdAkariSceneRelease)
 HdAkariScene
 {
@@ -179,6 +189,7 @@ public:
     auto it = _meshes.find(data.id);
     bool geometryChanged = (it == _meshes.end())
                         || (data.dataRevision != it->second.dataRevision);
+    _dirtyMeshes.insert(data.id);
     _meshes[data.id] = std::move(data);
     if (geometryChanged) {
       _revision.fetch_add(1, std::memory_order_relaxed);
@@ -209,6 +220,7 @@ public:
     m.metallic = metallic;
     m.visible = visible;
     if (changed) {
+      _dirtyMeshes.insert(id);
       _revision.fetch_add(1, std::memory_order_relaxed);
     }
   }
@@ -224,6 +236,7 @@ public:
     if (m.transform != xf || m.visible != visible) {
       m.transform = xf;
       m.visible = visible;
+      _dirtyMeshes.insert(id);
       _revision.fetch_add(1, std::memory_order_relaxed);
     }
     return true;
@@ -245,6 +258,7 @@ public:
     m.transform = xf;
     m.visible = visible;
     m.dataRevision = dataRevision;
+    _dirtyMeshes.insert(id);
     _revision.fetch_add(1, std::memory_order_relaxed);
 
     return true;
@@ -267,6 +281,7 @@ public:
   {
     std::lock_guard<std::mutex> lock(_mutex);
     if (_meshes.erase(id) > 0) {
+      _dirtyMeshes.insert(id);
       _revision.fetch_add(1, std::memory_order_relaxed);
     }
   }
@@ -300,6 +315,25 @@ public:
         out.push_back(kv.second);
       }
     }
+    return out;
+  }
+
+  /// Takes the meshes changed since the last call, so a
+  /// frame copies what moved instead of the whole scene.
+  HdAkariMeshChanges DrainMeshChanges()
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    HdAkariMeshChanges out;
+    out.updated.reserve(_dirtyMeshes.size());
+    for (SdfPath const &id : _dirtyMeshes) {
+      auto it = _meshes.find(id);
+      if (it != _meshes.end() && it->second.visible) {
+        out.updated.push_back(it->second);
+      } else {
+        out.removed.push_back(HdAkariPathKey(id));
+      }
+    }
+    _dirtyMeshes.clear();
     return out;
   }
 
@@ -400,6 +434,7 @@ public:
 private:
   mutable std::mutex _mutex;
   std::unordered_map<SdfPath, HdAkariMeshData, SdfPath::Hash> _meshes;
+  std::unordered_set<SdfPath, SdfPath::Hash> _dirtyMeshes;
   std::atomic<uint64_t> _revision{0};
   std::unordered_map<SdfPath, HdAkariLightData, SdfPath::Hash> _lights;
   std::atomic<uint64_t> _lightRevision{0};

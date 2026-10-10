@@ -69,6 +69,9 @@ struct AkariDemo: App
   let engine: Akari.RenderEngine
 
   let driver: any Akari.HydraFrameDriver
+  let settings: HUDState
+  
+  @State var scene: Kraken.SceneFile
 
   init()
   {
@@ -79,41 +82,44 @@ struct AkariDemo: App
     engine = Akari.RenderEngine(settings: RenderSettings(quality: .high))
     registerAkariRenderer(engine: engine)
 
-    let stage = AppUtils.openOrCreateStage()
+    let newScene: (stage: UsdStage, fileURL: URL) = AppUtils.openOrCreateStage()
 
-    engine.labfx.setStageUpAxis(isZUp: UsdGeom.getUpAxis(for: stage) == .z)
-    engine.labfx.setStageMetersPerUnit(UsdGeom.getMetersPerUnit(for: stage))
+    engine.labfx.setStageUpAxis(isZUp: UsdGeom.getUpAxis(for: newScene.stage) == .z)
+    engine.labfx.setStageMetersPerUnit(UsdGeom.getMetersPerUnit(for: newScene.stage))
 
     // a point light on the front of ALab's characters, from the shot camera's side.
-    if stage.getPrim(at: "/root/stoat").isValid
+    if newScene.stage.getPrim(at: "/root/stoat").isValid
     {
-      stage.SetEditTarget(Pixar.UsdEditTarget(stage.GetSessionLayer(), Pixar.SdfLayerOffset(offset: 0, scale: 1)))
+      newScene.stage.SetEditTarget(Pixar.UsdEditTarget(newScene.stage.GetSessionLayer(), Pixar.SdfLayerOffset(offset: 0, scale: 1)))
 
-      let light = UsdLux.SphereLight.define(stage, path: "/root/akari_key_light")
+      let light = UsdLux.SphereLight.define(newScene.stage, path: "/root/akari_key_light")
       light.CreateRadiusAttr(Pixar.VtValue(Float(2)), false)
       light.CreateIntensityAttr(Pixar.VtValue(Float(50)), false)
       light.CreateColorAttr(Pixar.VtValue(Pixar.GfVec3f(1, 0.85, 0.7)), false)
       light.addTranslateOp(precision: .double).set(Pixar.GfVec3d(52, 126, 77))
 
-      stage.SetEditTarget(Pixar.UsdEditTarget(stage.getRootLayer(), Pixar.SdfLayerOffset(offset: 0, scale: 1)))
+      newScene.stage.SetEditTarget(Pixar.UsdEditTarget(newScene.stage.getRootLayer(), Pixar.SdfLayerOffset(offset: 0, scale: 1)))
     }
 
-    hydra = Hydra.RenderEngine(stage: stage,
+    hydra = Hydra.RenderEngine(stage: newScene.stage,
                                selectionColor: Pixar.GfVec4f(1.0, Float(0xA0) / 255, Float(0x28) / 255, 1.0),
                                rendererPluginId: Tf.Token(Akari.rendererPluginId))
-    driver = Akari.FrameDriver(stage: stage, hydra: hydra, akari: engine)
+    driver = Akari.FrameDriver(stage: newScene.stage, hydra: hydra, akari: engine)
+    settings = HUDState(engine: engine)
+    scene = Kraken.SceneFile(fileURL: newScene.fileURL)
 
     print("[akari] first light - renderer = \(Akari.rendererPluginId)")
   }
 
   var body: some Scene
   {
-    WindowGroup("Akari - Hydra Render Engine (First Light)")
+    WindowGroup("\(scene.fileURL.lastPathComponent) ∙ Kraken (Akari v\(Akari.version))")
     {
-      Hydra.Viewport(engine: hydra)
-        .frame(minWidth: 900, minHeight: 600)
-        .overlay(alignment: .topLeading) { HUD(engine: engine, driver: driver) }
-        .overlay(alignment: .topTrailing) { OutlineButton(engine: engine, hydra: hydra).padding(16) }
+      Workspace(engine: engine,
+                hydra: hydra,
+                driver: driver,
+                settings: settings,
+                sceneName: scene.name)
         .environment(\.colorScheme, .dark)
     }
   }

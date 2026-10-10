@@ -131,12 +131,13 @@ public extension Akari
     var directionalHistory = DirectionalHistory()
     var punctualHistory = PunctualHistory()
     var lastSceneRevision: UInt64 = .max
-    var lastRenderSceneRevision: UInt64 = .max
+    /// This frame's fit, made before the usage tags so they land on the tiles it draws.
+    var frameFit = FrameFit()
     var casterMotion = CasterMotion()
-    /// Decided by `markPageUsage` for `casterRedrawRevision`, read by `render`.
     var casterRedraw = CasterRedraw.none
-    var casterRedrawRevision: UInt64 = .max
     var lastStaticGeneration: UInt64 = .max
+    /// The material atlas, whose opacity lets light through the static casters.
+    public var materialAtlas: GLuint = 0
 
     public init()
     {}
@@ -146,13 +147,16 @@ public extension Akari
       release()
     }
 
-    /// Dispatches the whole GPU pipeline.
+    /// Fits this frame's views, then tags and allocates the pages it samples.
     public func markPageUsage(gbufferPosition: GLuint,
                               camera: Camera,
                               screenWidth: Int,
                               screenHeight: Int,
-                              settings _: ShadowSettings,
+                              lightDirection: SIMD3<Float>,
+                              sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
+                              settings: ShadowSettings,
                               lights: [Akari.Lux.PointLight],
+                              punctualFarDistance: Float,
                               sceneRevision: UInt64,
                               casterBounds: [Float],
                               casterKeys: [UInt64],
@@ -169,6 +173,9 @@ public extension Akari
       ringCursor = (ringCursor + 1) % Self.bufferRing
       let lightCount = min(lights.count, Self.maxPunctualLights)
 
+      fitViews(camera: camera, lightDirection: lightDirection, sceneBounds: sceneBounds,
+               settings: settings, lights: lights, punctualFarDistance: punctualFarDistance)
+
       var punctualDirty = punctualHistory.pendingDirty
       punctualHistory.pendingDirty = 0
 
@@ -177,7 +184,6 @@ public extension Akari
       if sceneChanged
       {
         casterRedraw = findCasterRedraw(casterBounds: casterBounds, casterKeys: casterKeys)
-        casterRedrawRevision = sceneRevision
         // the static pages hold the old static capture, only a full redraw replaces them.
         if staticGeneration != lastStaticGeneration
         {
@@ -187,7 +193,12 @@ public extension Akari
         if casterRedraw == .all || kernels.tagUpdatePunctual == 0 { punctualDirty = -1 }
       }
 
+      frameFit.castersMoved = sceneChanged
+      frameFit.redraw = sceneChanged ? casterRedraw : .none
+      frameFit.forcePunctual = frameFit.forcePunctual || frameFit.redraw.isNeeded
+
       dispatchBeginFrame(dirty: punctualDirty)
+      dispatchTilemapShift(forceFullShift: frameFit.redraw == .all)
       if sceneChanged, case let .boxes(count) = casterRedraw
       {
         dispatchTagUpdatePunctual(boxCount: count, lights: lights, lightCount: lightCount)
@@ -225,26 +236,14 @@ public extension Akari
       dispatchPageAllocation()
     }
 
-    /// Fits every active tilemap and draws its stale views.
-    public func render(staticCaptures: [OpaquePointer],
-                       dynamicCaptures: [OpaquePointer],
-                       dynamicDrawBounds: [[Float]?],
-                       camera: Camera,
-                       lightDirection: SIMD3<Float>,
-                       sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
-                       casterBounds: [Float],
-                       sceneRevision: UInt64,
-                       frameIndex _: UInt64,
-                       settings: ShadowSettings,
-                       lights: [Akari.Lux.PointLight],
-                       punctualFarDistance: Float) -> [View]
+    /// Fits every active tilemap and lays out its views, before the usage tags.
+    private func fitViews(camera: Camera,
+                          lightDirection: SIMD3<Float>,
+                          sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
+                          settings: ShadowSettings,
+                          lights: [Akari.Lux.PointLight],
+                          punctualFarDistance: Float)
     {
-      guard ensureResources() else { return [] }
-
-      let castersMoved = sceneRevision != lastRenderSceneRevision
-      lastRenderSceneRevision = sceneRevision
-      let redraw = castersMoved ? (casterRedrawRevision == sceneRevision ? casterRedraw : .all) : .none
-
       let corners = Self.sceneCorners(sceneBounds)
       let technique = Self.resolveTechnique(camera: camera)
 
@@ -294,38 +293,58 @@ public extension Akari
                        inverseView: inverseView)
       punctualHistory.update(punctualFaces)
       directionalHistory.updateShifts(directional, slots: directionalSlots)
-      dispatchTilemapShift(forceFullShift: redraw == .all)
-
       uploadLevelParams(directional: directional, directionalSlots: directionalSlots,
                         inverseView: inverseView)
+
+      frameFit = FrameFit(directional: directional,
+                          slots: directionalSlots,
+                          punctualFaces: punctualFaces,
+                          lightDirection: lightDirection,
+                          cameraWorld: SIMD3(inverseView[3, 0], inverseView[3, 1], inverseView[3, 2]),
+                          sunChanged: sunChanged,
+                          forcePunctual: camera.view.simd != directionalHistory.view.simd
+                            || punctualHistory.invalidated,
+                          isCurrent: true)
+      punctualHistory.invalidated = punctualHistory.pendingDirty != 0
+
+      directionalHistory.slots = directionalSlots
+      directionalHistory.view = camera.view
+    }
+
+    /// Draws the stale views of what `markPageUsage` fit this frame.
+    public func render(staticCaptures: [OpaquePointer],
+                       dynamicCaptures: [OpaquePointer],
+                       dynamicDrawBounds: [[Float]?],
+                       casterBounds: [Float]) -> [View]
+    {
+      guard ensureResources(), frameFit.isCurrent else { return [] }
+      frameFit.isCurrent = false
+
+      let directional = frameFit.directional
+      let directionalSlots = frameFit.slots
+      let punctualFaces = frameFit.punctualFaces
+      let redraw = frameFit.redraw
+
       dispatchTileMapMaintenance(casterBounds: casterBounds,
                                  slotCount: directionalSlots.isEmpty ? 0 : Self.maxDirectionalTilemaps,
-                                 lightZ: lightDirection,
-                                 cameraWorld: SIMD3(inverseView[3, 0],
-                                                    inverseView[3, 1],
-                                                    inverseView[3, 2]),
-                                 castersMoved: castersMoved,
+                                 lightZ: frameFit.lightDirection,
+                                 cameraWorld: frameFit.cameraWorld,
+                                 castersMoved: frameFit.castersMoved,
                                  redraw: redraw)
-      dispatchPageTable()
       dispatchSelectViews()
+      dispatchPageTable()
 
-      let forceDirectional = sunChanged || redraw.isNeeded
-      let forcePunctual = camera.view.simd != directionalHistory.view.simd || punctualHistory.invalidated
-        || redraw.isNeeded
-      punctualHistory.invalidated = punctualHistory.pendingDirty != 0
+      let forceDirectional = frameFit.sunChanged || redraw.isNeeded
 
       let drawn = drawViews(staticCaptures: staticCaptures, dynamicCaptures: dynamicCaptures,
                             dynamicDrawBounds: dynamicDrawBounds,
                             directional: directional,
                             directionalSlots: directionalSlots, punctualFaces: punctualFaces,
                             forced: forceDirectional ? Set(directionalSlots) : [],
-                            forcePunctual: forcePunctual)
+                            forcePunctual: frameFit.forcePunctual)
 
       retireDrawn(views: drawn)
       if !drawn.isEmpty { dispatchPageTable() }
-
-      directionalHistory.slots = directionalSlots
-      directionalHistory.view = camera.view
 
       return directional.map { View(matrix: $0.viewProjection, splitFar: $0.splitFar) }
     }

@@ -100,17 +100,27 @@ public extension Akari.Geom
     private var cursor = 0
     /// The vertex buffer compute writes, owned by the capture once recorded.
     private var vertices: GLuint = 0
+    /// One world space vertex per point, drawn through the triangles' own indices,
+    /// for the shadows, which only need positions and so skip the per corner expansion.
+    public private(set) var shadowCapture: OpaquePointer?
+    private var shadowVertices: GLuint = 0
 
     private var faceKernel: GLuint = 0
     private var pointKernel: GLuint = 0
     private var emitKernel: GLuint = 0
+    private var shadowKernel: GLuint = 0
+    private var settleKernel: GLuint = 0
+    /// The vertices hold last frame's positions, which become this frame's previous ones.
+    private var hasHistory = false
+    /// The previous positions already match the current ones.
+    private var settled = true
 
     public init() {}
 
     deinit
     {
       releaseBuffers()
-      for kernel in [faceKernel, pointKernel, emitKernel] where kernel != 0
+      for kernel in [faceKernel, pointKernel, emitKernel, settleKernel] where kernel != 0
       {
         gl.deleteComputeShader(kernel)
       }
@@ -119,23 +129,23 @@ public extension Akari.Geom
     /// Whether `meshes` need relaying out (other meshes, or one's triangles changed).
     public func needsRebuild(_ meshes: [Recorder.RawMesh]) -> Bool
     {
-      let meshes = Self.unique(meshes)
-      guard meshes.count == inputs.count else { return true }
-      for mesh in meshes
+      var seen = Set<UInt64>(minimumCapacity: meshes.count)
+      for i in meshes.indices where seen.insert(meshes[i].key).inserted
       {
+        let key = meshes[i].key
         guard
-          let old = inputs[mesh.key],
-          old.flipWinding == mesh.flipWinding,
-          old.pointCount == mesh.points.size()
+          let old = inputs[key],
+          old.flipWinding == meshes[i].flipWinding,
+          old.pointCount == meshes[i].points.size()
         else { return true }
-        guard old.topologyRevision != mesh.topologyRevision else { continue }
+        guard old.topologyRevision != meshes[i].topologyRevision else { continue }
 
         // a resync can bump the revision with the same triangles, only a real change relays out.
-        guard Pixar.HdAkariSameTopology(old.tris, mesh.tris, old.uvs, mesh.uvs) else { return true }
-        inputs[mesh.key]?.topologyRevision = mesh.topologyRevision
-        if let cached = topologies[mesh.key] { topologies[mesh.key] = (mesh.topologyRevision, cached.topology) }
+        guard Pixar.HdAkariSameTopology(old.tris, meshes[i].tris, old.uvs, meshes[i].uvs) else { return true }
+        inputs[key]?.topologyRevision = meshes[i].topologyRevision
+        if let cached = topologies[key] { topologies[key] = (meshes[i].topologyRevision, cached.topology) }
       }
-      return false
+      return seen.count != inputs.count
     }
 
     /// Lays `meshes` out and records their draws into `capture`, one per mesh.
@@ -145,6 +155,8 @@ public extension Akari.Geom
       guard ensureKernels() else { return }
       releaseBuffers()
       labgl.captureClear(capture)
+      if shadowCapture == nil { shadowCapture = labgl.captureCreate() }
+      if let shadowCapture { labgl.captureClear(shadowCapture) }
       self.meshes = []
       inputs = Dictionary(meshes.map
       {
@@ -242,7 +254,20 @@ public extension Akari.Geom
         gl.createBuffer(usage: read, sizeBytes: GLsizei(self.meshes.count * Self.xfStride * 4))
       }
 
-      record(into: capture)
+      vertices = record(into: capture, vertexCount: cornerCount, indices: Array(0 ..< Int32(cornerCount)))
+      hasHistory = false
+      settled = true
+      if let shadowCapture
+      {
+        var pointIndices = [Int32](repeating: 0, count: faceCount * 3)
+        for f in 0 ..< faceCount where faceData[f * 4] >= 0
+        {
+          pointIndices[f * 3] = faceData[f * 4]
+          pointIndices[f * 3 + 1] = faceData[f * 4 + 1]
+          pointIndices[f * 3 + 2] = faceData[f * 4 + 2]
+        }
+        shadowVertices = record(into: shadowCapture, vertexCount: pointCount, indices: pointIndices)
+      }
     }
 
     /// Uploads this frame's points and matrices and deforms on the GPU.
@@ -261,7 +286,7 @@ public extension Akari.Geom
         let xfPtr = gl.mapBuffer(transforms[cursor])?.assumingMemoryBound(to: Float.self)
       else { return (nil, [], []) }
 
-      let byID = Dictionary(meshes.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+      let indexOf = Dictionary(meshes.indices.map { (meshes[$0].key, $0) }, uniquingKeysWith: { a, _ in a })
       var casterBounds: [Float] = []
       var casterKeys: [UInt64] = []
       casterBounds.reserveCapacity(self.meshes.count * 6)
@@ -269,21 +294,21 @@ public extension Akari.Geom
 
       for (index, laidOut) in self.meshes.enumerated()
       {
-        guard let mesh = byID[laidOut.key] else { continue }
+        guard let i = indexOf[laidOut.key] else { continue }
         var local = [Float](repeating: 0, count: 6)
-        Pixar.HdAkariCopyPoints(mesh.points, pointPtr + laidOut.pointBase * 3, &local)
+        Pixar.HdAkariCopyPoints(meshes[i].points, pointPtr + laidOut.pointBase * 3, &local)
 
         let xf = xfPtr + index * Self.xfStride
-        let m = mesh.worldMatrix
+        let m = meshes[i].worldMatrix
         for k in 0 ..< 16
         {
           xf[k] = m[k]
         }
         for k in 0 ..< 9
         {
-          xf[16 + k] = mesh.normalMatrix[k]
+          xf[16 + k] = meshes[i].normalMatrix[k]
         }
-        xf[25] = Float(mesh.primId)
+        xf[25] = Float(meshes[i].primId)
 
         var wlo = SIMD3<Float>(repeating: .greatestFiniteMagnitude), whi = -wlo
         for corner in 0 ..< 8
@@ -301,7 +326,7 @@ public extension Akari.Geom
         lo = pointwiseMin(lo, wlo)
         hi = pointwiseMax(hi, whi)
 
-        var key = (14_695_981_039_346_656_037 ^ mesh.dataRevision) &* 1_099_511_628_211
+        var key = (14_695_981_039_346_656_037 ^ meshes[i].dataRevision) &* 1_099_511_628_211
         for value in m
         {
           key = (key ^ UInt64(value.bitPattern)) &* 1_099_511_628_211
@@ -330,7 +355,9 @@ public extension Akari.Geom
       gl.setComputeShaderBuffer(pointKernel, binding: 3, buffer: pointNormals)
       gl.dispatchCompute(pointKernel, groupsX: GLuint((pointCount + 63) / 64), groupsY: 1, groupsZ: 1)
 
-      setCount(emitKernel, cornerCount)
+      setCount(emitKernel, cornerCount, flag: hasHistory)
+      hasHistory = true
+      settled = false
       gl.setComputeShaderBuffer(emitKernel, binding: 0, buffer: corners)
       gl.setComputeShaderBuffer(emitKernel, binding: 1, buffer: uvs)
       gl.setComputeShaderBuffer(emitKernel, binding: 2, buffer: points[cursor])
@@ -340,25 +367,32 @@ public extension Akari.Geom
       gl.setComputeShaderBuffer(emitKernel, binding: 6, buffer: transforms[cursor])
       gl.setComputeShaderBuffer(emitKernel, binding: 7, buffer: vertices)
       gl.dispatchCompute(emitKernel, groupsX: GLuint((cornerCount + 63) / 64), groupsY: 1, groupsZ: 1)
+
+      guard shadowVertices != 0 else { return }
+      setCount(shadowKernel, pointCount)
+      gl.setComputeShaderBuffer(shadowKernel, binding: 0, buffer: points[cursor])
+      gl.setComputeShaderBuffer(shadowKernel, binding: 1, buffer: pointMesh)
+      gl.setComputeShaderBuffer(shadowKernel, binding: 2, buffer: transforms[cursor])
+      gl.setComputeShaderBuffer(shadowKernel, binding: 3, buffer: shadowVertices)
+      gl.dispatchCompute(shadowKernel, groupsX: GLuint((pointCount + 63) / 64), groupsY: 1, groupsZ: 1)
     }
 
     /// Records one draw per mesh against the vertex buffer compute fills,
     /// the capture takes the vertex and index buffers over at their unmap.
-    private func record(into capture: OpaquePointer)
+    /// Records one draw per mesh, by its corner range of `indices`, against a vertex
+    /// buffer compute fills, the capture takes both over at their unmap. Returns that buffer.
+    private func record(into capture: OpaquePointer, vertexCount: Int, indices indexData: [Int32]) -> GLuint
     {
       let stride = Batch.vertexStride
-      vertices = gl.createBuffer(usage: LGL_BUFFER_VERTEX | LGL_BUFFER_COMPUTE_WRITE | LGL_BUFFER_MAP_WRITE
+      let vertices = gl.createBuffer(usage: LGL_BUFFER_VERTEX | LGL_BUFFER_COMPUTE_WRITE | LGL_BUFFER_MAP_WRITE
         | LGL_BUFFER_CAPTURE_ADOPT,
-        sizeBytes: GLsizei(cornerCount * stride))
+        sizeBytes: GLsizei(max(vertexCount, 1) * stride))
       let indices = gl.createBuffer(usage: LGL_BUFFER_INDEX | LGL_BUFFER_MAP_WRITE | LGL_BUFFER_CAPTURE_ADOPT,
-                                    sizeBytes: GLsizei(cornerCount * 4))
-      guard vertices != 0, indices != 0 else { return }
-      if let p = gl.mapBuffer(indices)?.assumingMemoryBound(to: Int32.self)
+                                    sizeBytes: GLsizei(max(indexData.count, 1) * 4))
+      guard vertices != 0, indices != 0 else { return 0 }
+      if let p = gl.mapBuffer(indices)
       {
-        for i in 0 ..< cornerCount
-        {
-          p[i] = Int32(i)
-        }
+        indexData.withUnsafeBytes { p.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
       }
 
       gl.bindTexture(target: GL_TEXTURE_2D, texture: 0)
@@ -403,6 +437,7 @@ public extension Akari.Geom
       gl.bindBuffer(target: GL_ARRAY_BUFFER, buffer: 0)
       gl.bindBuffer(target: GL_ELEMENT_ARRAY_BUFFER, buffer: 0)
       labgl.captureStop()
+      return vertices
     }
 
     /// The first of any meshes sharing an id.
@@ -423,9 +458,19 @@ public extension Akari.Geom
       return buffer
     }
 
-    private func setCount(_ kernel: GLuint, _ count: Int)
+    /// Zeroes the motion of a frame nothing deformed in, once.
+    public func settle()
     {
-      var params = SIMD4<Int32>(Int32(count), 0, 0, 0)
+      guard !settled, hasHistory, settleKernel != 0, vertices != 0, cornerCount > 0 else { return }
+      settled = true
+      setCount(settleKernel, cornerCount)
+      gl.setComputeShaderBuffer(settleKernel, binding: 0, buffer: vertices)
+      gl.dispatchCompute(settleKernel, groupsX: GLuint((cornerCount + 63) / 64), groupsY: 1, groupsZ: 1)
+    }
+
+    private func setCount(_ kernel: GLuint, _ count: Int, flag: Bool = false)
+    {
+      var params = SIMD4<Int32>(Int32(count), flag ? 1 : 0, 0, 0)
       gl.setComputeShaderUniform(kernel, name: "u_params", type: GL_INT_VEC4, data: &params)
     }
 
@@ -438,7 +483,7 @@ public extension Akari.Geom
         gl.deleteBuffer(buffer)
       }
       faces = 0; corners = 0; uvs = 0; faceStart = 0; faceList = 0; pointMesh = 0
-      faceNormals = 0; pointNormals = 0; points = []; transforms = []; vertices = 0
+      faceNormals = 0; pointNormals = 0; points = []; transforms = []; vertices = 0; shadowVertices = 0
       pointCount = 0; faceCount = 0; cornerCount = 0
     }
 
@@ -449,12 +494,17 @@ public extension Akari.Geom
         faceKernel = gl.precompileComputeShader(name: "akari-deform-faces", glsl: Self.faceGLSL, msl: Self.faceMSL)
         pointKernel = gl.precompileComputeShader(name: "akari-deform-points", glsl: Self.pointGLSL, msl: Self.pointMSL)
         emitKernel = gl.precompileComputeShader(name: "akari-deform-emit", glsl: Self.emitGLSL, msl: Self.emitMSL)
-        for kernel in [faceKernel, pointKernel, emitKernel]
+        settleKernel = gl.precompileComputeShader(name: "akari-deform-settle", glsl: Self.settleGLSL, msl: Self.settleMSL)
+        shadowKernel = gl.precompileComputeShader(name: "akari-deform-shadow", glsl: Self.shadowGLSL, msl: Self.shadowMSL)
+        for kernel in [faceKernel, pointKernel, emitKernel, shadowKernel, settleKernel]
         {
           gl.setComputeShaderThreadgroupSize(kernel, x: 64, y: 1, z: 1)
         }
       }
-      return [faceKernel, pointKernel, emitKernel].allSatisfy { $0 != 0 && gl.waitComputeShader($0) != 0 }
+      return [faceKernel, pointKernel, emitKernel, shadowKernel, settleKernel].allSatisfy
+      {
+        $0 != 0 && gl.waitComputeShader($0) != 0
+      }
     }
   }
 }
@@ -508,20 +558,64 @@ extension Akari.Geom.Deformer
       VEC4 fn = face_normals[c.y];
       VEC3 n = (pn.w > 0.5 || fn.w <= 0.0) ? pn.xyz : fn.xyz;
       int o = int(gid) * 14;
-      out_verts[o + 0] = xf[base + 0] * lp.x + xf[base + 4] * lp.y + xf[base + 8] * lp.z + xf[base + 12];
-      out_verts[o + 1] = xf[base + 1] * lp.x + xf[base + 5] * lp.y + xf[base + 9] * lp.z + xf[base + 13];
-      out_verts[o + 2] = xf[base + 2] * lp.x + xf[base + 6] * lp.y + xf[base + 10] * lp.z + xf[base + 14];
+      VEC3 wp = VEC3(xf[base + 0] * lp.x + xf[base + 4] * lp.y + xf[base + 8] * lp.z + xf[base + 12],
+                     xf[base + 1] * lp.x + xf[base + 5] * lp.y + xf[base + 9] * lp.z + xf[base + 13],
+                     xf[base + 2] * lp.x + xf[base + 6] * lp.y + xf[base + 10] * lp.z + xf[base + 14]);
+      VEC3 prev = PARAMS.y != 0 ? VEC3(out_verts[o + 0], out_verts[o + 1], out_verts[o + 2]) : wp;
+      out_verts[o + 0] = wp.x;
+      out_verts[o + 1] = wp.y;
+      out_verts[o + 2] = wp.z;
       out_verts[o + 3] = 1.0;
       out_verts[o + 4] = xf[base + 25];
-      out_verts[o + 5] = 0.0;
-      out_verts[o + 6] = 0.0;
-      out_verts[o + 7] = 1.0;
+      out_verts[o + 5] = prev.x;
+      out_verts[o + 6] = prev.y;
+      out_verts[o + 7] = prev.z;
       out_verts[o + 8] = uvs[gid].x;
       out_verts[o + 9] = uvs[gid].y;
       out_verts[o + 10] = xf[base + 16] * n.x + xf[base + 17] * n.y + xf[base + 18] * n.z;
       out_verts[o + 11] = xf[base + 19] * n.x + xf[base + 20] * n.y + xf[base + 21] * n.z;
       out_verts[o + 12] = xf[base + 22] * n.x + xf[base + 23] * n.y + xf[base + 24] * n.z;
       out_verts[o + 13] = 0.0;
+    """
+
+  /// Per point, its world position once, for the shadows indexed draws.
+  static let shadowBody = """
+      if (int(gid) >= PARAMS.x) return;
+      int p = int(gid);
+      int base = point_mesh[p] * 32;
+      VEC3 lp = VEC3(points[p * 3], points[p * 3 + 1], points[p * 3 + 2]);
+      int o = p * 14;
+      out_verts[o + 0] = xf[base + 0] * lp.x + xf[base + 4] * lp.y + xf[base + 8] * lp.z + xf[base + 12];
+      out_verts[o + 1] = xf[base + 1] * lp.x + xf[base + 5] * lp.y + xf[base + 9] * lp.z + xf[base + 13];
+      out_verts[o + 2] = xf[base + 2] * lp.x + xf[base + 6] * lp.y + xf[base + 10] * lp.z + xf[base + 14];
+      out_verts[o + 3] = 1.0;
+      out_verts[o + 4] = xf[base + 25];
+      for (int k = 5; k < 14; ++k) out_verts[o + k] = 0.0;
+      out_verts[o + 7] = 1.0;
+    """
+
+  static let shadowGLSL = glslPrelude + """
+    layout(std430, binding = 0) buffer Points { float points[]; };
+    layout(std430, binding = 1) buffer PointMesh { int point_mesh[]; };
+    layout(std430, binding = 2) buffer Xf { float xf[]; };
+    layout(std430, binding = 3) buffer OutVerts { float out_verts[]; };
+    void main()
+    {
+      uint gid = gl_GlobalInvocationID.x;
+      \(shadowBody)
+    }
+    """
+
+  static let shadowMSL = mslPrelude + """
+    kernel void compute_main(constant U& u [[buffer(0)]],
+                             device const float* points [[buffer(1)]],
+                             device const int* point_mesh [[buffer(2)]],
+                             device const float* xf [[buffer(3)]],
+                             device float* out_verts [[buffer(4)]],
+                             uint gid [[thread_position_in_grid]])
+    {
+      \(shadowBody)
+    }
     """
 
   static let glslPrelude = """
@@ -607,6 +701,32 @@ extension Akari.Geom.Deformer
     {
       uint gid = gl_GlobalInvocationID.x;
       \(emitBody)
+    }
+    """
+
+  static let settleBody = """
+      if (int(gid) >= PARAMS.x) return;
+      int o = int(gid) * 14;
+      out_verts[o + 5] = out_verts[o + 0];
+      out_verts[o + 6] = out_verts[o + 1];
+      out_verts[o + 7] = out_verts[o + 2];
+    """
+
+  static let settleGLSL = glslPrelude + """
+    layout(std430, binding = 0) buffer OutVerts { float out_verts[]; };
+    void main()
+    {
+      uint gid = gl_GlobalInvocationID.x;
+      \(settleBody)
+    }
+    """
+
+  static let settleMSL = mslPrelude + """
+    kernel void compute_main(constant U& u [[buffer(0)]],
+                             device float* out_verts [[buffer(1)]],
+                             uint gid [[thread_position_in_grid]])
+    {
+      \(settleBody)
     }
     """
 

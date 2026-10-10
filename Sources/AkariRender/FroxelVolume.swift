@@ -239,13 +239,13 @@ public extension Akari
     private static let depthCommon = """
       ivec2 regionStart(ivec2 froxel, ivec2 grid, ivec2 screen)
       {
-        ivec2 viaResolve = froxel * 16 - 8;
+        ivec2 viaResolve = ivec2(floor((vec2(froxel) - 0.5) * vec2(screen) / vec2(grid)));
         ivec2 viaScatter = ivec2(floor(vec2(froxel) * vec2(screen) / vec2(grid)));
         return max(min(viaResolve, viaScatter), ivec2(0));
       }
       ivec2 regionEnd(ivec2 froxel, ivec2 grid, ivec2 screen)
       {
-        ivec2 viaResolve = froxel * 16 + 24;
+        ivec2 viaResolve = ivec2(ceil((vec2(froxel) + 1.5) * vec2(screen) / vec2(grid)));
         ivec2 viaScatter = ivec2(ceil(vec2(froxel + 1) * vec2(screen) / vec2(grid)));
         ivec2 end = max(viaResolve, viaScatter);
         end = ivec2(froxel.x == grid.x - 1 ? screen.x : end.x, froxel.y == grid.y - 1 ? screen.y : end.y);

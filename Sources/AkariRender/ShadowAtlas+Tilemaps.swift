@@ -276,8 +276,23 @@ extension Akari.ShadowAtlas
 
     guard
       kernel != 0,
+      kernels.countDirty != 0,
+      kernels.allotBudget != 0,
       readback != 0
     else { return }
+
+    gl.setComputeShaderBuffer(kernels.countDirty, binding: 0, buffer: buffers.tiles)
+    gl.setComputeShaderBuffer(kernels.countDirty, binding: 1, buffer: frame.slotOfView)
+    gl.setComputeShaderBuffer(kernels.countDirty, binding: 2, buffer: buffers.dirtyCount)
+    gl.dispatchCompute(kernels.countDirty,
+                       groupsX: GLuint((Self.maxViews + 63) / 64),
+                       groupsY: 1,
+                       groupsZ: 1)
+
+    gl.setComputeShaderBuffer(kernels.allotBudget, binding: 0, buffer: frame.slotOfView)
+    gl.setComputeShaderBuffer(kernels.allotBudget, binding: 1, buffer: buffers.dirtyCount)
+    gl.setComputeShaderBuffer(kernels.allotBudget, binding: 2, buffer: buffers.allowance)
+    gl.dispatchCompute(kernels.allotBudget, groupsX: 1, groupsY: 1, groupsZ: 1)
 
     gl.setComputeShaderBuffer(kernel, binding: 0, buffer: buffers.tiles)
     gl.setComputeShaderBuffer(kernel, binding: 1, buffer: frame.slotOfView)
@@ -287,6 +302,8 @@ extension Akari.ShadowAtlas
     gl.setComputeShaderBuffer(kernel, binding: 4, buffer: buffers.renderRect)
     gl.setComputeShaderBuffer(kernel, binding: 5, buffer: buffers.renderRectStatic)
     gl.setComputeShaderBuffer(kernel, binding: 6, buffer: buffers.clearArgsStatic)
+    gl.setComputeShaderBuffer(kernel, binding: 7, buffer: buffers.dirtyCount)
+    gl.setComputeShaderBuffer(kernel, binding: 8, buffer: buffers.allowance)
     gl.dispatchCompute(kernel,
                        groupsX: GLuint((Self.maxViews + 63) / 64),
                        groupsY: 1,
@@ -308,6 +325,8 @@ extension Akari.ShadowAtlas
     gl.setComputeShaderBuffer(kernels.pageTable, binding: 2, buffer: buffers.renderMap)
     gl.setComputeShaderBuffer(kernels.pageTable, binding: 3, buffer: frame.slotOfView)
     gl.setComputeShaderBuffer(kernels.pageTable, binding: 4, buffer: buffers.renderMapStatic)
+    gl.setComputeShaderBuffer(kernels.pageTable, binding: 5, buffer: buffers.renderRect)
+    gl.setComputeShaderBuffer(kernels.pageTable, binding: 6, buffer: buffers.renderRectStatic)
     gl.setComputeShaderImage(kernels.pageTable,
                              index: 0,
                              texture: pageTable,

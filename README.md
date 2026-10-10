@@ -9,13 +9,13 @@
 
 <div align="center">
 
-# Akari
-
-<p><b>灯り • "Light"</b></p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Branding/AkariLogo-Light.png">
+  <source media="(prefers-color-scheme: light)" srcset="Branding/AkariLogo.png">
+  <img alt="Akari" src="Branding/AkariLogo.png" width="500">
+</picture>
 
 ###### <samp>♫ [<b>∆</b>](https://youtu.be/1XwU8H6e8Ts?si=-eokO_nbdRnAtCp9).</samp>
-
-<img width="800" height="581" alt="akari_cascaded_shadow_maps" src="https://github.com/user-attachments/assets/93f58ea2-a75b-46f0-b0b6-99d16b3dae09" />
 
 </div>
 

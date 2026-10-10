@@ -557,6 +557,21 @@ extension Akari.ShadowAtlas
         : vec4(0.0);
     """
 
+  /// Whether this frame draws a tile, in its view's rect, and a
+  /// static redraw in the static one too, the budget left the rest
+  /// for later.
+  static let inRenderRectFunction = """
+    bool inRenderRect(uint rect, int x, int y)
+    {
+      return rect != 0u && x >= int(rect & 31u) && y >= int((rect >> 5) & 31u) &&
+             x <= int((rect >> 10) & 31u) && y <= int((rect >> 15) & 31u);
+    }
+    bool drawnThisFrame(uint rect, uint staticRect, bool redraw, int x, int y)
+    {
+      return inRenderRect(rect, x, y) && (!redraw || inRenderRect(staticRect, x, y));
+    }
+    """
+
   /// The per view indirection the surface shader reads.
   static let renderMapBody = """
       if (local < \(tilemapRes * tilemapRes))
@@ -564,10 +579,12 @@ extension Akari.ShadowAtlas
           for (int view = 0; view < \(maxDirectionalTilemaps); ++view)
         {
           if (slot_of_view[view] != slot) { continue; }
+          bool in_rect = drawnThisFrame(render_rect[view], render_rect_static[view], full_render,
+                                        local % \(tilemapRes), local / \(tilemapRes));
           render_map[view * \(tilemapRes * tilemapRes) + local] =
-            to_render ? uint(page) : 0xFFFFFFFFu;
+            to_render && in_rect ? uint(page) : 0xFFFFFFFFu;
           render_map_static[view * \(tilemapRes * tilemapRes) + local] =
-            full_render ? uint(page) : 0xFFFFFFFFu;
+            full_render && in_rect ? uint(page) : 0xFFFFFFFFu;
         }
       }
       if (slot < \(maxPunctualTilemaps))
@@ -576,10 +593,11 @@ extension Akari.ShadowAtlas
         while (lod < \(lodMax) && local >= lodBase + size * size) { lodBase += size * size; size >>= 1; ++lod; }
         int rel = local - lodBase;
         int view = \(punctualViewBase) + slot * \(lodCount) + lod;
+        bool in_rect = drawnThisFrame(render_rect[view], render_rect_static[view], full_render, rel % size, rel / size);
         render_map[view * \(tilemapRes * tilemapRes) + (rel / size) * \(tilemapRes) + rel % size] =
-          to_render ? uint(page) : 0xFFFFFFFFu;
+          to_render && in_rect ? uint(page) : 0xFFFFFFFFu;
         render_map_static[view * \(tilemapRes * tilemapRes) + (rel / size) * \(tilemapRes) + rel % size] =
-          full_render ? uint(page) : 0xFFFFFFFFu;
+          full_render && in_rect ? uint(page) : 0xFFFFFFFFu;
       }
     """
 
@@ -590,7 +608,10 @@ extension Akari.ShadowAtlas
     layout(std430, binding = 2) buffer RenderMap { uint render_map[]; };
     layout(std430, binding = 3) buffer SlotOfView { int slot_of_view[]; };
     layout(std430, binding = 4) buffer RenderMapStatic { uint render_map_static[]; };
+    layout(std430, binding = 5) buffer RenderRect { uint render_rect[]; };
+    layout(std430, binding = 6) buffer RenderRectStatic { uint render_rect_static[]; };
     layout(rgba16f, binding = 0) uniform writeonly image2D u_pageTable;
+    \(inRenderRectFunction)
     void main()
     {
       int index = int(gl_GlobalInvocationID.x);
@@ -606,10 +627,13 @@ extension Akari.ShadowAtlas
     using namespace metal;
     #define vec2 float2
     #define vec4 float4
+    \(inRenderRectFunction)
     kernel void compute_main(device uint* tiles_buf [[buffer(1)]],
                              device uint* render_map [[buffer(3)]],
                              device int* slot_of_view [[buffer(4)]],
                              device uint* render_map_static [[buffer(5)]],
+                             device uint* render_rect [[buffer(6)]],
+                             device uint* render_rect_static [[buffer(7)]],
                              texture2d<float, access::write> u_pageTable [[texture(0)]],
                              uint gid [[thread_position_in_grid]])
     {
@@ -657,7 +681,8 @@ extension Akari.ShadowAtlas
       uint index = uint(base + y * size + x);
       uint packed = tiles_buf[index];
       uint resident = \(flagIsUsed | flagIsAllocated)u;
-      if ((packed & resident) == resident && (packed & \(flagDoUpdate | flagDynamicUpdate)u) != 0u)
+      if ((packed & resident) == resident && (packed & \(flagDoUpdate | flagDynamicUpdate)u) != 0u &&
+          ((packed & \(flagDoUpdate)u) == 0u || inRenderRect(render_rect_static[view], x, y)))
       {
         tiles_buf[index] = packed | \(flagIsRendered)u;
       }
@@ -670,6 +695,8 @@ extension Akari.ShadowAtlas
     layout(std430, binding = 1) buffer SlotOfView { int slot_of_view[]; };
     layout(std430, binding = 2) buffer Drawn { int drawn[]; };
     layout(std430, binding = 3) buffer RenderRect { uint render_rect[]; };
+    layout(std430, binding = 4) buffer RenderRectStatic { uint render_rect_static[]; };
+    \(inRenderRectFunction)
     void main()
     {
       uint gid = gl_GlobalInvocationID.x;
@@ -680,10 +707,12 @@ extension Akari.ShadowAtlas
   static let retireDrawnMSL = """
     #include <metal_stdlib>
     using namespace metal;
+    \(inRenderRectFunction)
     kernel void compute_main(device uint* tiles_buf [[buffer(1)]],
                              device int* slot_of_view [[buffer(2)]],
                              device int* drawn [[buffer(3)]],
                              device uint* render_rect [[buffer(4)]],
+                             device uint* render_rect_static [[buffer(5)]],
                              uint3 gid3 [[thread_position_in_grid]])
     {
       uint gid = gid3.x;
@@ -692,38 +721,38 @@ extension Akari.ShadowAtlas
     """
 
   static let cullBody = """
-      int drawCount = PARAMS.x;
-      if (int(gid) >= drawCount * PARAMS.y) return;
-      int run = int(gid) / drawCount;
-      int draw = int(gid) % drawCount;
-      VEC3 lo = VEC3(bounds[draw * 6 + 0], bounds[draw * 6 + 1], bounds[draw * 6 + 2]);
-      VEC3 hi = VEC3(bounds[draw * 6 + 3], bounds[draw * 6 + 4], bounds[draw * 6 + 5]);
-      bool visible = false;
-      for (int k = 0; k < \(maxAmplificationViews) && !visible; ++k)
+    int drawCount = PARAMS.x;
+    if (int(gid) >= drawCount * PARAMS.y) return;
+    int run = int(gid) / drawCount;
+    int draw = int(gid) % drawCount;
+    VEC3 lo = VEC3(bounds[draw * 6 + 0], bounds[draw * 6 + 1], bounds[draw * 6 + 2]);
+    VEC3 hi = VEC3(bounds[draw * 6 + 3], bounds[draw * 6 + 4], bounds[draw * 6 + 5]);
+    bool visible = false;
+    for (int k = 0; k < \(maxAmplificationViews) && !visible; ++k)
+    {
+      int view = run_views[run * \(maxAmplificationViews) + k];
+      if (view < 0) continue;
+      uint rect = render_rect[view];
+      if (rect == 0u) continue;
+      float size = float(view >= \(punctualViewBase) ? (\(tilemapRes) >> ((view - \(punctualViewBase)) % \(lodCount)))
+                                                     : \(tilemapRes));
+      VEC2 rmin = VEC2(float(rect & 31u), float((rect >> 5u) & 31u)) / size * 2.0 - 1.0;
+      VEC2 rmax = (VEC2(float((rect >> 10u) & 31u), float((rect >> 15u) & 31u)) + 1.0) / size * 2.0 - 1.0;
+      int out0 = 0, out1 = 0, out2 = 0, out3 = 0, out4 = 0, out5 = 0;
+      for (int c = 0; c < 8; ++c)
       {
-        int view = run_views[run * \(maxAmplificationViews) + k];
-        if (view < 0) continue;
-        uint rect = render_rect[view];
-        if (rect == 0u) continue;
-        float size = float(view >= \(punctualViewBase) ? (\(tilemapRes) >> ((view - \(punctualViewBase)) % \(lodCount)))
-                                                       : \(tilemapRes));
-        VEC2 rmin = VEC2(float(rect & 31u), float((rect >> 5u) & 31u)) / size * 2.0 - 1.0;
-        VEC2 rmax = (VEC2(float((rect >> 10u) & 31u), float((rect >> 15u) & 31u)) + 1.0) / size * 2.0 - 1.0;
-        int out0 = 0, out1 = 0, out2 = 0, out3 = 0, out4 = 0, out5 = 0;
-        for (int c = 0; c < 8; ++c)
-        {
-          VEC4 p = XF(run * \(maxAmplificationViews) + k)
-                 * VEC4((c & 1) != 0 ? hi.x : lo.x, (c & 2) != 0 ? hi.y : lo.y, (c & 4) != 0 ? hi.z : lo.z, 1.0);
-          out0 += p.x < rmin.x * p.w ? 1 : 0;
-          out1 += p.x > rmax.x * p.w ? 1 : 0;
-          out2 += p.y < rmin.y * p.w ? 1 : 0;
-          out3 += p.y > rmax.y * p.w ? 1 : 0;
-          out4 += p.z < -p.w ? 1 : 0;
-          out5 += p.z > p.w ? 1 : 0;
-        }
-        visible = out0 < 8 && out1 < 8 && out2 < 8 && out3 < 8 && out4 < 8 && out5 < 8;
+        VEC4 p = XF(run * \(maxAmplificationViews) + k)
+               * VEC4((c & 1) != 0 ? hi.x : lo.x, (c & 2) != 0 ? hi.y : lo.y, (c & 4) != 0 ? hi.z : lo.z, 1.0);
+        out0 += p.x < rmin.x * p.w ? 1 : 0;
+        out1 += p.x > rmax.x * p.w ? 1 : 0;
+        out2 += p.y < rmin.y * p.w ? 1 : 0;
+        out3 += p.y > rmax.y * p.w ? 1 : 0;
+        out4 += p.z < -p.w ? 1 : 0;
+        out5 += p.z > p.w ? 1 : 0;
       }
-      visibility[gid] = visible ? 1u : 0u;
+      visible = out0 < 8 && out1 < 8 && out2 < 8 && out3 < 8 && out4 < 8 && out5 < 8;
+    }
+    visibility[gid] = visible ? 1u : 0u;
     """
 
   static let cullGLSL = """

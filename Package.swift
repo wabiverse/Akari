@@ -17,8 +17,10 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.9.3"),
     .package(url: "https://github.com/wabiverse/Lattice.git", branch: "main"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.2.1"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.2.3"),
     .package(url: "https://codeberg.org/furbytm/LabCamera.git", branch: "dev"),
+    .package(url: "https://github.com/moreSwift/swift-cross-ui.git", from: "0.10.0"),
+    .package(url: "https://github.com/furbytm/Nanocolor.git", from: "1.0.0"),
   ],
   targets: [
     // TODO: support externally provided openusd builds.
@@ -67,6 +69,7 @@ let package = Package(
         // .target(name: "OpenUSD"),
         .product(name: "LatticeCore", package: "Lattice"),
         // .product(name: "LatticeUSD", package: "Lattice"),
+        .product(name: "Nanocolor", package: "Nanocolor"),
         .product(name: "LabGL", package: "SwiftLabGL"),
         .product(name: "LabFX", package: "SwiftLabGL"),
         .product(name: "LabCamera", package: "LabCamera"),
@@ -132,10 +135,8 @@ let package = Package(
         // TODO: support externally provided openusd builds.
         // .target(name: "OpenUSD"),
         .product(name: "OpenUSDKit", package: "swift-usd"),
-        .product(name: "HydraKit", package: "swift-usd")
-      ],
-      resources: [
-        .process("Resources")
+        .product(name: "HydraKit", package: "swift-usd"),
+        .product(name: "SwiftCrossUI", package: "swift-cross-ui")
       ],
       cxxSettings: [
         .define("_LIBCPP_ABI_NO_COMPRESSED_PAIR_PADDING")

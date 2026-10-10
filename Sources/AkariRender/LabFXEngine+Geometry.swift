@@ -52,19 +52,23 @@ extension Akari.LabFXEngine
   struct SceneGeometry
   {
     var staticCapture: LabGLCaptureBuffer?
+    /// The static meshes unwelded, which the shadows and probes draw faster.
+    var staticShadowCapture: LabGLCaptureBuffer?
     var dynamicCapture: LabGLCaptureBuffer?
     let staticRecorder = Akari.Geom.Recorder(keepsTopology: false)
     /// Lays the animated meshes out once and deforms them on the GPU per frame.
     let deformer = Akari.Geom.Deformer()
 
-    /// Per mesh, a key of its data and transform, and the record it last changed on.
-    var changes: [UInt64: (key: UInt64, record: Int)] = [:]
+    /// Every visible mesh, by path key, kept current from the scene's drained changes.
+    var meshes: [UInt64: Akari.Geom.Recorder.RawMesh] = [:]
+    /// Each cached mesh's prim id, to pick meshes out without copying them.
+    var primIds: [UInt64: Int32] = [:]
+    /// Per mesh, a key of its data and transform.
+    var changes: [UInt64: UInt64] = [:]
     /// Meshes that changed after they first appeared. They stay dynamic, a pause
     /// demoting them would rerecord the static capture and rebuild them on the way back.
     var animated: Set<UInt64> = []
     var records = 0
-    var staticIDs: Set<UInt64> = []
-    var dynamicIDs: Set<UInt64> = []
 
     var staticBatch = BatchSummary()
     var dynamicBatch = BatchSummary()
@@ -74,6 +78,12 @@ extension Akari.LabFXEngine
     var captures: [LabGLCaptureBuffer]
     {
       [staticBatch.isEmpty ? nil : staticCapture,
+       dynamicBatch.isEmpty ? nil : dynamicCapture].compactMap(\.self)
+    }
+
+    var shadowCaptures: [LabGLCaptureBuffer]
+    {
+      [staticBatch.isEmpty ? nil : staticShadowCapture,
        dynamicBatch.isEmpty ? nil : dynamicCapture].compactMap(\.self)
     }
   }
@@ -95,10 +105,12 @@ extension Akari.LabFXEngine
   {
     guard
       let staticCapture = labgl.captureCreate(),
+      let staticShadowCapture = labgl.captureCreate(),
       let dynamicCapture = labgl.captureCreate()
     else { return false }
 
     geometry.staticCapture = staticCapture
+    geometry.staticShadowCapture = staticShadowCapture
     geometry.dynamicCapture = dynamicCapture
     runtime.setMeshCapture("mesh", buffer: staticCapture)
     runtime.setPassCallback("draw-dynamic-geometry", callback: akariDynamicGeometryCallback,
@@ -108,7 +120,7 @@ extension Akari.LabFXEngine
 
   func destroyCaptures()
   {
-    for capture in [geometry.staticCapture, geometry.dynamicCapture].compactMap(\.self)
+    for capture in [geometry.staticCapture, geometry.staticShadowCapture, geometry.dynamicCapture].compactMap(\.self)
     {
       labgl.captureDestroy(capture)
     }
@@ -117,7 +129,7 @@ extension Akari.LabFXEngine
 
   /// Deforms the dynamic meshes on the GPU, and rerecords
   /// the static ones only when which meshes are static changed.
-  func recordCaptures(_ meshes: [Akari.Geom.Recorder.RawMesh])
+  func recordCaptures(changed: [Akari.Geom.Recorder.RawMesh], removed: [UInt64])
   {
     guard
       let staticCapture = geometry.staticCapture,
@@ -125,58 +137,55 @@ extension Akari.LabFXEngine
     else { return }
 
     geometry.records += 1
-    let record = geometry.records
+    var staticDirty = geometry.records == 1
+    var dynamicDirty = false
 
-    var staticMeshes: [Akari.Geom.Recorder.RawMesh] = []
-    var dynamicMeshes: [Akari.Geom.Recorder.RawMesh] = []
-    var staticIDs = Set<UInt64>(minimumCapacity: meshes.count)
-    var dynamicIDs = Set<UInt64>()
-    var dynamicChanged = false
+    for key in removed
+    {
+      guard geometry.meshes.removeValue(forKey: key) != nil else { continue }
+      geometry.primIds[key] = nil
+      geometry.changes[key] = nil
+      if geometry.animated.remove(key) != nil { dynamicDirty = true } else { staticDirty = true }
+    }
 
-    for mesh in meshes
+    for mesh in changed
     {
       let key = Self.changeKey(mesh)
-      let changedOn: Int
-      if let last = geometry.changes[mesh.key]
+      let isNew = geometry.meshes.updateValue(mesh, forKey: mesh.key) == nil
+      geometry.primIds[mesh.key] = mesh.primId
+      let last = geometry.changes.updateValue(key, forKey: mesh.key)
+      if geometry.animated.contains(mesh.key)
       {
-        changedOn = last.key == key ? last.record : record
-        if changedOn == record { geometry.animated.insert(mesh.key) }
+        dynamicDirty = true
       }
-      else
+      else if isNew
       {
         // new meshes start static, so loading
         // a scene isn't one long animation.
-        changedOn = 0
+        staticDirty = true
       }
-      geometry.changes[mesh.key] = (key, changedOn)
-
-      if geometry.animated.contains(mesh.key)
+      else if last != key
       {
-        dynamicMeshes.append(mesh)
-        dynamicIDs.insert(mesh.key)
-        dynamicChanged = dynamicChanged || changedOn == record
+        geometry.animated.insert(mesh.key)
+        staticDirty = true
+        dynamicDirty = true
       }
-      else
-      {
-        staticMeshes.append(mesh)
-        staticIDs.insert(mesh.key)
-      }
-    }
-    if geometry.changes.count > meshes.count
-    {
-      let live = staticIDs.union(dynamicIDs)
-      geometry.changes = geometry.changes.filter { live.contains($0.key) }
-      geometry.animated.formIntersection(live)
     }
 
-    if staticIDs != geometry.staticIDs || record == 1
+    if staticDirty
     {
-      geometry.staticIDs = staticIDs
-      geometry.staticBatch = recordBatch(staticMeshes, into: staticCapture, recorder: geometry.staticRecorder)
+      let staticMeshes = geometry.meshes.values.filter { !geometry.animated.contains($0.key) }
+      geometry.staticBatch = recordBatch(staticMeshes, into: staticCapture,
+                                         expandedInto: geometry.staticShadowCapture,
+                                         recorder: geometry.staticRecorder)
     }
-    if dynamicIDs != geometry.dynamicIDs || dynamicChanged
+    if !dynamicDirty
     {
-      geometry.dynamicIDs = dynamicIDs
+      geometry.deformer.settle()
+    }
+    else
+    {
+      let dynamicMeshes = geometry.animated.compactMap { geometry.meshes[$0] }
       if geometry.deformer.needsRebuild(dynamicMeshes)
       {
         geometry.deformer.rebuild(dynamicMeshes, into: dynamicCapture)
@@ -199,14 +208,23 @@ extension Akari.LabFXEngine
 
   func recordBatch(_ meshes: [Akari.Geom.Recorder.RawMesh],
                    into capture: LabGLCaptureBuffer,
+                   expandedInto expanded: LabGLCaptureBuffer? = nil,
                    recorder: Akari.Geom.Recorder,
                    reusing others: [Akari.Geom.Recorder] = []) -> BatchSummary
   {
     labgl.captureClear(capture)
+    if let expanded { labgl.captureClear(expanded) }
     let sorted = meshes.sorted { Self.mortonKey($0.worldMatrix) < Self.mortonKey($1.worldMatrix) }
     let items = recorder.record(sorted, reusing: others)
     guard !items.isEmpty else { return BatchSummary() }
 
+    if let expanded { _ = record(items, into: expanded, expands: true) }
+    return record(items, into: capture, expands: false)
+  }
+
+  private func record(_ items: [Akari.Geom.Recorder.Item], into capture: LabGLCaptureBuffer,
+                      expands: Bool) -> BatchSummary
+  {
     gl.bindTexture(target: GL_TEXTURE_2D, texture: 0)
     labgl.captureStart(capture)
 
@@ -217,7 +235,9 @@ extension Akari.LabFXEngine
     gl.cullFace(GL_BACK)
     gl.frontFace(GL_CCW)
 
-    let batch = Akari.Geom.Batch(estimatedTriangles: meshes.reduce(0) { $0 + $1.tris.size() })
+    let batch = Akari.Geom.Batch(vertexCount: items.reduce(0) { $0 + $1.verts.count / 8 },
+                                 indexCount: items.reduce(0) { $0 + $1.indices.count },
+                                 expands: expands)
     for item in items
     {
       item.worldMatrix.withUnsafeBufferPointer

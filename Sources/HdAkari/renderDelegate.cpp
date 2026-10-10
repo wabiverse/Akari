@@ -248,8 +248,10 @@ HdAkariRenderDelegate::CreateSprim(TfToken const &typeId, SdfPath const &sprimId
       ? AKRenderDelegateSprimClassName(_swiftDelegate, typeId.GetText())
       : nullptr;
 
-  if (className && strcmp(className, "sphereLight") == 0) {
-    return new HdAkariLight(sprimId);
+  if (className && (strcmp(className, "sphereLight") == 0 ||
+                    strcmp(className, "cylinderLight") == 0 ||
+                    strcmp(className, "diskLight") == 0)) {
+    return new HdAkariLight(sprimId, typeId);
   }
   if (className && strcmp(className, "camera") == 0) {
     return new HdCamera(sprimId);
@@ -265,8 +267,10 @@ HdAkariRenderDelegate::CreateFallbackSprim(TfToken const &typeId)
       ? AKRenderDelegateSprimClassName(_swiftDelegate, typeId.GetText())
       : nullptr;
 
-  if (className && strcmp(className, "sphereLight") == 0) {
-    return new HdAkariLight(SdfPath::EmptyPath());
+  if (className && (strcmp(className, "sphereLight") == 0 ||
+                    strcmp(className, "cylinderLight") == 0 ||
+                    strcmp(className, "diskLight") == 0)) {
+    return new HdAkariLight(SdfPath::EmptyPath(), typeId);
   }
   if (className && strcmp(className, "camera") == 0) {
     return new HdCamera(SdfPath::EmptyPath());

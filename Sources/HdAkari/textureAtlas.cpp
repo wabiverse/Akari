@@ -48,6 +48,7 @@
 # include <Hio/image.h>
 # include <Hio/types.h>
 # include <Work/loops.h>
+# include <Work/withScopedParallelism.h>
 #else
 # include <pxr/pxr.h>
 # include <pxr/usd/ar/asset.h>
@@ -59,6 +60,7 @@
 # include <pxr/imaging/hio/image.h>
 # include <pxr/imaging/hio/types.h>
 # include <pxr/base/work/loops.h>
+# include <pxr/base/work/withScopedParallelism.h>
 #endif
 
 #include "HdAkari/textureAtlas.h"
@@ -267,20 +269,23 @@ HdAkariTextureAtlas::EnsureGridSized(HdSceneDelegate *sceneDelegate)
     std::mutex mergeMutex;
     std::unordered_set<SdfPath, SdfPath::Hash> uniqueMaterials;
     size_t constOnlyCount = 0;
-    WorkParallelForN(rprimIds.size(), [&](size_t begin, size_t end) {
-      std::unordered_set<SdfPath, SdfPath::Hash> local;
-      size_t localConst = 0;
-      for (size_t i = begin; i < end; ++i) {
-        // a material-less mesh gets a mini-slot (GetOrBakeCell's isConstOnly
-        // path), not its own full cell, count it separately.
-        SdfPath matId = sceneDelegate->GetMaterialId(rprimIds[i]);
-        if (matId.IsEmpty()) ++localConst;
-        else local.insert(matId);
-      }
-      std::lock_guard<std::mutex> lock(mergeMutex);
-      if (!local.empty()) uniqueMaterials.insert(local.begin(), local.end());
-      constOnlyCount += localConst;
-    }, /*grainSize=*/64);
+    // isolated, so waiting here can't steal a Sync task.
+    WorkWithScopedParallelism([&]() {
+      WorkParallelForN(rprimIds.size(), [&](size_t begin, size_t end) {
+        std::unordered_set<SdfPath, SdfPath::Hash> local;
+        size_t localConst = 0;
+        for (size_t i = begin; i < end; ++i) {
+          // a material-less mesh gets a mini-slot (GetOrBakeCell's isConstOnly
+          // path), not its own full cell, count it separately.
+          SdfPath matId = sceneDelegate->GetMaterialId(rprimIds[i]);
+          if (matId.IsEmpty()) ++localConst;
+          else local.insert(matId);
+        }
+        std::lock_guard<std::mutex> lock(mergeMutex);
+        if (!local.empty()) uniqueMaterials.insert(local.begin(), local.end());
+        constOnlyCount += localConst;
+      }, /*grainSize=*/64);
+    });
 
     // untextured materials bake into mini-slots too, only
     // textured ones take a full cell.
@@ -466,6 +471,7 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
     std::lock_guard<std::mutex> lock(_mutex);
     _cells.emplace(materialKey, cell);
     _pending.erase(materialKey);
+    _dirtyRects.push_back({px0, py0, regionSize});
   }
   _dirty.store(true, std::memory_order_release);
   promise.set_value(cell);

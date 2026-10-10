@@ -73,8 +73,8 @@ extension AkariDemo
   final class FPSView: PlatformView
   {
     private static let attributes: [NSAttributedString.Key: Any] = [
-      .font: PlatformFont.monospacedSystemFont(ofSize: 30, weight: .bold),
-      .foregroundColor: PlatformColor.white,
+      .font: PlatformFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
+      .foregroundColor: PlatformColor(white: 0.85, alpha: 1),
     ]
     static let size = ("000 fps" as NSString).size(withAttributes: attributes)
 

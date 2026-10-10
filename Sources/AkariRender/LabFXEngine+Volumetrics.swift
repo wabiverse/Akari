@@ -94,8 +94,8 @@ extension Akari.LabFXEngine
     guard clipNear.isFinite, far.isFinite, far > clipNear else { return }
 
     let tileDivisor = Self.volumeAtlasScale * Self.volumeSliceColumns
-    let grid = SIMD2<Float>(Float(max(lastWidth / tileDivisor, 1)),
-                            Float(max(lastHeight / tileDivisor, 1)))
+    let grid = SIMD2<Float>(Float(max(halfWidth * 2 / tileDivisor, 1)),
+                            Float(max(halfHeight * 2 / tileDivisor, 1)))
 
     let density = max(volume.density, 0) / camera.world(meters: 1)
     guard density > 0 else { return }
@@ -105,8 +105,8 @@ extension Akari.LabFXEngine
     guard froxelVolume.reduceDepth(gbufferPosition: gbufferPosition,
                                    gridWidth: gridSize.x,
                                    gridHeight: gridSize.y,
-                                   screenWidth: lastWidth,
-                                   screenHeight: lastHeight)
+                                   screenWidth: renderWidth,
+                                   screenHeight: renderHeight)
     else { return }
     if froxelVolume.depthTexture != volumetrics.boundFroxelDepth
     {

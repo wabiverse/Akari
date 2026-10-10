@@ -71,18 +71,22 @@ public struct RenderFeatures: OptionSet, Sendable
   public static let hardwareRayTracing = RenderFeatures(rawValue: 1 << 11)
   /// Demo overlay with LabFX `callback:` passes and `latency:` ring buffers.
   public static let fireflies = RenderFeatures(rawValue: 1 << 12)
+  /// Moves the scene's render resolution with whatever the GPU hardware can support.
+  public static let dynamicResolution = RenderFeatures(rawValue: 1 << 13)
 
   /// The complete realtime fidelity stack (screen space, no hardware RT).
   public static let fullFidelity: RenderFeatures = [
     .imageBasedLighting, .lightProbes, .shadowMaps,
     .screenSpaceReflections, .screenSpaceGI,
-    .temporalAA, .bloom, .depthOfField
+    .temporalAA, .bloom, .depthOfField,
+    .dynamicResolution
   ]
 
   /// A leaner set tuned to high fps in an interactive viewport.
   public static let game60fps: RenderFeatures = [
     .imageBasedLighting, .shadowMaps,
     .screenSpaceReflections,
-    .temporalAA, .bloom
+    .temporalAA, .bloom,
+    .dynamicResolution
   ]
 }

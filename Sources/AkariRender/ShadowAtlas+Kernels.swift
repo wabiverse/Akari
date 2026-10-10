@@ -70,13 +70,16 @@ extension Akari.ShadowAtlas
     var tagUpdatePunctual: GLuint = 0
     var tagPropagate: GLuint = 0
     var buildRenderViews: GLuint = 0
+    var countDirty: GLuint = 0
+    var allotBudget: GLuint = 0
 
     var all: [GLuint]
     {
       [beginFrame, tilemapShift, tagUsagePunctual, tagUsageDirectional, tagUsageVolume,
        dilateUsageDirectional, dilateUsagePunctual, maskLod, free, defrag, allocate,
        pageTable, pageClear, pageCopy, retireDrawn, cull, cullPunctual, renderMapClear, buildClearList,
-       clipmapClear, tilemapBounds, tagUpdate, tagUpdatePunctual, tagPropagate, buildRenderViews]
+       clipmapClear, tilemapBounds, tagUpdate, tagUpdatePunctual, tagPropagate, buildRenderViews,
+       countDirty, allotBudget]
     }
 
     /// Waits for the kernels the pipeline can't run without, false if any failed.
@@ -120,6 +123,8 @@ extension Akari.ShadowAtlas
       gl.setComputeShaderThreadgroupSize(tagUpdatePunctual, x: 64, y: 1, z: 1)
       gl.setComputeShaderThreadgroupSize(tagPropagate, x: res, y: res, z: 1)
       gl.setComputeShaderThreadgroupSize(buildRenderViews, x: 64, y: 1, z: 1)
+      gl.setComputeShaderThreadgroupSize(countDirty, x: 64, y: 1, z: 1)
+      gl.setComputeShaderThreadgroupSize(allotBudget, x: 1, y: 1, z: 1)
     }
   }
 
@@ -156,6 +161,8 @@ extension Akari.ShadowAtlas
     k.tagUpdatePunctual = compile("tag-update-punctual", tagUpdatePunctualGLSL, tagUpdatePunctualMSL)
     k.tagPropagate = compile("tag-propagate", tagPropagateGLSL, tagPropagateMSL)
     k.buildRenderViews = compile("build-render-views", buildRenderViewsGLSL, buildRenderViewsMSL)
+    k.countDirty = compile("count-dirty", countDirtyGLSL, countDirtyMSL)
+    k.allotBudget = compile("allot-budget", allotBudgetGLSL, allotBudgetMSL)
     k.setThreadgroupSizes()
 
     return k

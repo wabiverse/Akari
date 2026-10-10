@@ -88,7 +88,10 @@ extension Akari.ShadowAtlas
   /// GPU chunk culling per run, one run per view at worst plus the instanced punctual slot.
   static let maxRuns = maxViews + 1
   /// Culled replay slots below this belong to the camera.
-  static let cullSlotBase = 1
+  static let cullSlotBase = 2
+  /// Static redraws a frame at most, the rest wait on their coarser level.
+  /// Tiles only dynamic casters moved over always draw, deferring those flickers.
+  static let renderTileBudget = 64
   /// Moved caster boxes tracked per frame, past this neighbors are merged.
   static let maxMovedCasters = 256
 
@@ -100,6 +103,8 @@ extension Akari.ShadowAtlas
   static let pagePackRadix = 64
   /// Texels per page.
   static let pageResolution = 256
+  /// Point light pages a LOD coarser than the screen asks, a quarter of the pages.
+  static let punctualLodBias = 1
   static let pageShift = 8
   /// `pageResolution * tilemapRes`.
   static let shadowMapMaxRes = pageResolution * tilemapRes

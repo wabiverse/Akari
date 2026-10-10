@@ -50,6 +50,8 @@ extension AkariDemo
   {
     @Published var viewTransform: Akari.Color.ViewTransform?
     @Published var quality: RenderQuality?
+    @Published var upscaler: Upscaler?
+    @Published var supersampling: Double
     @Published var exposure: Double
     @Published var gamma: Double
     @Published var samples: Double
@@ -73,6 +75,8 @@ extension AkariDemo
       let s = engine.settings
       viewTransform = s.color.viewTransform
       quality = s.quality
+      upscaler = s.upscaler
+      supersampling = Double(s.supersampling)
       exposure = Double(s.color.exposure)
       gamma = Double(s.color.gamma)
       samples = Double(s.samples)
@@ -101,6 +105,8 @@ extension AkariDemo
       var settings = engine.settings
       settings.quality = quality ?? .medium
       settings.features = features
+      settings.upscaler = upscaler ?? .metalFX
+      settings.supersampling = Float(supersampling)
       settings.color.viewTransform = viewTransform ?? .agx
       settings.color.exposure = Float(exposure)
       settings.color.gamma = Float(gamma)

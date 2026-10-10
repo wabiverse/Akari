@@ -1,0 +1,166 @@
+{
+  "color-space-for-untagged-svg-colors": "display-p3",
+  "fill": {
+    "automatic-gradient": "srgb:0.07843,0.07843,0.09412,1.00000"
+  },
+  "groups": [
+    {
+      "blur-material": 0.7,
+      "layers": [
+        {
+          "fill": {
+            "solid": "display-p3:1.00000,1.00000,1.00000,1.00000"
+          },
+          "glass": true,
+          "image-name": "Orca.svg",
+          "name": "Orca"
+        }
+      ],
+      "lighting": "combined",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.45
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.6
+      }
+    },
+    {
+      "layers": [
+        {
+          "blend-mode": "normal",
+          "glass": true,
+          "position": {
+            "scale": 0.5,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "fill": {
+            "solid": "display-p3:1.00000,0.97000,1.00000,1.00000"
+          },
+          "image-name": "FireflyCores.png",
+          "name": "Cores"
+        },
+        {
+          "blend-mode": "normal",
+          "glass": true,
+          "position": {
+            "scale": 0.5,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "fill": {
+            "linear-gradient": [
+              "display-p3:1.00000,0.50000,0.85000,1.00000",
+              "display-p3:0.40000,0.85000,1.00000,1.00000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0.5,
+                "y": 0.84
+              },
+              "stop": {
+                "x": 0.5,
+                "y": 0.95
+              }
+            }
+          },
+          "image-name": "FireflyHalos.png",
+          "name": "Halos"
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    },
+    {
+      "layers": [
+        {
+          "blend-mode": "plus-lighter",
+          "glass": false,
+          "position": {
+            "scale": 0.5,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          },
+          "fill": {
+            "linear-gradient": [
+              "display-p3:1.00000,0.22000,0.66000,1.00000",
+              "display-p3:0.16000,0.48000,1.00000,1.00000"
+            ],
+            "orientation": {
+              "start": {
+                "x": 0.68,
+                "y": 0.3
+              },
+              "stop": {
+                "x": 0.32,
+                "y": 0.72
+              }
+            }
+          },
+          "image-name": "Backlight.png",
+          "name": "Backlight"
+        },
+        {
+          "blend-mode": "plus-lighter",
+          "fill": {
+            "solid": "display-p3:1.00000,0.22000,0.66000,1.00000"
+          },
+          "glass": false,
+          "image-name": "LightPink.png",
+          "name": "LightPink",
+          "position": {
+            "scale": 0.5,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "blend-mode": "plus-lighter",
+          "fill": {
+            "solid": "display-p3:0.16000,0.48000,1.00000,1.00000"
+          },
+          "glass": false,
+          "image-name": "LightBlue.png",
+          "name": "LightBlue",
+          "position": {
+            "scale": 0.5,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}
