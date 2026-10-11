@@ -40,6 +40,7 @@
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
 # include <Hd/changeTracker.h>
+# include <Hd/extComputationUtils.h>
 # include <Hd/material.h>
 # include <Hd/meshTopology.h>
 # include <Hd/meshUtil.h>
@@ -52,6 +53,7 @@
 #else
 # include <pxr/pxr.h>
 # include <pxr/imaging/hd/changeTracker.h>
+# include <pxr/imaging/hd/extComputationUtils.h>
 # include <pxr/imaging/hd/material.h>
 # include <pxr/imaging/hd/meshTopology.h>
 # include <pxr/imaging/hd/meshUtil.h>
@@ -76,6 +78,25 @@
 #include <string>
 
 PXR_NAMESPACE_OPEN_SCOPE
+
+namespace {
+
+// skinned meshes (UsdSkel) publish points through an ext computation.
+VtValue GetPoints(HdSceneDelegate *sceneDelegate, SdfPath const &id)
+{
+  for (HdExtComputationPrimvarDescriptor const &pv : sceneDelegate->GetExtComputationPrimvarDescriptors(id, HdInterpolationVertex)) {
+    if (pv.name != HdTokens->points) continue;
+
+    const HdExtComputationUtils::ValueStore store = HdExtComputationUtils::GetComputedPrimvarValues({pv}, sceneDelegate);
+
+    const auto it = store.find(pv.name);
+    if (it != store.end()) return it->second;
+  }
+
+  return sceneDelegate->Get(id, HdTokens->points);
+}
+
+} // namespace
 
 HdAkariMesh::HdAkariMesh(SdfPath const &id) : HdMesh(id) {}
 
@@ -184,7 +205,7 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
                           (!(*dirtyBits & rebuildBits) ||
                            (_topologyRevision != 0 && GetMeshTopology(sceneDelegate).ComputeHash() == _topologyHash));
   if (pointsOnly) {
-    const VtValue pointsVal = sceneDelegate->Get(id, HdTokens->points);
+    const VtValue pointsVal = ::PXR_NS::GetPoints(sceneDelegate, id);
     if (pointsVal.IsHolding<VtVec3fArray>() &&
         scene->UpdateMeshPoints(id, pointsVal.UncheckedGet<VtVec3fArray>(),
                                 sceneDelegate->GetTransform(id), sceneDelegate->GetVisible(id),
@@ -207,7 +228,7 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
   meshUtil.ComputeTriangleIndices(&data.triangleIndices, &primitiveParams);
 
   // points (object space).
-  const VtValue pointsVal = sceneDelegate->Get(id, HdTokens->points);
+  const VtValue pointsVal = ::PXR_NS::GetPoints(sceneDelegate, id);
   if (pointsVal.IsHolding<VtVec3fArray>()) {
     data.points = pointsVal.UncheckedGet<VtVec3fArray>();
   }

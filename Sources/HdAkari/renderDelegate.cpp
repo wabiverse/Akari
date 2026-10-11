@@ -41,6 +41,7 @@
 # include <pxr/pxrns.h>
 # include <Hd/camera.h>
 # include <Hd/driver.h>
+# include <Hd/extComputation.h>
 # include <Hd/instancer.h>
 # include <Hd/tokens.h>
 # include <Hd/aov.h>
@@ -51,6 +52,7 @@
 # include <pxr/pxr.h>
 # include <pxr/imaging/hd/camera.h>
 # include <pxr/imaging/hd/driver.h>
+# include <pxr/imaging/hd/extComputation.h>
 # include <pxr/imaging/hd/instancer.h>
 # include <pxr/imaging/hd/tokens.h>
 # include <pxr/imaging/hd/aov.h>
@@ -87,6 +89,7 @@ const TfTokenVector HdAkariRenderDelegate::SUPPORTED_RPRIM_TYPES = {
 const TfTokenVector HdAkariRenderDelegate::SUPPORTED_SPRIM_TYPES = {
   HdPrimTypeTokens->camera,
   HdPrimTypeTokens->material,
+  HdPrimTypeTokens->extComputation,
 };
 
 const TfTokenVector HdAkariRenderDelegate::SUPPORTED_BPRIM_TYPES = {
@@ -256,6 +259,9 @@ HdAkariRenderDelegate::CreateSprim(TfToken const &typeId, SdfPath const &sprimId
   if (className && strcmp(className, "camera") == 0) {
     return new HdCamera(sprimId);
   }
+  if (className && strcmp(className, "extComputation") == 0) {
+    return new HdExtComputation(sprimId);
+  }
   // materials are accepted (so binding works) but not yet consumed.
   return new HdCamera(sprimId);
 }
@@ -274,6 +280,9 @@ HdAkariRenderDelegate::CreateFallbackSprim(TfToken const &typeId)
   }
   if (className && strcmp(className, "camera") == 0) {
     return new HdCamera(SdfPath::EmptyPath());
+  }
+  if (className && strcmp(className, "extComputation") == 0) {
+    return new HdExtComputation(SdfPath::EmptyPath());
   }
   return new HdCamera(SdfPath::EmptyPath());
 }
