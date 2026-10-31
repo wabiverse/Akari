@@ -29,8 +29,21 @@
 ## Quickstart: Real-Time USD Rendering
 
 Akari can render any (`.usd`, `.usda`, `.usdc`, or `.usdz`) scene passed to the `USD_SCENE=` argument below, this repo also provides several scenes you can render immediately out of the box.
- 
-```pwsh
+
+### Method 1: Download the Prebuilt macOS Release
+1. **Download the Installer:** Get the latest release via the [akari_macos_arm64_installer.dmg](https://github.com/wabiverse/Akari/releases/download/v0.0.3/akari_macos_arm64_installer.dmg).
+2. **Mount and Install:** Double-click the downloaded `.dmg` and drag the **AkariDemo** app bundle into your `/Applications` folder.
+3. **Bypass macOS Security Warning:** Because this release is self-signed outside the Mac App Store, macOS may block it or falsely state that it is "damaged". To clear the warning, open your your Mac's **System Settings** > **Privacy & Security**, scroll down to the **Security** section, you will see a note saying *"akari was blocked..."* - click **Open Anyway**.
+   > You may have to repeat this step when launching the **AkariDemo** app bundle for the first time.
+5. **Run the Renderer:** Execute the compiled binary directly or from your terminal, pointing it to your chosen file path:
+   ```bash
+   /Applications/AkariDemo.app/Contents/MacOS/AkariDemo --usd path/to/some/scene.usda
+   ```
+
+---
+
+### Method 2: Build and Run From Source
+```bash
 git clone https://github.com/wabiverse/Akari.git
 cd Akari
 
