@@ -51,6 +51,11 @@ public enum RenderQuality: String, Sendable, CaseIterable
   case high
   /// Everything, including realtime ray tracing.
   case cinematic
+
+  public init?(_ text: some StringProtocol)
+  {
+    self.init(rawValue: String(text))
+  }
 }
 
 /// Brings the scene from its render resolution up to the target's.
@@ -77,6 +82,10 @@ public struct RenderSettings: Sendable
   public var volume: VolumeSettings = .init()
   /// Screen space reflection settings.
   public var reflection: ReflectionSettings = .init()
+  /// Bloom settings.
+  public var bloom: BloomSettings = .init()
+  /// Depth of field settings.
+  public var depthOfField: DepthOfFieldSettings = .init()
   /// Light probe settings.
   public var probes: LightProbeSettings = .init()
   /// Frame rate the interactive pipeline budgets toward.
@@ -85,6 +94,10 @@ public struct RenderSettings: Sendable
   public var samples: Int = 16
   /// Final render sample count (defaults 64).
   public var renderSamples: Int = 64
+  /// Maximum cloud ray-march steps in the interactive viewport.
+  public var planetCloudMarchSteps: Int = 32
+  /// Maximum cloud ray-march steps in final renders.
+  public var renderPlanetCloudMarchSteps: Int = 32
   /// GPU backend (`Metal`, `OpenGL`, `Vulkan`).
   public var backend: Akari.GPU.Backend = .preferredForCurrentPlatform
   /// Upscales resolution with the selected technique.
@@ -114,7 +127,9 @@ public struct RenderSettings: Sendable
               targetFrameRate: Int = 60,
               samples: Int = 16,
               renderSamples: Int = 64,
-              backend: Akari.GPU.Backend = .preferredForCurrentPlatform)
+              backend: Akari.GPU.Backend = .preferredForCurrentPlatform,
+              planetCloudMarchSteps: Int = 32,
+              renderPlanetCloudMarchSteps: Int = 32)
   {
     self.quality = quality
     self.features = features ?? Self.features(for: quality)
@@ -126,6 +141,8 @@ public struct RenderSettings: Sendable
     self.targetFrameRate = targetFrameRate
     self.samples = samples
     self.renderSamples = renderSamples
+    self.planetCloudMarchSteps = planetCloudMarchSteps
+    self.renderPlanetCloudMarchSteps = renderPlanetCloudMarchSteps
     self.backend = backend
   }
 

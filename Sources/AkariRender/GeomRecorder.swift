@@ -40,7 +40,7 @@
 
 import AkariCore
 import Foundation
-import OpenUSDKit
+import HydraKit
 
 public extension Akari.Geom
 {
@@ -60,16 +60,53 @@ public extension Akari.Geom
       public var dataRevision: UInt64
       public var topologyRevision: UInt64
       public var flipWinding: Bool
+      /// A subdivision surface, shaded without hard edges.
+      public var smooth = false
+      /// Each triangle's Ptex face, what its streamed tiles key on.
+      public var triangleFaces = Pixar.VtIntArray()
+      /// The face resolutions and the map they stream from, -1 when they don't.
+      public var faceRes = Pixar.VtIntArray()
+      public var ptexMap: Int32 = -1
       public var points: Pixar.VtVec3fArray
       public var tris: Pixar.VtVec3iArray
       public var uvs: Pixar.VtVec2fArray
       public var worldMatrix: [Float]
       public var normalMatrix: [Float]
+      /// The matrices taking `worldMatrix`'s output to world space, 16 floats
+      /// each, shared by every mesh under the same prototype. Empty when the
+      /// mesh is drawn once at `worldMatrix`.
+      public var instances: [Float] = []
+      /// Hashes `instances`, equal sets share it.
+      public var instancesKey: UInt64 = 0
+      /// Set when ``Akari/LiveInstances`` draws this prototype's instances.
+      public var livePrototype: String?
+      /// A binned prototype's draws, one per each instance set.
+      public var instanceDraws: [InstanceDraw] = []
+      /// Hashes the object space geometry and material, so identical
+      /// prototypes under different instancers can share one draw.
+      public var contentKey: UInt64 = 0
+      /// GPU skinned meshes, `points` are the bind space rest points, skinned by
+      /// `skinInfluencesPerPoint` (joint, weight) pairs each against this frames
+      /// palette.
+      public var skinInfluencesPerPoint = 0
+      public var skinInfluences = Pixar.VtVec2fArray()
+      public var skinPalette: [Float] = []
+      public var skinBounds: [Float] = []
+      public var skinRevision: UInt64 = 0
+      /// Drawn by the transparency pass instead of the gbuffer.
+      public var transparent = false
+      /// Black and emissive, casts no shadow.
+      public var emitter = false
+      /// The bound material's constant opacity.
+      public var opacity: Float = 1
+      /// The bound material's constant color and roughness.
+      public var color = SIMD3<Float>(repeating: 0.8)
+      public var roughness: Float = 0.5
 
       public init(id: String, key: UInt64, primId: Int32, dataRevision: UInt64, topologyRevision: UInt64,
                   flipWinding: Bool,
                   points: Pixar.VtVec3fArray, tris: Pixar.VtVec3iArray, uvs: Pixar.VtVec2fArray,
-                  worldMatrix: [Float], normalMatrix: [Float])
+                  worldMatrix: [Float], normalMatrix: [Float], contentKey: UInt64 = 0)
       {
         self.id = id
         self.key = key
@@ -82,6 +119,26 @@ public extension Akari.Geom
         self.uvs = uvs
         self.worldMatrix = worldMatrix
         self.normalMatrix = normalMatrix
+        self.contentKey = contentKey
+      }
+    }
+
+    /// One instance set a prototype draws with, the first `count`
+    /// of its matrices, the set's order makes any prefix an even
+    /// sample.
+    public struct InstanceDraw
+    {
+      public var key: UInt64
+      public var transforms: [Float]
+      public var count: Int
+      public var livePrototype: String?
+
+      public init(key: UInt64, transforms: [Float], count: Int, livePrototype: String? = nil)
+      {
+        self.key = key
+        self.transforms = transforms
+        self.count = count
+        self.livePrototype = livePrototype
       }
     }
 
@@ -90,10 +147,26 @@ public extension Akari.Geom
     {
       public var primId: Int32
       public var dataRevision: UInt64
-      public var verts: [Float]
-      public var indices: [Int32]
+      public var built: Akari.Geom.Built
+      public var verts: UnsafeBufferPointer<Float>
+      {
+        built.verts
+      }
+
+      public var indices: UnsafeBufferPointer<Int32>
+      {
+        built.indices
+      }
+
+      public var ptexFaces: UnsafeBufferPointer<UInt32>
+      {
+        built.ptexFaces
+      }
+
       public var worldMatrix: [Float]
       public var normalMatrix: [Float]
+      /// Nonempty for a GPU instanced prototype.
+      public var instanceDraws: [InstanceDraw] = []
     }
 
     /// A built mesh, with what the cache keys on.
@@ -104,10 +177,12 @@ public extension Akari.Geom
       var cached: CachedMesh
       var worldMatrix: [Float]
       var normalMatrix: [Float]
+      var instanceDraws: [InstanceDraw]
     }
 
-    /// Everything needed to build one mesh,
-    /// `topology` when only its points changed.
+    /// Everything needed to build one mesh, `topology` when only its points
+    /// changed. The USD arrays are flattened by the build itself, so only the
+    /// meshes building at once hold their copies.
     private struct BuildInput
     {
       var id: String
@@ -115,12 +190,18 @@ public extension Akari.Geom
       var dataRevision: UInt64
       var topologyRevision: UInt64
       var flipWinding: Bool
-      var pointsFlat: [Float]
-      var trisFlat: [Int32]
-      var uvsFlat: [Float]
+      var cacheKey: UInt64
+      var smooth: Bool
+      var points: Pixar.VtVec3fArray
+      var tris: Pixar.VtVec3iArray
+      var uvs: Pixar.VtVec2fArray
+      /// Empty unless its Ptex streams.
+      var triangleFaces: Pixar.VtIntArray
+      var faceRes: Pixar.VtIntArray
       var topology: Akari.Geom.Topology?
       var worldMatrix: [Float]
       var normalMatrix: [Float]
+      var instanceDraws: [InstanceDraw]
     }
 
     private struct CachedMesh
@@ -129,8 +210,7 @@ public extension Akari.Geom
       var topologyRevision: UInt64
       var flipWinding: Bool
       var topology: Akari.Geom.Topology?
-      var verts: [Float]
-      var indices: [Int32]
+      var built: Akari.Geom.Built
     }
 
     private var cache: [String: CachedMesh] = [:]
@@ -143,68 +223,84 @@ public extension Akari.Geom
       self.keepsTopology = keepsTopology
     }
 
-    /// Reuses what's cached here or in `others`, builds the rest in
-    /// parallel, reusing a mesh's triangulation when only its points
-    /// moved.
-    public func record(_ meshes: [RawMesh], reusing others: [Recorder] = []) -> [Item]
+    /// The most triangles one record keeps built for the next in memory,
+    /// past which a scene's vertices would be held twice, here and on the
+    /// GPU. Builds mapped from the geometry cache are kept regardless.
+    private static let cacheTriangles = 8_000_000
+    /// How much one chunk builds before its handed on.
+    private static let chunkTriangles = 2_000_000
+    private static let chunkMeshes = 4096
+
+    /// Reuses whats cached here or in `others`, builds the rest in parallel
+    /// a chunk at a time, reusing a meshes triangulation when only its points
+    /// moved, and hands each chunk to `body` in order. Only one chunk's built
+    /// vertices are alive at once unless the meshes are few enough to cache.
+    public func record(_ meshes: [RawMesh], reusing others: [Recorder] = [], body: ([Item]) -> Void)
     {
-      var readyItems: [BuiltMesh] = []
-      var pendingInputs: [BuildInput] = []
-
-      readyItems.reserveCapacity(meshes.count)
-      pendingInputs.reserveCapacity(meshes.count)
-
-      for mesh in meshes
+      let caches = Akari.Geom.GeometryCache.shared.isEnabled
+        || meshes.reduce(0) { $0 + $1.tris.size() } <= Self.cacheTriangles
+      var newCache: [String: CachedMesh] = [:]
+      var start = 0
+      while start < meshes.count
       {
-        let candidates = ([cache[mesh.id]] + others.map { $0.cache[mesh.id] }).compactMap(\.self)
-
-        if let cached = candidates.first(where: { $0.dataRevision == mesh.dataRevision && $0.flipWinding == mesh.flipWinding })
+        var end = start
+        var triangles = 0
+        while end < meshes.count, end == start || (triangles < Self.chunkTriangles && end - start < Self.chunkMeshes)
         {
-          if cached.verts.isEmpty || cached.indices.isEmpty { continue }
-          readyItems.append(BuiltMesh(id: mesh.id, primId: mesh.primId, cached: cached,
-                                      worldMatrix: mesh.worldMatrix, normalMatrix: mesh.normalMatrix))
-          continue
+          triangles += meshes[end].tris.size()
+          end += 1
         }
 
-        if let topology = candidates.first(where: { $0.topologyRevision == mesh.topologyRevision })?.topology
+        var readyItems: [BuiltMesh] = []
+        var pendingInputs: [BuildInput] = []
+        for mesh in meshes[start ..< end]
         {
+          let candidates = ([cache[mesh.id]] + others.map { $0.cache[mesh.id] }).compactMap(\.self)
+
+          if let cached = candidates.first(where: { $0.dataRevision == mesh.dataRevision && $0.flipWinding == mesh.flipWinding })
+          {
+            if cached.built.isEmpty { continue }
+            readyItems.append(BuiltMesh(id: mesh.id, primId: mesh.primId, cached: cached,
+                                        worldMatrix: mesh.worldMatrix, normalMatrix: mesh.normalMatrix,
+                                        instanceDraws: mesh.instanceDraws))
+            continue
+          }
+
+          let topology = candidates.first(where: { $0.topologyRevision == mesh.topologyRevision })?.topology
+          let streams = mesh.ptexMap >= 0 && mesh.triangleFaces.size() == mesh.tris.size()
+          let cacheKey = Akari.Geom.GeometryCache.key(contentKey: mesh.contentKey, flipWinding: mesh.flipWinding,
+                                                      points: mesh.points.size(), triangles: mesh.tris.size(),
+                                                      uvs: mesh.uvs.size())
           pendingInputs.append(BuildInput(id: mesh.id, primId: mesh.primId, dataRevision: mesh.dataRevision,
                                           topologyRevision: mesh.topologyRevision, flipWinding: mesh.flipWinding,
-                                          pointsFlat: Akari.Geom.flatten(points: mesh.points), trisFlat: [],
-                                          uvsFlat: [], topology: topology, worldMatrix: mesh.worldMatrix,
-                                          normalMatrix: mesh.normalMatrix))
-          continue
+                                          cacheKey: cacheKey, smooth: mesh.smooth, points: mesh.points, tris: mesh.tris, uvs: mesh.uvs,
+                                          triangleFaces: streams ? mesh.triangleFaces : Pixar.VtIntArray(),
+                                          faceRes: streams ? mesh.faceRes : Pixar.VtIntArray(),
+                                          topology: topology, worldMatrix: mesh.worldMatrix,
+                                          normalMatrix: mesh.normalMatrix, instanceDraws: mesh.instanceDraws))
         }
 
-        let (pointsFlat, trisFlat, uvsFlat) = Akari.Geom.flatten(points: mesh.points, tris: mesh.tris, uvs: mesh.uvs)
-        pendingInputs.append(BuildInput(id: mesh.id, primId: mesh.primId, dataRevision: mesh.dataRevision,
-                                        topologyRevision: mesh.topologyRevision, flipWinding: mesh.flipWinding,
-                                        pointsFlat: pointsFlat, trisFlat: trisFlat, uvsFlat: uvsFlat,
-                                        topology: nil, worldMatrix: mesh.worldMatrix,
-                                        normalMatrix: mesh.normalMatrix))
-      }
-
-      let builtItems = Self.buildInParallel(pendingInputs, keepsTopology: keepsTopology)
-
-      var newCache: [String: CachedMesh] = [:]
-      var items: [Item] = []
-
-      let itemCount = readyItems.count + builtItems.count
-      newCache.reserveCapacity(itemCount)
-      items.reserveCapacity(itemCount)
-
-      for item in readyItems + builtItems
-      {
-        var cached = item.cached
-        if !keepsTopology { cached.topology = nil }
-        newCache[item.id] = cached
-        if item.cached.verts.isEmpty || item.cached.indices.isEmpty { continue }
-        items.append(Item(primId: item.primId, dataRevision: item.cached.dataRevision,
-                          verts: item.cached.verts, indices: item.cached.indices,
-                          worldMatrix: item.worldMatrix, normalMatrix: item.normalMatrix))
+        let builtItems = Self.buildInParallel(pendingInputs, keepsTopology: keepsTopology)
+        var items: [Item] = []
+        items.reserveCapacity(readyItems.count + builtItems.count)
+        for item in readyItems + builtItems
+        {
+          if caches
+          {
+            var cached = item.cached
+            if !keepsTopology { cached.topology = nil }
+            newCache[item.id] = cached
+          }
+          if item.cached.built.isEmpty { continue }
+          items.append(Item(primId: item.primId, dataRevision: item.cached.dataRevision,
+                            built: item.cached.built,
+                            worldMatrix: item.worldMatrix, normalMatrix: item.normalMatrix,
+                            instanceDraws: item.instanceDraws))
+        }
+        if !items.isEmpty { body(items) }
+        start = end
       }
       cache = newCache
-      return items
     }
 
     /// Passes the results buffer into `concurrentPerform`'s
@@ -212,36 +308,83 @@ public extension Akari.Geom
     private struct UnsafeSendableBuffer: @unchecked Sendable
     {
       let buffer: UnsafeMutableBufferPointer<BuiltMesh?>
+      let inputs: [BuildInput]
     }
 
-    /// Triangulates the cache misses in parallel.
+    /// Meshes past this build one at a time.
+    private static let largeTriangles = 1_000_000
+
+    /// Triangulates the cache misses in parallel, the large ones after the rest and one by one.
     private static func buildInParallel(_ inputs: [BuildInput], keepsTopology: Bool) -> [BuiltMesh]
     {
       guard !inputs.isEmpty else { return [] }
 
       var results = [BuiltMesh?](repeating: nil, count: inputs.count)
+      let small = inputs.indices.filter { inputs[$0].tris.size() <= largeTriangles }
       results.withUnsafeMutableBufferPointer
       { buf in
-        let box = UnsafeSendableBuffer(buffer: buf)
-        DispatchQueue.concurrentPerform(iterations: inputs.count)
-        { i in
-          let input = inputs[i]
-          let topology = input.topology
-            ?? Akari.Geom.topology(trisFlat: input.trisFlat, uvsFlat: input.uvsFlat,
-                                   pointCount: input.pointsFlat.count / 3)
-          var verts: [Float] = []
-          var indices: [Int32] = []
-          Akari.Geom.buildMesh(pointsFlat: input.pointsFlat, topology: topology, verts: &verts,
-                               indices: &indices, flipWinding: input.flipWinding)
-          let cached = CachedMesh(dataRevision: input.dataRevision, topologyRevision: input.topologyRevision,
-                                  flipWinding: input.flipWinding, topology: keepsTopology ? topology : nil,
-                                  verts: verts, indices: indices)
-          box.buffer[i] = BuiltMesh(id: input.id, primId: input.primId, cached: cached,
-                                    worldMatrix: input.worldMatrix, normalMatrix: input.normalMatrix)
+        let box = UnsafeSendableBuffer(buffer: buf, inputs: inputs)
+        DispatchQueue.concurrentPerform(iterations: small.count)
+        { j in
+          let i = small[j]
+          box.buffer[i] = build(box.inputs[i], keepsTopology: keepsTopology)
         }
+      }
+      for i in inputs.indices where inputs[i].tris.size() > largeTriangles
+      {
+        results[i] = build(inputs[i], keepsTopology: keepsTopology)
       }
 
       return results.compactMap(\.self)
+    }
+
+    private static func build(_ input: BuildInput, keepsTopology: Bool) -> BuiltMesh
+    {
+      if !keepsTopology, let built = Akari.Geom.GeometryCache.shared.load(input.cacheKey)
+      {
+        return BuiltMesh(id: input.id, primId: input.primId,
+                         cached: CachedMesh(dataRevision: input.dataRevision, topologyRevision: input.topologyRevision,
+                                            flipWinding: input.flipWinding, topology: nil, built: built),
+                         worldMatrix: input.worldMatrix, normalMatrix: input.normalMatrix,
+                         instanceDraws: input.instanceDraws)
+      }
+      let topology: Akari.Geom.Topology
+      let pointsFlat: [Float]
+      if let cached = input.topology
+      {
+        topology = cached
+        pointsFlat = Akari.Geom.flatten(points: input.points)
+      }
+      else
+      {
+        let flat = Akari.Geom.flatten(points: input.points, tris: input.tris, uvs: input.uvs, expandsConstantUv: false)
+        topology = Akari.Geom.topology(trisFlat: flat.tris, uvsFlat: flat.uvs, pointCount: flat.points.count / 3)
+        pointsFlat = flat.points
+      }
+      var verts: [Float] = []
+      var indices: [Int32] = []
+      var sources: [Int32] = []
+      Akari.Geom.buildMesh(pointsFlat: pointsFlat, topology: topology, verts: &verts,
+                           indices: &indices, sources: &sources, flipWinding: input.flipWinding, subdivided: input.smooth)
+      var ptexFaces: [UInt32] = []
+      if !input.triangleFaces.empty()
+      {
+        ptexFaces = [UInt32](repeating: 0, count: sources.count)
+        sources.withUnsafeBufferPointer
+        { src in
+          ptexFaces.withUnsafeMutableBufferPointer
+          {
+            Pixar.HdAkariPtexTriangleEntries(input.triangleFaces, input.faceRes, src.baseAddress, src.count, $0.baseAddress)
+          }
+        }
+      }
+      let cached = CachedMesh(dataRevision: input.dataRevision, topologyRevision: input.topologyRevision,
+                              flipWinding: input.flipWinding, topology: keepsTopology ? topology : nil,
+                              built: Akari.Geom.GeometryCache.shared.store(input.cacheKey, verts: verts, indices: indices,
+                                                                           ptexFaces: ptexFaces))
+      return BuiltMesh(id: input.id, primId: input.primId, cached: cached,
+                       worldMatrix: input.worldMatrix, normalMatrix: input.normalMatrix,
+                       instanceDraws: input.instanceDraws)
     }
   }
 }

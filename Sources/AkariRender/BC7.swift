@@ -72,8 +72,14 @@ public extension Akari
               let scratch = Scratch(texels: vectors.baseAddress!, palette: vectors.baseAddress! + 16,
                                     indices: ints.baseAddress!, candidate: ints.baseAddress! + 16,
                                     nearest: ints.baseAddress! + 32, weights: floats.baseAddress!)
-              for k in 0 ..< 16 { scratch.weights[k] = weights[k] }
-              for v in 0 ... 64 { scratch.nearest[v] = Int32(nearestWeight[v]) }
+              for k in 0 ..< 16
+              {
+                scratch.weights[k] = weights[k]
+              }
+              for v in 0 ... 64
+              {
+                scratch.nearest[v] = Int32(nearestWeight[v])
+              }
               for bx in 0 ..< blocksWide
               {
                 for i in 0 ..< 16
@@ -165,8 +171,15 @@ public extension Akari
       var p0: Float
       var p1: Float
 
-      var e0: SIMD4<Float> { q0 * 2 + p0 }
-      var e1: SIMD4<Float> { q1 * 2 + p1 }
+      var e0: SIMD4<Float>
+      {
+        q0 * 2 + p0
+      }
+
+      var e1: SIMD4<Float>
+      {
+        q1 * 2 + p1
+      }
     }
 
     private static func encodeBlock(_ s: Scratch, into out: UnsafeMutablePointer<UInt8>)
@@ -184,7 +197,10 @@ public extension Akari
       if lo == hi
       {
         let e = quantize(lo)
-        for i in 0 ..< 16 { s.indices[i] = 0 }
+        for i in 0 ..< 16
+        {
+          s.indices[i] = 0
+        }
         write(Endpoints(q0: e.q, q1: e.q, p0: e.p, p1: e.p), s.indices, into: out)
         return
       }
@@ -222,7 +238,10 @@ public extension Akari
         if assign(s, refit, into: s.candidate) < bestError
         {
           best = refit
-          for i in 0 ..< 16 { s.indices[i] = s.candidate[i] }
+          for i in 0 ..< 16
+          {
+            s.indices[i] = s.candidate[i]
+          }
         }
       }
 
@@ -230,7 +249,10 @@ public extension Akari
       if s.indices[0] >= 8
       {
         best = Endpoints(q0: best.q1, q1: best.q0, p0: best.p1, p1: best.p0)
-        for i in 0 ..< 16 { s.indices[i] = 15 - s.indices[i] }
+        for i in 0 ..< 16
+        {
+          s.indices[i] = 15 - s.indices[i]
+        }
       }
       write(best, s.indices, into: out)
     }

@@ -1,0 +1,84 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    doc = """Akari VDB volume showcase, the Walt Disney Animation Studios cloud."""
+    endTimeCode = 1
+    metersPerUnit = 1
+    startTimeCode = 1
+    upAxis = "Y"
+    customLayerData = {
+        dictionary colorManagement = {
+            string viewTransform = "Standard"
+        }
+    }
+)
+
+def Xform "World"
+{
+    def Volume "Cloud"
+    {
+        rel field:density = </World/Cloud/density>
+        float primvars:akari:volume:densityScale = 4 (interpolation = "constant")
+        color3f primvars:akari:volume:albedo = (1, 1, 1) (interpolation = "constant")
+        float primvars:akari:volume:anisotropy = 0.877 (interpolation = "constant")
+        float primvars:akari:volume:maxResolution = 640 (interpolation = "constant")
+
+        def OpenVDBAsset "density"
+        {
+            asset filePath = @/Users/furby/Downloads/Pointe_of_Origin/sources/wdas_cloud/wdas_cloud/wdas_cloud_quarter.vdb@
+            token fieldName = "density"
+        }
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </World/Looks/Grey>
+        double size = 1
+        double3 xformOp:translate = (0, -1001, 0)
+        float3 xformOp:scale = (40000, 2, 40000)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Scope "Looks"
+    {
+        def Material "Grey"
+        {
+            token outputs:surface.connect = </World/Looks/Grey/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.2, 0.2, 0.2)
+                float inputs:roughness = 1
+                token outputs:surface
+            }
+        }
+    }
+
+    def DomeLight "Sky"
+    {
+        color3f inputs:color = (0.03, 0.07, 0.23)
+        float inputs:intensity = 1
+    }
+
+    def DistantLight "Sun"
+    {
+        color3f inputs:color = (1, 0.9615, 0.8846)
+        float inputs:intensity = 2.6
+        bool inputs:normalize = 1
+        float inputs:angle = 0.53
+        matrix4d xformOp:transform = ( (0.422656, 0.000000, -0.906290, 0), (-0.694219, 0.642840, -0.323754, 0), (0.582600, 0.766000, 0.271700, 0), (0, 0, 0, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def Camera "Reference"
+    {
+        float focalLength = 35.0017
+        float horizontalAperture = 36
+        float verticalAperture = 19.4595
+        float2 clippingRange = (1, 1000000)
+        matrix4d xformOp:transform = ( (-0.031526, -0.000404, -0.999503, 0), (0.273167, 0.961924, -0.009005, 0), (0.961450, -0.273315, -0.030215, 0), (648.064, -82.473, -63.856, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+}

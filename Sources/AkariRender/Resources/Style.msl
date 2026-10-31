@@ -1,0 +1,29 @@
+/// A prim's shading style, eight texels a prim, 512 prims a row:
+/// (shadingModel, color, unlit, front band),
+/// (front center, front radius < 0 without one),
+/// (wire color, wire glow),
+/// (front color, front glow),
+/// (wire spacing, ...).
+float4 styleTexel(texture2d<float> styles, float primId, int k)
+{
+  int id = int(primId + 0.5);
+  int perRow = int(styles.get_width()) / 8;
+  int row = id / max(perRow, 1);
+  if (id < 0 || perRow < 1 || row >= int(styles.get_height())) {
+    return k == 0 ? float4(5.0, 1.0, 0.0, 0.04) : k == 1 ? float4(0.0, 0.0, 0.0, -1.0) : float4(0.0);
+  }
+  return styles.read(uint2((id % perRow) * 8 + k, row));
+}
+
+/// How far into the shading model `p` is, 1 inside its sphere, 1 everywhere without one.
+float styleInside(float4 front, float band, float3 p)
+{
+  if (front.w < 0.0) return 1.0;
+  return 1.0 - smoothstep(front.w - max(band, 1e-4), front.w, distance(p, front.xyz));
+}
+
+/// The shading model shading `p` is at.
+float styleShadingModel(float4 s0, float4 front, float3 p)
+{
+  return mix(max(s0.x - 1.0, 0.0), s0.x, styleInside(front, s0.w, p));
+}

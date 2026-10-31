@@ -52,9 +52,9 @@ public extension Akari
     /// Raw values must match Hydra's spelling exactly.
     enum Prim
     {
-      enum Rprim: String, CaseIterable { case mesh, sphere, cube }
-      enum Sprim: String, CaseIterable { case camera, material, extComputation, sphereLight, cylinderLight, diskLight }
-      enum Bprim: String, CaseIterable { case renderBuffer }
+      enum Rprim: String, CaseIterable { case mesh, sphere, cube, cylinder, cone, capsule, volume, basisCurves }
+      enum Sprim: String, CaseIterable { case camera, material, extComputation, sphereLight, cylinderLight, diskLight, rectLight, domeLight, distantLight }
+      enum Bprim: String, CaseIterable { case renderBuffer, openvdbAsset }
     }
 
     public func supportedRprimTypes() -> [String]

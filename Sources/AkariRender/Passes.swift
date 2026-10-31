@@ -77,7 +77,7 @@ public extension Akari
 
     public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
-      ctx.labfx.updateLightProbes(renderParam: ctx.renderParam, settings: ctx.settings)
+      ctx.labfx.updateLightProbes(renderParam: ctx.renderParam, camera: ctx.camera, settings: ctx.settings)
     }
   }
 
@@ -98,7 +98,10 @@ public extension Akari
                                view: ctx.camera.view,
                                projection: ctx.camera.projection,
                                unjitteredProjection: ctx.unjitteredCamera.projection,
-                               selection: ctx.selection)
+                               selection: ctx.selection,
+                               planetCloudMarchSteps: ctx.isFinalRender
+                                 ? ctx.settings.renderPlanetCloudMarchSteps
+                                 : ctx.settings.planetCloudMarchSteps)
       ctx.labfx.cullStaticGeometry(projection: ctx.camera.projection, view: ctx.camera.view)
 
       ctx.labfx.renderGbufferEarly()
@@ -121,6 +124,7 @@ public extension Akari
       ctx.labfx.setLighting(
         iblEnabled: ctx.settings.features.contains(.imageBasedLighting),
         projection: ctx.camera.projection,
+        view: ctx.camera.view,
         light: ctx.settings.light,
         shadowsEnabled: ctx.settings.features.contains(.shadowMaps)
       )
@@ -220,6 +224,7 @@ public extension Akari
       ctx.labfx.setTemporal(camera: ctx.unjitteredCamera,
                             samples: ctx.settings.samples,
                             moving: ctx.cameraMoved)
+      if ctx.settings.features.contains(.motionBlur) { ctx.labfx.setMotionBlur() }
     }
   }
 
@@ -239,7 +244,7 @@ public extension Akari
                     Akari.GPU.RenderTargetDesc(width: ctx.target.width / 2,
                                                height: ctx.target.height / 2,
                                                format: .rgba16f))
-      // TODO: Karis averaged downsample pyramid, tent upsample, add.
+      ctx.labfx.setBloom(ctx.settings.bloom)
     }
   }
 
@@ -254,6 +259,7 @@ public extension Akari
       ctx.labfx.setTonemap(exposure: ctx.settings.color.exposure,
                            gamma: ctx.settings.color.gamma,
                            viewTransform: ctx.settings.color.viewTransform,
+                           look: ctx.settings.color.look,
                            frameIndex: ctx.frameIndex)
     }
   }
@@ -268,8 +274,10 @@ public extension Akari
       s.features.contains(.depthOfField)
     }
 
-    public func execute(_: inout Akari.GPU.FrameState, _: Akari.GPU.FrameContext) {}
-    // TODO: CoC from depth, tiled gather bokeh, composite.
+    public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
+    {
+      ctx.labfx.setDepthOfField(width: ctx.target.width, exact: ctx.isFinalRender, settings: ctx.settings.depthOfField)
+    }
   }
 
   /// Hand the final image to the bound color AOV (Hydra composites / presents).
@@ -286,7 +294,7 @@ public extension Akari
                         projection: ctx.unjitteredCamera.projection,
                         hgi: ctx.gpu.hgi,
                         fireflies: ctx.settings.features.contains(.fireflies),
-                        lightProbes: ctx.settings.features.contains(.lightProbes))
+                        lightProbes: ctx.settings.features.contains(.lightProbes) && !ctx.isFinalRender)
     }
   }
 

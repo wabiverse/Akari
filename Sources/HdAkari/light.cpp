@@ -43,6 +43,8 @@
 # include <Hd/light.h>
 # include <Hd/sceneDelegate.h>
 # include <Hd/tokens.h>
+# include <Sdf/assetPath.h>
+# include <Vt/array.h>
 # include <Vt/value.h>
 #else
 # include <pxr/pxr.h>
@@ -50,12 +52,16 @@
 # include <pxr/imaging/hd/light.h>
 # include <pxr/imaging/hd/sceneDelegate.h>
 # include <pxr/imaging/hd/tokens.h>
+# include <pxr/usd/sdf/assetPath.h>
+# include <pxr/base/vt/array.h>
 # include <pxr/base/vt/value.h>
 #endif
 
+#include <algorithm>
 #include <cmath>
 
 #include "HdAkari/light.h"
+#include "HdAkari/domeImage.h"
 #include "HdAkari/renderParam.h"
 #include "HdAkari/scene.h"
 
@@ -88,6 +94,76 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
     return;
   }
 
+  if (_type == HdPrimTypeTokens->domeLight)
+  {
+    HdAkariDomeData dome;
+    dome.id = id;
+    dome.transform = sceneDelegate->GetTransform(id);
+    dome.visible = sceneDelegate->GetVisible(id);
+
+    const VtValue intensity = sceneDelegate->GetLightParamValue(id, HdLightTokens->intensity);
+    if (intensity.IsHolding<float>())
+    {
+      dome.intensity = intensity.UncheckedGet<float>();
+    }
+
+    const VtValue exposure = sceneDelegate->GetLightParamValue(id, HdLightTokens->exposure);
+    if (exposure.IsHolding<float>())
+    {
+      dome.exposure = exposure.UncheckedGet<float>();
+    }
+
+    const VtValue color = sceneDelegate->GetLightParamValue(id, HdLightTokens->color);
+    if (color.IsHolding<GfVec3f>())
+    {
+      const GfVec3f c = color.UncheckedGet<GfVec3f>();
+      dome.colorR = c[0]; dome.colorG = c[1]; dome.colorB = c[2];
+    }
+
+    const VtValue file = sceneDelegate->GetLightParamValue(id, HdLightTokens->textureFile);
+    if (file.IsHolding<SdfAssetPath>())
+    {
+      const SdfAssetPath &asset = file.UncheckedGet<SdfAssetPath>();
+      dome.textureFile = asset.GetResolvedPath().empty() ? asset.GetAssetPath() : asset.GetResolvedPath();
+      HdAkariPrefetchDomeImage(dome.textureFile, HdAkariDomeSmallWidth, HdAkariDomeSunThreshold);
+    }
+    
+    scene->UpdateDome(std::move(dome));
+    *dirtyBits = HdChangeTracker::Clean;
+    return;
+  }
+
+  if (_type == HdPrimTypeTokens->distantLight)
+  {
+    HdAkariDistantData distant;
+    distant.id = id;
+    distant.transform = sceneDelegate->GetTransform(id);
+    distant.visible = sceneDelegate->GetVisible(id);
+    const VtValue intensity = sceneDelegate->GetLightParamValue(id, HdLightTokens->intensity);
+    if (intensity.IsHolding<float>()) distant.intensity = intensity.UncheckedGet<float>();
+    const VtValue exposure = sceneDelegate->GetLightParamValue(id, HdLightTokens->exposure);
+    if (exposure.IsHolding<float>()) distant.exposure = exposure.UncheckedGet<float>();
+    const VtValue angle = sceneDelegate->GetLightParamValue(id, HdLightTokens->angle);
+    if (angle.IsHolding<float>()) distant.angle = angle.UncheckedGet<float>();
+    const VtValue color = sceneDelegate->GetLightParamValue(id, HdLightTokens->color);
+    if (color.IsHolding<GfVec3f>())
+    {
+      const GfVec3f c = color.UncheckedGet<GfVec3f>();
+      distant.colorR = c[0]; distant.colorG = c[1]; distant.colorB = c[2];
+    }
+    // normalized, intensity is the illuminance it delivers, otherwise the luminance of its disk.
+    const VtValue normalize = sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize);
+    const float halfAngle = std::clamp(distant.angle * float(M_PI) / 360.0f, 0.0f, float(M_PI));
+    if (!(normalize.IsHolding<bool>() && normalize.UncheckedGet<bool>()) && halfAngle > 0.0f)
+    {
+      const float s = std::sin(halfAngle);
+      distant.intensity *= float(M_PI) * (halfAngle <= float(M_PI) / 2 ? s * s : 2.0f - s * s);
+    }
+    scene->UpdateDistant(std::move(distant));
+    *dirtyBits = HdChangeTracker::Clean;
+    return;
+  }
+
   HdAkariLightData data;
   data.id = id;
   data.transform = sceneDelegate->GetTransform(id);
@@ -114,22 +190,89 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
     data.colorB = color[2];
   }
 
+  const VtValue diffuseVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->diffuse);
+  if (diffuseVal.IsHolding<float>())
+  {
+    data.diffuse = diffuseVal.UncheckedGet<float>();
+  }
+
+  const VtValue specularVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->specular);
+  if (specularVal.IsHolding<float>())
+  {
+    data.specular = specularVal.UncheckedGet<float>();
+  }
+
   const VtValue radiusVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->radius);
   if (radiusVal.IsHolding<float>())
   {
     data.radius = radiusVal.UncheckedGet<float>();
   }
 
+  // a sphere's radius scales with its transform, as UsdLux has it, the other shapes scale by their axes.
+  if (_type == HdPrimTypeTokens->sphereLight)
+  {
+    const GfMatrix4d xf = sceneDelegate->GetTransform(id);
+    data.radius *= float(std::cbrt(std::abs(xf.GetDeterminant3())));
+  }
+
   // cylinders and disks shade as the sphere of the same emitting area.
+  float area = 4.0f * float(M_PI) * data.radius * data.radius;
   if (_type == HdPrimTypeTokens->cylinderLight)
   {
     const VtValue lengthVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->length);
     const float length = lengthVal.IsHolding<float>() ? lengthVal.UncheckedGet<float>() : 1.0f;
+    area = 2.0f * float(M_PI) * data.radius * length;
+    data.length = length;
+    data.tubeRadius = data.radius;
     data.radius = std::sqrt(data.radius * length * 0.5f);
   }
   else if (_type == HdPrimTypeTokens->diskLight)
   {
+    area = float(M_PI) * data.radius * data.radius;
+    data.width = data.height = data.radius * std::sqrt(float(M_PI));
     data.radius *= 0.5f;
+  }
+  else if (_type == HdPrimTypeTokens->rectLight)
+  {
+    const VtValue widthVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->width);
+    const VtValue heightVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->height);
+    data.width = widthVal.IsHolding<float>() ? widthVal.UncheckedGet<float>() : 1.0f;
+    data.height = heightVal.IsHolding<float>() ? heightVal.UncheckedGet<float>() : 1.0f;
+    area = data.width * data.height;
+    data.radius = std::sqrt(area / (4.0f * float(M_PI)));
+  }
+
+  // a normalized light's intensity is its power, spread over its surface.
+  const VtValue normalizeVal = sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize);
+  if (normalizeVal.IsHolding<bool>() && normalizeVal.UncheckedGet<bool>() && area > 0.0f)
+  {
+    data.intensity /= area;
+  }
+
+  // a hero light always keeps full quality shadows, `akari:hero` in USD or `akari_hero` set on a Blender light.
+  for (TfToken const &name : {TfToken("akari:hero"), TfToken("userProperties:akari_hero")})
+  {
+    const VtValue heroVal = sceneDelegate->GetLightParamValue(id, name);
+    if (heroVal.IsHolding<bool>()) data.hero = heroVal.UncheckedGet<bool>();
+    else if (heroVal.IsHolding<int>()) data.hero = heroVal.UncheckedGet<int>() != 0;
+    else if (heroVal.IsHolding<float>()) data.hero = heroVal.UncheckedGet<float>() != 0.0f;
+    if (data.hero) break;
+  }
+
+  for (TfToken const &name : {TfToken("primvars:akari:light:cameraVisible"), TfToken("akari:light:cameraVisible")})
+  {
+    const VtValue v = sceneDelegate->GetLightParamValue(id, name);
+    if (v.IsHolding<bool>()) { data.cameraVisible = v.UncheckedGet<bool>(); break; }
+    if (v.IsHolding<int>()) { data.cameraVisible = v.UncheckedGet<int>() != 0; break; }
+    if (v.IsHolding<VtArray<bool>>() && !v.UncheckedGet<VtArray<bool>>().empty()) { data.cameraVisible = v.UncheckedGet<VtArray<bool>>()[0]; break; }
+  }
+
+  for (TfToken const &name : {TfToken("primvars:akari:light:probes"), TfToken("akari:light:probes")})
+  {
+    const VtValue v = sceneDelegate->GetLightParamValue(id, name);
+    if (v.IsHolding<bool>()) { data.probes = v.UncheckedGet<bool>(); break; }
+    if (v.IsHolding<int>()) { data.probes = v.UncheckedGet<int>() != 0; break; }
+    if (v.IsHolding<VtArray<bool>>() && !v.UncheckedGet<VtArray<bool>>().empty()) { data.probes = v.UncheckedGet<VtArray<bool>>()[0]; break; }
   }
 
   data.dataRevision = ++_dataGeneration;
@@ -146,7 +289,9 @@ HdAkariLight::Finalize(HdRenderParam *renderParam)
   {
     if (HdAkariScene *scene = param->GetScene())
     {
-      scene->RemoveLight(GetId());
+      if (_type == HdPrimTypeTokens->domeLight) scene->RemoveDome(GetId());
+      else if (_type == HdPrimTypeTokens->distantLight) scene->RemoveDistant(GetId());
+      else scene->RemoveLight(GetId());
     }
   }
 }

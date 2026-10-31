@@ -319,14 +319,12 @@ extension Akari.ShadowAtlas
     layout(std430, binding = 1) buffer Tiles { uint tiles_buf[]; };
     uniform int u_boxCount;
     uniform int u_lightCount;
-    uniform vec4 u_lightPos0;
-    uniform vec4 u_lightPos1;
-    uniform vec4 u_lightPos2;
-    uniform vec4 u_lightPos3;
+    \(punctualUniforms("u_lightPos"))
     \(tagUsagePunctualCommon)
     vec3 lightPosition(int i)
     {
-      return (i == 0 ? u_lightPos0 : i == 1 ? u_lightPos1 : i == 2 ? u_lightPos2 : u_lightPos3).xyz;
+      \((1 ..< maxPunctualLights).map { "if (i == \($0)) return u_lightPos\($0).xyz;" }.joined(separator: "\n"))
+      return u_lightPos0.xyz;
     }
     #define TAG_TILE(i) atomicOr(tiles_buf[i], \(flagDynamicUpdate)u)
     void main()
@@ -343,7 +341,7 @@ extension Akari.ShadowAtlas
     #define vec3 float3
     #define ivec2 int2
     \(tagUsagePunctualMSLCommon)
-    struct U { int boxCount; int lightCount; float4 lightPos[4]; };
+    struct U { int boxCount; int lightCount; float4 lightPos[\(maxPunctualLights)]; };
     #define TAG_TILE(i) atomic_fetch_or_explicit(&tiles_buf[i], \(flagDynamicUpdate)u, memory_order_relaxed)
     #define lightPosition(i) u.lightPos[i].xyz
     kernel void compute_main(constant U& u [[buffer(0)]],

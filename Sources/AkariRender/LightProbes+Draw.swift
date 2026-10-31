@@ -47,7 +47,7 @@ extension Akari.LightProbes
   /// Rasterizes `views` (probe * 6 + face) into the capture atlas,
   /// a run of amplified faces per replay of the scene capture.
   func drawCapture(_ captures: [OpaquePointer], views range: Range<Int>,
-                   materials: (material: GLuint, color: GLuint, emissive: GLuint))
+                   materials: (material: GLuint, color: GLuint, emissive: GLuint, constants: GLuint))
   {
     let projection = Akari.Matrix4.reversedDepth(.perspective(left: -near, right: near,
                                                               bottom: -near, top: near,
@@ -70,6 +70,7 @@ extension Akari.LightProbes
         rects += [rect.x, rect.y, rect.z, rect.w]
       }
       setAmplification(transforms: transforms, viewports: rects, count: run.count)
+      setCaptureViews(transforms)
       for capture in captures
       {
         labgl.capturePlaybackIndirectDraws(capture)
@@ -85,7 +86,7 @@ extension Akari.LightProbes
   func drawSunMap(_ captures: [OpaquePointer],
                   sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
                   direction: SIMD3<Float>,
-                  materials: (material: GLuint, color: GLuint, emissive: GLuint))
+                  materials: (material: GLuint, color: GLuint, emissive: GLuint, constants: GLuint))
   {
     let center = (sceneBounds.min + sceneBounds.max) * 0.5
     let extent = sceneBounds.max - sceneBounds.min
@@ -107,6 +108,7 @@ extension Akari.LightProbes
     setAmplification(transforms: transform,
                      viewports: [0, 0, Int32(Self.sunResolution), Int32(Self.sunResolution)],
                      count: 1)
+    setCaptureViews(transform)
     for capture in captures
     {
       labgl.capturePlaybackIndirectDraws(capture)
@@ -186,6 +188,7 @@ extension Akari.LightProbes
     }
     vector("u_sun", SIMD4(lighting.sunDirection, lighting.sunHeight))
     vector("u_sky", SIMD4(lighting.zUp ? 1 : 0, lighting.iblEnabled ? 1 : 0, near, 0))
+    vector("u_sunColor", lighting.sunColor)
     vector("u_sunMap", SIMD4(Float(Self.sunResolution), sunTexelWorld, sunDepthPerWorld, 0))
     vector("u_gridMin", SIMD4(layout.gridMin, Float(layout.volumeCount)))
     vector("u_gridMax", SIMD4(layout.gridMax, Float(layout.spheres.count)))
@@ -200,6 +203,22 @@ extension Akari.LightProbes
       vector("u_lightColor\(i)", i < lightCount ? lighting.lights[i * 2 + 1] : .zero)
     }
     vector("u_params", SIMD4(Float(lightCount), param, 0, 0))
+  }
+
+  /// Uploads the run's projection matrices for the combined instanced entry
+  /// point, whose buffer(1) carries the draw's instance transforms.
+  private func setCaptureViews(_ transforms: [Float])
+  {
+    guard
+      captureViewXf != 0,
+      let ptr = gl.mapBuffer(captureViewXf)
+    else { return }
+    transforms.withUnsafeBytes
+    {
+      UnsafeMutableRawPointer(ptr).copyMemory(from: $0.baseAddress!, byteCount: $0.count)
+    }
+    gl.unmapBuffer(captureViewXf)
+    gl.setShaderVertexBuffer(captureShader, index: 4, buffer: captureViewXf)
   }
 
   private func setAmplification(transforms: [Float], viewports: [Int32], count: Int)
@@ -222,7 +241,7 @@ extension Akari.LightProbes
   }
 
   private func beginPass(_ target: GLuint, size: SIMD2<Int>, sunPass: Bool,
-                         materials: (material: GLuint, color: GLuint, emissive: GLuint))
+                         materials: (material: GLuint, color: GLuint, emissive: GLuint, constants: GLuint))
   {
     gl.bindRenderTarget(target)
     gl.disable(GLenum(GL_BLEND))
@@ -240,6 +259,7 @@ extension Akari.LightProbes
     gl.setShaderImageArgument(captureShader, bufferIndex: 0, texture: materials.material)
     gl.setShaderImageArgument(captureShader, bufferIndex: 1, texture: materials.color)
     gl.setShaderImageArgument(captureShader, bufferIndex: 4, texture: materials.emissive)
+    gl.setShaderImageArgument(captureShader, bufferIndex: 5, texture: materials.constants != 0 ? materials.constants : materials.material)
   }
 
   private func endPass()

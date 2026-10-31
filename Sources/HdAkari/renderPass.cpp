@@ -39,6 +39,7 @@
  * ----------------------------------------------------------------- */
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
+# include <Hd/camera.h>
 # include <Hd/renderPassState.h>
 # include <Hd/renderIndex.h>
 # include <Hd/renderDelegate.h>
@@ -47,6 +48,7 @@
 # include <Gf/matrix4d.h>
 #else
 # include <pxr/pxr.h>
+# include <pxr/imaging/hd/camera.h>
 # include <pxr/imaging/hd/renderPassState.h>
 # include <pxr/imaging/hd/renderIndex.h>
 # include <pxr/imaging/hd/renderDelegate.h>
@@ -78,6 +80,9 @@ HdAkariRenderPass::_Execute(HdRenderPassStateSharedPtr const &renderPassState,
   if (!param || !param->GetRenderEngine()) {
     return;
   }
+
+  HdCamera const *camera = renderPassState->GetCamera();
+  param->SetShutter(camera ? camera->GetShutterOpen() : 0.0, camera ? camera->GetShutterClose() : 0.0);
 
   const GfMatrix4d view = renderPassState->GetWorldToViewMatrix();
   const GfMatrix4d proj = renderPassState->GetProjectionMatrix();

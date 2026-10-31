@@ -54,6 +54,13 @@ public extension Akari
     private var emissiveTexture: GLuint = 0
     /// The textures uploaded as BC7, a quarter of RGBA8's memory, their mips built here.
     private var compressedTextures = Set<GLuint>()
+    /// Untextured materials constants, `HdAkariConstantTexels()` RGBA32F texels a row.
+    private var constantsTexture: GLuint = 0
+    private var constantsRows = 0
+    /// 4x4 stand ins while no textured material has baked a cell, so everything binding
+    /// the atlas has a texture, untextured materials read their constants instead of
+    /// sampling them.
+    private var placeholders = Set<GLuint>()
 
     /// Mips sampled, as `GL_TEXTURE_MAX_LEVEL` 3 had them.
     private static let levels = 4
@@ -74,8 +81,64 @@ public extension Akari
         upload(&normalTexture, pixels: atlas.NormalPixelData(), width: width, height: height, rects: rects)
         upload(&emissiveTexture, pixels: atlas.EmissivePixelData(), width: width, height: height, rects: rects)
       }
+      // roughness 1, metallic 0, opaque, white, a flat normal (BGRA, as LabGL lays GL_RGBA out), no emission.
+      if materialTexture == 0 { materialTexture = placeholder([255, 0, 255, 0]) }
+      if colorTexture == 0 { colorTexture = placeholder([255, 255, 255, 255]) }
+      if normalTexture == 0 { normalTexture = placeholder([255, 128, 128, 255]) }
+      if emissiveTexture == 0 { emissiveTexture = placeholder([0, 0, 0, 255]) }
       atlas.ReleasePixelsIfIdle()
       return (materialTexture, colorTexture, normalTexture, emissiveTexture)
+    }
+
+    private func placeholder(_ texel: [UInt8]) -> GLuint
+    {
+      var texture: GLuint = 0
+      gl.genTextures(count: 1, textures: &texture)
+      gl.bindTexture(target: GL_TEXTURE_2D, texture: texture)
+      gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GL_LINEAR)
+      gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GL_LINEAR)
+      gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA, width: 4, height: 4, border: 0,
+                    format: GL_RGBA, type: GL_UNSIGNED_BYTE, pixels: Array([[UInt8]](repeating: texel, count: 16).joined()))
+      placeholders.insert(texture)
+      return texture
+    }
+
+    /// Uploads the rows of untextured materials constants written since the last call, every row
+    /// when the table outgrew the texture. Returns the texture (0 until there's a row).
+    public func uploadConstants(_ atlas: Pixar.HdAkariTextureAtlas) -> GLuint
+    {
+      let texels = Int(Pixar.HdAkariConstantTexels())
+      let count = Int(atlas.ConstantCount())
+      var range = atlas.DrainDirtyConstants()
+      guard count > 0 else { return constantsTexture }
+
+      if count > constantsRows
+      {
+        if constantsTexture != 0 { gl.deleteTextures(count: 1, textures: &constantsTexture) }
+        constantsRows = max(constantsRows, 64)
+        while constantsRows < count
+        {
+          constantsRows *= 2
+        }
+        gl.genTextures(count: 1, textures: &constantsTexture)
+        gl.bindTexture(target: GL_TEXTURE_2D, texture: constantsTexture)
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_NEAREST))
+        gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GLint(GL_NEAREST))
+        gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA32F,
+                      width: GLsizei(texels), height: GLsizei(constantsRows), border: 0,
+                      format: GL_RGBA, type: GL_FLOAT, pixels: nil)
+        range.first = 0
+        range.count = Int32(count)
+      }
+      guard range.count > 0 else { return constantsTexture }
+
+      var rows = [Float](repeating: 0, count: Int(range.count) * texels * 4)
+      rows.withUnsafeMutableBufferPointer { atlas.CopyConstants(range.first, range.count, $0.baseAddress!) }
+      gl.bindTexture(target: GL_TEXTURE_2D, texture: constantsTexture)
+      gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: range.first,
+                       width: GLsizei(texels), height: range.count,
+                       format: GL_RGBA, type: GL_FLOAT, pixels: rows)
+      return constantsTexture
     }
 
     /// Uploads a texture atlas's pixels to `texture`, the
@@ -84,6 +147,11 @@ public extension Akari
                         width: Int32, height: Int32, rects: [Pixar.HdAkariAtlasRect])
     {
       guard let pixels else { return }
+      if placeholders.remove(texture) != nil
+      {
+        gl.deleteTextures(count: 1, textures: &texture)
+        texture = 0
+      }
       if uploadCompressed(&texture, pixels: pixels, width: Int(width), height: Int(height), rects: rects) { return }
       if texture != 0
       {

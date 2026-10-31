@@ -1,0 +1,164 @@
+float postLuma(float3 c)
+{
+  return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+float3 postDownsample(texture2d<float> src, sampler smp, float2 uv, bool karis)
+{
+  float2 t = 1.0 / float2(src.get_width(), src.get_height());
+  float3 a = src.sample(smp, uv + t * float2(-2.0, -2.0), level(0.0)).rgb;
+  float3 b = src.sample(smp, uv + t * float2( 0.0, -2.0), level(0.0)).rgb;
+  float3 c = src.sample(smp, uv + t * float2( 2.0, -2.0), level(0.0)).rgb;
+  float3 d = src.sample(smp, uv + t * float2(-2.0,  0.0), level(0.0)).rgb;
+  float3 e = src.sample(smp, uv, level(0.0)).rgb;
+  float3 f = src.sample(smp, uv + t * float2( 2.0,  0.0), level(0.0)).rgb;
+  float3 g = src.sample(smp, uv + t * float2(-2.0,  2.0), level(0.0)).rgb;
+  float3 h = src.sample(smp, uv + t * float2( 0.0,  2.0), level(0.0)).rgb;
+  float3 i = src.sample(smp, uv + t * float2( 2.0,  2.0), level(0.0)).rgb;
+  float3 j = src.sample(smp, uv + t * float2(-1.0, -1.0), level(0.0)).rgb;
+  float3 k = src.sample(smp, uv + t * float2( 1.0, -1.0), level(0.0)).rgb;
+  float3 l = src.sample(smp, uv + t * float2(-1.0,  1.0), level(0.0)).rgb;
+  float3 m = src.sample(smp, uv + t * float2( 1.0,  1.0), level(0.0)).rgb;
+  if (!karis) {
+    return e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
+  }
+  float3 g0 = (j + k + l + m) * 0.25, g1 = (a + b + d + e) * 0.25, g2 = (b + c + e + f) * 0.25;
+  float3 g3 = (d + e + g + h) * 0.25, g4 = (e + f + h + i) * 0.25;
+  float w0 = 0.5 / (1.0 + postLuma(g0)), w1 = 0.125 / (1.0 + postLuma(g1)), w2 = 0.125 / (1.0 + postLuma(g2));
+  float w3 = 0.125 / (1.0 + postLuma(g3)), w4 = 0.125 / (1.0 + postLuma(g4));
+  return (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4) / (w0 + w1 + w2 + w3 + w4);
+}
+
+/// A 3x3 tent upsample of the coarser level.
+float3 postUpsample(texture2d<float> src, sampler smp, float2 uv)
+{
+  float2 t = 1.0 / float2(src.get_width(), src.get_height());
+  float3 sum = src.sample(smp, uv, level(0.0)).rgb * 4.0;
+  sum += (src.sample(smp, uv + float2(-t.x, 0.0), level(0.0)).rgb + src.sample(smp, uv + float2(t.x, 0.0), level(0.0)).rgb
+        + src.sample(smp, uv + float2(0.0, -t.y), level(0.0)).rgb + src.sample(smp, uv + float2(0.0, t.y), level(0.0)).rgb) * 2.0;
+  sum += src.sample(smp, uv - t, level(0.0)).rgb + src.sample(smp, uv + t, level(0.0)).rgb
+       + src.sample(smp, uv + float2(t.x, -t.y), level(0.0)).rgb + src.sample(smp, uv + float2(-t.x, t.y), level(0.0)).rgb;
+  return sum / 16.0;
+}
+
+/// A long horizontal blur of the bright parts, `step` texels between its taps.
+float3 postStreak(texture2d<float> src, sampler smp, float2 uv, float step)
+{
+  float t = step / float(src.get_width());
+  float3 sum = float3(0.0);
+  float weight = 0.0;
+  for (int i = -12; i <= 12; ++i) {
+    float w = exp(-abs(float(i)) / 4.0);
+    sum += max(src.sample(smp, uv + float2(t * float(i), 0.0), level(0.0)).rgb - 1.0, float3(0.0)) * w;
+    weight += w;
+  }
+  return sum / weight;
+}
+
+float3 postGhosts(texture2d<float> src, sampler smp, float2 uv)
+{
+  float2 flipped = 1.0 - uv;
+  float2 ghostVec = (0.5 - flipped) * 0.37;
+  float3 result = float3(0.0);
+  for (int i = 0; i < 6; ++i) {
+    float2 offset = fract(flipped + ghostVec * float(i));
+    float w = pow(saturate(1.0 - length(0.5 - offset) / 0.7071), 10.0);
+    float2 dir = normalize(ghostVec + 1e-6) * 0.004;
+    float3 c = float3(src.sample(smp, offset + dir, level(0.0)).r, src.sample(smp, offset, level(0.0)).g,
+                      src.sample(smp, offset - dir, level(0.0)).b);
+    result += max(c - 1.0, float3(0.0)) * w * mix(float3(1.0, 0.7, 0.5), float3(0.5, 0.7, 1.0), float(i) / 5.0);
+  }
+  float2 halo = flipped + normalize(ghostVec + 1e-6) * 0.45;
+  float hw = pow(saturate(1.0 - length(0.5 - fract(halo)) / 0.7071), 5.0);
+  result += max(src.sample(smp, halo, level(0.0)).rgb - 1.0, float3(0.0)) * hw * 0.5;
+  return result;
+}
+
+/// The depth the lens focuses at `p`.
+float postDepth(texture2d<float> position, texture2d<float> normal, texture2d<float> surface, float2 p, float2 gscale,
+                bool transparent)
+{
+  uint2 g = uint2(clamp(p * gscale, float2(0.0), float2(position.get_width() - 1, position.get_height() - 1)));
+  float z = normal.read(g).a >= 0.5 ? max(-position.read(g).z, 1e-4) : 1e20;
+  if (!transparent) return z;
+  float2 t = surface.read(g).rg;
+  return t.y > 0.0 ? 1.0 / max(mix(1.0 / z, t.x, t.y), 1e-20) : z;
+}
+
+/// The half resolution `lowres` at full resolution `pixel` of depth `z`, from the neighbors at its depth.
+float3 postUpsampleDepthAware(texture2d<float> lowres, texture2d<float> depth, float2 pixel, float z)
+{
+  uint2 hsize = uint2(lowres.get_width(), lowres.get_height());
+  uint2 dsize = uint2(depth.get_width(), depth.get_height());
+  float2 h = (pixel - 0.5) * 0.5;
+  float2 f = h - floor(h);
+  int2 h0 = int2(floor(h));
+  float3 sum = float3(0.0), nearest = float3(0.0);
+  float weight = 0.0, closest = 1e30;
+  for (int k = 0; k < 4; ++k) {
+    int2 o = int2(k & 1, k >> 1);
+    uint2 hp = uint2(clamp(h0 + o, int2(0), int2(hsize) - 1));
+    float zs = depth.read(min(hp * 2 + 1, dsize - 1)).r;
+    float3 c = lowres.read(hp).rgb;
+    float rel = abs(zs - z) / max(min(zs, z), 1e-3);
+    float w = (o.x ? f.x : 1.0 - f.x) * (o.y ? f.y : 1.0 - f.y) / (1e-3 + rel * rel * 400.0);
+    sum += c * w;
+    weight += w;
+    if (rel < closest) { closest = rel; nearest = c; }
+  }
+  return weight > 1e-2 ? sum / weight : nearest;
+}
+
+float postCoc(float z, float4 lens)
+{
+  return min(lens.x * abs(1.0 - lens.y / z), lens.z);
+}
+
+float3 postBokeh(texture2d<float> color, sampler smp, texture2d<float> depth, float2 center, float4 lens, float reach,
+                 float scale, float density)
+{
+  float2 size = float2(color.get_width(), color.get_height());
+  uint2 last = uint2(size) - 1;
+  float zc = depth.read(uint2(center)).r;
+  float cc = postCoc(zc, lens) / scale;
+  float3 sum = color.sample(smp, center / size, level(0.0)).rgb;
+  float count = 1.0;
+  float radius = 0.75;
+  // only what's in front of the focus and nearer spreads past twice this pixel's own blur.
+  float limit = min(lens.z, max(reach, cc * scale * 2.0) + 0.5) / scale;
+  for (float angle = 0.0; radius < limit && count < 300.0; angle += 2.39996323) {
+    float2 p = center + float2(cos(angle), sin(angle)) * radius * scale;
+    float zs = depth.read(min(uint2(max(p, 0.0)), last)).r;
+    float cs = postCoc(zs, lens) / scale;
+    if (zs > zc) cs = min(cs, cc * 2.0);
+    float m = smoothstep(radius - 0.5, radius + 0.5, cs);
+    sum += m > 0.0 ? mix(sum / count, color.sample(smp, p / size, level(0.0)).rgb, m) : sum / count;
+    count += 1.0;
+    radius += density / radius;
+  }
+  return sum / count;
+}
+
+/// `postBokeh` over `source`'s half resolution color and depth at its `pixel`, `reach` in full resolution pixels.
+float3 postBokehHalf(texture2d<float> source, float2 pixel, float4 lens, float reach, float density)
+{
+  uint2 last = uint2(source.get_width(), source.get_height()) - 1;
+  float4 center = source.read(uint2(pixel));
+  float zc = center.a;
+  float cc = postCoc(zc, lens) * 0.5;
+  float3 sum = center.rgb;
+  float count = 1.0;
+  float radius = 0.75;
+  float limit = min(lens.z, max(reach, cc * 4.0) + 0.5) * 0.5;
+  for (float angle = 0.0; radius < limit && count < 300.0; angle += 2.39996323) {
+    float2 p = pixel + 0.5 + float2(cos(angle), sin(angle)) * radius;
+    float4 s = source.read(min(uint2(max(p, 0.0)), last));
+    float cs = postCoc(s.a, lens) * 0.5;
+    if (s.a > zc) cs = min(cs, cc * 2.0);
+    float m = smoothstep(radius - 0.5, radius + 0.5, cs);
+    sum += mix(sum / count, s.rgb, m);
+    count += 1.0;
+    radius += density / radius;
+  }
+  return sum / count;
+}

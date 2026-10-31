@@ -39,10 +39,9 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
-import Nanocolor
 import Foundation
 import HydraKit
-import OpenUSDKit
+import Nanocolor
 
 public extension Akari
 {
@@ -53,12 +52,11 @@ public extension Akari
 
   final class FrameDriver: HydraFrameDriver
   {
-    /// the active usd stage.
-    public let stage: UsdStage
-
     /// weak: the app owns the hydra render engine.
     public weak var engine: Hydra.RenderEngine?
     public weak var akari: Akari.RenderEngine?
+    public var cameraView: Akari.CameraView?
+    public var playback: Akari.Playback?
 
     /// Start of the current one second average, and the frames pulled in it.
     private var windowStart: CFAbsoluteTime = 0
@@ -78,9 +76,8 @@ public extension Akari
       var modelsVersion: Int?
     }
 
-    public init(stage: UsdStage, hydra: Hydra.RenderEngine, akari: Akari.RenderEngine)
+    public init(hydra: Hydra.RenderEngine, akari: Akari.RenderEngine)
     {
-      self.stage = stage
       engine = hydra
       self.akari = akari
 
@@ -96,7 +93,7 @@ public extension Akari
       return stats
     }
 
-    public func hydraWillPull(deltaTime: Double)
+    public func hydraWillPull(deltaTime _: Double)
     {
       let pullStart = CFAbsoluteTimeGetCurrent()
       if windowStart == 0 { windowStart = pullStart }
@@ -112,7 +109,8 @@ public extension Akari
         windowFrames = 0
       }
 
-      advanceTime(by: deltaTime)
+      playback?.advance()
+      cameraView?.update()
       syncSelection()
     }
 
@@ -170,31 +168,6 @@ public extension Akari
       {
         Akari.Selection(labels: $0.labels, all: $0.all, color: color, width: engine.selectionOutlineWidth)
       }
-    }
-
-    /// Loops the stage's animation, held while the light probes bake.
-    private func advanceTime(by deltaTime: Double)
-    {
-      guard
-        stage.HasAuthoredTimeCodeRange(),
-        let engine,
-        let akari
-      else { return }
-
-      if akari.settings.features.contains(.lightProbes), !akari.labfx.lightProbes.isReady { return }
-
-      let start = stage.getStartTimeCode()
-      let end = stage.GetEndTimeCode()
-      let range = end - start
-      guard range > 0 else { return }
-
-      let step = min(max(deltaTime, 1.0 / 240.0), 1.0 / 20.0) * stage.GetTimeCodesPerSecond()
-      var next = engine.currentTimeCode + step
-      if next > end
-      {
-        next = start + (next - start).truncatingRemainder(dividingBy: range)
-      }
-      engine.currentTimeCode = next
     }
   }
 }

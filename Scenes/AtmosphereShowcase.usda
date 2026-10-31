@@ -1,0 +1,201 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    doc = """Akari physical atmosphere showcase, a planet with an atmosphere seen from the ground at golden hour up to orbit."""
+    endTimeCode = 1
+    framesPerSecond = 24
+    metersPerUnit = 1
+    startTimeCode = 1
+    timeCodesPerSecond = 24
+    upAxis = "Y"
+)
+
+def Xform "World"
+{
+    def Sphere "Planet"
+    {
+        double radius = 6360000
+        double3 xformOp:translate = (0, -6360000, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        int primvars:akari:atmosphere = 1 (interpolation = "constant")
+        color3f primvars:akari:atmosphere:groundAlbedo = (0.12, 0.14, 0.13) (interpolation = "constant")
+        int primvars:akari:planet = 1 (interpolation = "constant")
+        float primvars:akari:planet:cityIntensity = 0.02 (interpolation = "constant")
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:angle = 0.53
+        float inputs:intensity = 6
+        bool inputs:normalize = 1
+        float3 xformOp:rotateXYZ = (185, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Scope "Looks"
+    {
+        def Material "Rock"
+        {
+            token outputs:surface.connect = </World/Looks/Rock/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.35, 0.33, 0.3)
+                float inputs:roughness = 0.8
+                token outputs:surface
+            }
+        }
+
+        def Material "Ivory"
+        {
+            token outputs:surface.connect = </World/Looks/Ivory/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.85, 0.82, 0.78)
+                float inputs:roughness = 0.35
+                token outputs:surface
+            }
+        }
+    }
+
+    def Xform "Ground"
+    {
+        def Cube "Plinth" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </World/Looks/Rock>
+            double size = 1
+            double3 xformOp:translate = (0, -0.5, 0)
+            float3 xformOp:scale = (400, 1, 400)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        def Sphere "Dancer" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </World/Looks/Ivory>
+            double radius = 1
+            double3 xformOp:translate = (0.4, 0.8, -4)
+            float3 xformOp:scale = (0.3, 0.8, 0.3)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        def Cube "Mesa5km" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </World/Looks/Rock>
+            double size = 1
+            double3 xformOp:translate = (-1500, 300, -5000)
+            float3 xformOp:scale = (1200, 600, 600)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        def Cube "Mesa20km" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </World/Looks/Rock>
+            double size = 1
+            double3 xformOp:translate = (3000, 900, -20000)
+            float3 xformOp:scale = (5000, 1800, 1500)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+
+        def Cube "Mesa60km" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </World/Looks/Rock>
+            double size = 1
+            double3 xformOp:translate = (-12000, 1500, -60000)
+            float3 xformOp:scale = (20000, 3000, 4000)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+    }
+
+    def Scope "Cameras"
+    {
+        def Camera "Ground"
+        {
+            float focalLength = 20
+            float horizontalAperture = 36
+            float verticalAperture = 20.25
+            float2 clippingRange = (0.05, 1000000)
+            double3 xformOp:translate = (0, 1.6, 0)
+            float3 xformOp:rotateXYZ = (4, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        }
+
+        def Camera "Behind"
+        {
+            float focalLength = 20
+            float horizontalAperture = 36
+            float verticalAperture = 20.25
+            float2 clippingRange = (0.05, 1000000)
+            double3 xformOp:translate = (0, 1.6, 0)
+            float3 xformOp:rotateXYZ = (12, 180, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        }
+
+        def Camera "High10km"
+        {
+            float focalLength = 20
+            float horizontalAperture = 36
+            float verticalAperture = 20.25
+            float2 clippingRange = (1, 10000000)
+            double3 xformOp:translate = (0, 10000, 8000)
+            float3 xformOp:rotateXYZ = (-8, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        }
+
+        def Camera "Edge100km"
+        {
+            float focalLength = 20
+            float horizontalAperture = 36
+            float verticalAperture = 20.25
+            float2 clippingRange = (10, 100000000)
+            double3 xformOp:translate = (0, 100000, 0)
+            float3 xformOp:rotateXYZ = (-12, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        }
+
+        def Camera "Orbit400km"
+        {
+            float focalLength = 20
+            float horizontalAperture = 36
+            float verticalAperture = 20.25
+            float2 clippingRange = (10, 100000000)
+            double3 xformOp:translate = (0, 400000, 0)
+            float3 xformOp:rotateXYZ = (-22, 180, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        }
+
+        def Camera "Limb"
+        {
+            float focalLength = 24
+            float horizontalAperture = 36
+            float verticalAperture = 20.25
+            float2 clippingRange = (100, 100000000)
+            double3 xformOp:translate = (0, -627000, 7396000)
+            float3 xformOp:rotateXYZ = (5, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        }
+
+        def Camera "Far"
+        {
+            float focalLength = 30
+            float horizontalAperture = 36
+            float verticalAperture = 20.25
+            float2 clippingRange = (1000, 1000000000)
+            double3 xformOp:translate = (26360000, -6360000, 0)
+            float3 xformOp:rotateXYZ = (0, 90, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        }
+    }
+}

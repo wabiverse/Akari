@@ -41,9 +41,9 @@
 import AkariCore
 import Foundation
 import HdAkari
+import HydraKit
 import LabCamera
 import LabCameraCxx
-import OpenUSDKit
 
 public extension Akari.GPU
 {

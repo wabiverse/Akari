@@ -94,6 +94,10 @@ public:
   HDAKARI_API const TfTokenVector &GetSupportedBprimTypes() const override;
 
   HDAKARI_API HdResourceRegistrySharedPtr GetResourceRegistry() const override;
+
+  /// The universal context first, then Storm's `glslfx`, which is where
+  /// assets authored for usdview put their UsdPreviewSurface.
+  HDAKARI_API TfTokenVector GetMaterialRenderContexts() const override;
   HDAKARI_API HdRenderParam *GetRenderParam() const override;
 
   /// Render pass.

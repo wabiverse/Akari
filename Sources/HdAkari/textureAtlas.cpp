@@ -43,6 +43,7 @@
 # include <Ar/resolvedPath.h>
 # include <Ar/resolver.h>
 # include <Hd/material.h>
+# include <Hd/mesh.h>
 # include <Hd/renderIndex.h>
 # include <Hd/sceneDelegate.h>
 # include <Hio/image.h>
@@ -55,6 +56,7 @@
 # include <pxr/usd/ar/resolvedPath.h>
 # include <pxr/usd/ar/resolver.h>
 # include <pxr/imaging/hd/material.h>
+# include <pxr/imaging/hd/mesh.h>
 # include <pxr/imaging/hd/renderIndex.h>
 # include <pxr/imaging/hd/sceneDelegate.h>
 # include <pxr/imaging/hio/image.h>
@@ -63,7 +65,9 @@
 # include <pxr/base/work/withScopedParallelism.h>
 #endif
 
+#include <atomic>
 #include "HdAkari/textureAtlas.h"
+#include "HdAkari/materialBinding.h"
 #include "HdAkari/akariImaging.h" // swift -> c++ interop, see Sources/AkariImaging.
 
 #include <algorithm>
@@ -77,6 +81,17 @@
 #include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
+
+namespace {
+
+/// Empty atlas space reads fully opaque, so filtering into it never dithers an opaque material.
+void AssignMaterialPixels(std::vector<uint8_t> &pixels, size_t size)
+{
+  pixels.assign(size, uint8_t(0));
+  for (size_t i = size_t(AkariImaging::Atlas::physicalChannel(2)); i < size; i += 4) pixels[i] = 255;
+}
+
+} // namespace
 
 namespace {
 
@@ -262,64 +277,46 @@ bool DecodeTile(std::string const &tilePath, bool decodeSRGB, std::vector<float>
 void
 HdAkariTextureAtlas::EnsureGridSized(HdSceneDelegate *sceneDelegate)
 {
+  if (_sized.load(std::memory_order_acquire)) return;
   std::call_once(_sizeOnce, [this, sceneDelegate]() {
-    HdRenderIndex &index = sceneDelegate->GetRenderIndex();
-    SdfPathVector const &rprimIds = index.GetRprimIds();
-
-    std::mutex mergeMutex;
-    std::unordered_set<SdfPath, SdfPath::Hash> uniqueMaterials;
-    size_t constOnlyCount = 0;
+    _sizeMaterials =
+      sceneDelegate->GetRenderIndex().GetSprimSubtree(HdPrimTypeTokens->material, SdfPath::AbsoluteRootPath());
+  });
+  const size_t count = _sizeMaterials.size();
+  size_t finished = 0;
+  for (size_t i; (i = _sizeNext.fetch_add(1)) < count; ++finished) {
+    GfVec3f color(0.0f);
+    float opacity = 1.0f, roughness = 0.5f, metallic = 0.0f, opacityThreshold = 0.0f;
+    HdAkariMaterialTextures textures;
+    SdfPath resolved;
     // isolated, so waiting here can't steal a Sync task.
     WorkWithScopedParallelism([&]() {
-      WorkParallelForN(rprimIds.size(), [&](size_t begin, size_t end) {
-        std::unordered_set<SdfPath, SdfPath::Hash> local;
-        size_t localConst = 0;
-        for (size_t i = begin; i < end; ++i) {
-          // a material-less mesh gets a mini-slot (GetOrBakeCell's isConstOnly
-          // path), not its own full cell, count it separately.
-          SdfPath matId = sceneDelegate->GetMaterialId(rprimIds[i]);
-          if (matId.IsEmpty()) ++localConst;
-          else local.insert(matId);
-        }
-        std::lock_guard<std::mutex> lock(mergeMutex);
-        if (!local.empty()) uniqueMaterials.insert(local.begin(), local.end());
-        constOnlyCount += localConst;
-      }, /*grainSize=*/64);
+      HdAkariApplyMaterialId(sceneDelegate, _sizeMaterials[i], color, opacity, roughness, metallic, opacityThreshold,
+                             textures, resolved);
     });
-
-    // untextured materials bake into mini-slots too, only
-    // textured ones take a full cell.
-    static const TfToken kUsdUVTexture("UsdUVTexture");
-    size_t texturedCount = 0;
-    for (SdfPath const &matId : uniqueMaterials) {
-      bool textured = false;
-      VtValue resource = sceneDelegate->GetMaterialResource(matId);
-      if (resource.IsHolding<HdMaterialNetworkMap>()) {
-        for (auto const &entry : resource.UncheckedGet<HdMaterialNetworkMap>().map) {
-          for (HdMaterialNode const &node : entry.second.nodes) {
-            if (node.identifier == kUsdUVTexture) textured = true;
-          }
-        }
-      }
-      if (textured) ++texturedCount;
-      else ++constOnlyCount;
-    }
-
-    size_t bigCellsForConst =
-        (constOnlyCount + kConstSlotsPerBigCell - 1) / kConstSlotsPerBigCell;
-    size_t totalBigCells = texturedCount + bigCellsForConst;
-    size_t withHeadroom = totalBigCells + totalBigCells / 4 + 1;
-    int grid = 1;
-    while (size_t(grid) * size_t(grid) < withHeadroom) ++grid;
-    int cellPixels = kCellPixels;
-    if (texturedCount == 0) {
-      grid = std::max(grid, kDefaultGridSize);
-    } else {
-      while (cellPixels < kMaxCellPixels && grid * cellPixels * 2 <= kMaxAtlasPixels) cellPixels *= 2;
-    }
-    _cellPixels.store(cellPixels, std::memory_order_relaxed);
-    _gridSize.store(grid, std::memory_order_relaxed);
-  });
+    if (textures.hasAny) ++_sizeTextured;
+  }
+  std::unique_lock<std::mutex> lock(_sizeMutex);
+  _sizeFinished += finished;
+  if (_sized) return;
+  if (_sizeFinished < count) {
+    _sizeDone.wait(lock, [&] { return _sized.load(); });
+    return;
+  }
+  const size_t texturedCount = _sizeTextured.load();
+  size_t withHeadroom = texturedCount + texturedCount / 4 + 1;
+  int grid = 1;
+  while (size_t(grid) * size_t(grid) < withHeadroom) ++grid;
+  int cellPixels = kCellPixels;
+  if (texturedCount == 0) {
+    grid = std::max(grid, kDefaultGridSize);
+  } else {
+    while (cellPixels < kMaxCellPixels && grid * cellPixels * 2 <= kMaxAtlasPixels) cellPixels *= 2;
+  }
+  _cellPixels.store(cellPixels, std::memory_order_relaxed);
+  _gridSize.store(grid, std::memory_order_relaxed);
+  _sized.store(true, std::memory_order_release);
+  _sizeDone.notify_all();
 }
 
 HdAkariAtlasCell
@@ -330,7 +327,8 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
                                    float opacityThreshold,
                                    std::string const &colorPath, GfVec3f const &colorConst,
                                    std::string const &normalPath,
-                                   std::string const &emissivePath, GfVec3f const &emissiveConst)
+                                   std::string const &emissivePath, GfVec3f const &emissiveConst,
+                                   HdAkariScalarSources const &sources)
 {
   HdAkariAtlasCell cell;
   int tileMinU = INT_MAX, tileMinV = INT_MAX, tileMaxU = INT_MIN, tileMaxV = INT_MIN;
@@ -339,9 +337,7 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
   int cellPixels = _cellPixels.load(std::memory_order_relaxed);
   int width = gridSize * cellPixels;
 
-  // no texture bound anywhere -> this bakes to a flat fill sampled at a
-  // single point (mesh.cpp's ComputeAtlasUvs), so it only needs a tiny
-  // slot, densely packed into a shared reserved cell.
+  // no texture bound anywhere -> a constants row, not a cell.
   bool isConstOnly = roughnessPath.empty() && metallicPath.empty() &&
                      opacityPath.empty() && colorPath.empty() &&
                      normalPath.empty() && emissivePath.empty();
@@ -364,8 +360,19 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
       return future.get();
     }
 
+    if (isConstOnly) {
+      const int index = int(_constantIndex.size());
+      _constantIndex.emplace(materialKey, index);
+      _constants.resize(size_t(index + 1) * kConstantTexels * 4, 0.0f);
+      WriteConstants(index, colorConst, opacityConst, roughnessConst, metallicConst, opacityThreshold, emissiveConst);
+      cell.constantIndex = index;
+      cell.opacityThreshold = opacityThreshold;
+      _cells.emplace(materialKey, cell);
+      return cell;
+    }
+
     if (_pixels.empty()) {
-      _pixels.assign(size_t(width) * size_t(width) * 4, uint8_t(0));
+      AssignMaterialPixels(_pixels, size_t(width) * size_t(width) * 4);
     }
     if (_colorPixels.empty()) {
       _colorPixels.assign(size_t(width) * size_t(width) * 4, uint8_t(0));
@@ -377,30 +384,15 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
       _emissivePixels.assign(size_t(width) * size_t(width) * 4, uint8_t(0));
     }
 
-    if (isConstOnly) {
-      if (_nextConstBigCell < 0 || _nextConstSlot >= kConstSlotsPerBigCell) {
-        _nextConstBigCell = _nextCell % (gridSize * gridSize);
-        ++_nextCell;
-        _nextConstSlot = 0;
-      }
-      int slot = _nextConstSlot++;
-      int bigCellX = _nextConstBigCell % gridSize;
-      int bigCellY = _nextConstBigCell / gridSize;
-      px0 = bigCellX * cellPixels + (slot % kConstCellsPerAxis) * kConstCellPixels;
-      py0 = bigCellY * cellPixels + (slot / kConstCellsPerAxis) * kConstCellPixels;
-      regionSize = kConstCellPixels;
-      contentPx0 = px0; contentPy0 = py0; contentSize = regionSize;
-    } else {
-      // share cells using round-robin.
-      int cellIndex = _nextCell % (gridSize * gridSize);
-      ++_nextCell;
-      px0 = (cellIndex % gridSize) * cellPixels;
-      py0 = (cellIndex / gridSize) * cellPixels;
-      regionSize = cellPixels;
-      contentPx0 = px0 + kCellPadding;
-      contentPy0 = py0 + kCellPadding;
-      contentSize = regionSize - 2 * kCellPadding;
-    }
+    // share cells using round-robin.
+    int cellIndex = _nextCell % (gridSize * gridSize);
+    ++_nextCell;
+    px0 = (cellIndex % gridSize) * cellPixels;
+    py0 = (cellIndex / gridSize) * cellPixels;
+    regionSize = cellPixels;
+    contentPx0 = px0 + kCellPadding;
+    contentPy0 = py0 + kCellPadding;
+    contentSize = regionSize - 2 * kCellPadding;
     if (_nextCell > gridSize * gridSize && !_warnedOverflow) {
       _warnedOverflow = true;
       std::fprintf(stderr,
@@ -444,28 +436,17 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
   }
 
   // no locking from here down.
-  BakeChannel(contentPx0, contentPy0, contentSize, /*R*/ 0, roughnessPath, roughnessConst,
-              tileMinU, tileMinV, tileMaxU, tileMaxV);
-  BakeChannel(contentPx0, contentPy0, contentSize, /*G*/ 1, metallicPath, metallicConst,
-              tileMinU, tileMinV, tileMaxU, tileMaxV);
-  BakeChannel(contentPx0, contentPy0, contentSize, /*B*/ 2, opacityPath, opacityConst,
-              tileMinU, tileMinV, tileMaxU, tileMaxV);
-  BakeChannel(contentPx0, contentPy0, contentSize, /*A*/ 3, std::string(), opacityThreshold,
-              tileMinU, tileMinV, tileMaxU, tileMaxV);
+  BakeInputs in;
+  in.roughnessPath = roughnessPath; in.metallicPath = metallicPath; in.opacityPath = opacityPath;
+  in.colorPath = colorPath; in.normalPath = normalPath; in.emissivePath = emissivePath;
+  in.roughnessConst = roughnessConst; in.metallicConst = metallicConst; in.opacityConst = opacityConst;
+  in.opacityThreshold = opacityThreshold; in.colorConst = colorConst; in.emissiveConst = emissiveConst;
+  in.px0 = px0; in.py0 = py0; in.regionSize = regionSize;
+  in.contentPx0 = contentPx0; in.contentPy0 = contentPy0; in.contentSize = contentSize;
+  in.tileMinU = tileMinU; in.tileMinV = tileMinV; in.tileMaxU = tileMaxU; in.tileMaxV = tileMaxV;
+  in.sources = sources;
+  BakeRegion(in);
   cell.opacityThreshold = opacityThreshold;
-
-  BakeColorChannel(_colorPixels, true, contentPx0, contentPy0, contentSize, colorPath, colorConst,
-                   tileMinU, tileMinV, tileMaxU, tileMaxV);
-  BakeColorChannel(_normalPixels, false, contentPx0, contentPy0, contentSize, normalPath,
-                   GfVec3f(0.5f, 0.5f, 1.0f), tileMinU, tileMinV, tileMaxU, tileMaxV);
-  BakeColorChannel(_emissivePixels, true, contentPx0, contentPy0, contentSize, emissivePath, emissiveConst,
-                   tileMinU, tileMinV, tileMaxU, tileMaxV);
-
-  if (!isConstOnly) {
-    AkariImaging::Atlas::fillCellBorder(_pixels.data(), _colorPixels.data(), width, px0, py0, regionSize, kCellPadding);
-    AkariImaging::Atlas::fillCellBorder(_normalPixels.data(), _emissivePixels.data(), width, px0, py0, regionSize,
-                                        kCellPadding);
-  }
 
   {
     std::lock_guard<std::mutex> lock(_mutex);
@@ -479,9 +460,90 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
 }
 
 void
+HdAkariTextureAtlas::BakeRegion(BakeInputs const &in)
+{
+  int width = _gridSize.load(std::memory_order_relaxed) * _cellPixels.load(std::memory_order_relaxed);
+  BakeChannel(in.contentPx0, in.contentPy0, in.contentSize, /*R*/ 0, in.roughnessPath, in.roughnessConst,
+              in.tileMinU, in.tileMinV, in.tileMaxU, in.tileMaxV, in.sources.roughness);
+  BakeChannel(in.contentPx0, in.contentPy0, in.contentSize, /*G*/ 1, in.metallicPath, in.metallicConst,
+              in.tileMinU, in.tileMinV, in.tileMaxU, in.tileMaxV, in.sources.metallic);
+  BakeChannel(in.contentPx0, in.contentPy0, in.contentSize, /*B*/ 2, in.opacityPath, in.opacityConst,
+              in.tileMinU, in.tileMinV, in.tileMaxU, in.tileMaxV, in.sources.opacity);
+  BakeChannel(in.contentPx0, in.contentPy0, in.contentSize, /*A*/ 3, std::string(), in.opacityThreshold,
+              in.tileMinU, in.tileMinV, in.tileMaxU, in.tileMaxV);
+
+  BakeColorChannel(_colorPixels, true, in.contentPx0, in.contentPy0, in.contentSize, in.colorPath, in.colorConst,
+                   in.tileMinU, in.tileMinV, in.tileMaxU, in.tileMaxV);
+  BakeColorChannel(_normalPixels, false, in.contentPx0, in.contentPy0, in.contentSize, in.normalPath,
+                   GfVec3f(0.5f, 0.5f, 1.0f), in.tileMinU, in.tileMinV, in.tileMaxU, in.tileMaxV);
+  // emission past 1 keeps its scale in alpha, read back as 1 / alpha.
+  GfVec3f emissive = in.emissiveConst;
+  uint8_t emissiveAlpha = 255;
+  const float peak = std::max(emissive[0], std::max(emissive[1], emissive[2]));
+  if (in.emissivePath.empty() && peak > 1.0f) {
+    emissiveAlpha = uint8_t(std::clamp(std::lround(255.0f / peak), 1L, 255L));
+    emissive *= float(emissiveAlpha) / 255.0f;
+  }
+  BakeColorChannel(_emissivePixels, true, in.contentPx0, in.contentPy0, in.contentSize, in.emissivePath, emissive,
+                   in.tileMinU, in.tileMinV, in.tileMaxU, in.tileMaxV);
+  if (emissiveAlpha != 255) {
+    for (int y = 0; y < in.contentSize; ++y)
+      for (int x = 0; x < in.contentSize; ++x)
+        _emissivePixels[(size_t(in.contentPy0 + y) * width + size_t(in.contentPx0 + x)) * 4 + 3] = emissiveAlpha;
+  }
+
+  AkariImaging::Atlas::fillCellBorder(_pixels.data(), _colorPixels.data(), width, in.px0, in.py0, in.regionSize, kCellPadding);
+  AkariImaging::Atlas::fillCellBorder(_normalPixels.data(), _emissivePixels.data(), width, in.px0, in.py0, in.regionSize,
+                                      kCellPadding);
+}
+
+void
+HdAkariTextureAtlas::WriteConstants(int index, GfVec3f const &color, float opacity, float roughness, float metallic,
+                                    float opacityThreshold, GfVec3f const &emissive)
+{
+  float *row = _constants.data() + size_t(index) * kConstantTexels * 4;
+  const float values[kConstantTexels * 4] = {color[0], color[1], color[2], opacity,
+                                             roughness, metallic, opacityThreshold, 0.0f,
+                                             emissive[0], emissive[1], emissive[2], 0.0f};
+  std::copy(values, values + kConstantTexels * 4, row);
+  _constantsDirtyLo = std::min(_constantsDirtyLo, index);
+  _constantsDirtyHi = std::max(_constantsDirtyHi, index + 1);
+}
+
+bool
+HdAkariTextureAtlas::UpdateConstants(std::string const &materialKey, GfVec3f const *emissive, float const *opacity)
+{
+  std::lock_guard<std::mutex> lock(_mutex);
+  auto it = _constantIndex.find(materialKey);
+  if (it == _constantIndex.end()) return false;
+  float *row = _constants.data() + size_t(it->second) * kConstantTexels * 4;
+  const bool emissiveChanged = emissive && GfVec3f(row[8], row[9], row[10]) != *emissive;
+  const bool opacityChanged = opacity && row[3] != *opacity;
+  if (!emissiveChanged && !opacityChanged) return false;
+  if (emissiveChanged) { row[8] = (*emissive)[0]; row[9] = (*emissive)[1]; row[10] = (*emissive)[2]; }
+  if (opacityChanged) row[3] = *opacity;
+  _constantsDirtyLo = std::min(_constantsDirtyLo, it->second);
+  _constantsDirtyHi = std::max(_constantsDirtyHi, it->second + 1);
+  return true;
+}
+
+void
+HdAkariTextureAtlas::SetConstantsPtexMap(std::string const &materialKey, int map)
+{
+  std::lock_guard<std::mutex> lock(_mutex);
+  auto it = _constantIndex.find(materialKey);
+  if (it == _constantIndex.end()) return;
+  float *row = _constants.data() + size_t(it->second) * kConstantTexels * 4;
+  if (row[11] == float(map + 1)) return;
+  row[11] = float(map + 1);
+  _constantsDirtyLo = std::min(_constantsDirtyLo, it->second);
+  _constantsDirtyHi = std::max(_constantsDirtyHi, it->second + 1);
+}
+
+void
 HdAkariTextureAtlas::BakeChannel(int px0, int py0, int regionSize, int channelIndex,
                                  std::string const &texPath, float fallbackConst,
-                                 int tileMinU, int tileMinV, int tileMaxU, int tileMaxV)
+                                 int tileMinU, int tileMinV, int tileMaxU, int tileMaxV, int sourceChannel)
 {
   int width = _gridSize.load(std::memory_order_relaxed) * _cellPixels.load(std::memory_order_relaxed);
 
@@ -497,6 +559,8 @@ HdAkariTextureAtlas::BakeChannel(int px0, int py0, int regionSize, int channelIn
         std::vector<float> srcPixels;
         int srcW = 0, srcH = 0, nComp = 0;
         if (!DecodeTile(tilePath, false, srcPixels, srcW, srcH, nComp)) continue;
+        // an alpha read from a texture without one is opaque, the constant stands.
+        if (sourceChannel >= nComp && nComp != 1) continue;
 
         int subX0 = px0 + ((tu - tileMinU) * regionSize) / spanU;
         int subX1 = px0 + ((tu - tileMinU + 1) * regionSize) / spanU;
@@ -507,7 +571,7 @@ HdAkariTextureAtlas::BakeChannel(int px0, int py0, int regionSize, int channelIn
         
         AkariImaging::Atlas::bakeChannelTile(_pixels.data(), width, srcPixels.data(),
                                              srcW, srcH, nComp,
-                                             0, channelIndex,
+                                             sourceChannel, channelIndex,
                                              subX0, subY0, subW, subH);
       }
     }

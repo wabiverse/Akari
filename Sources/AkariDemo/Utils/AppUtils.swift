@@ -38,9 +38,11 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
+import AkariCore
+import AkariRender
 import Foundation
+import HdAkari
 import HydraKit
-import OpenUSDKit
 
 #if os(Android)
   import AndroidBackend
@@ -159,11 +161,87 @@ public enum AppUtils
   {
     if let path = usdScenePathFromArguments()
     {
-      (stage: UsdStage.open(path), fileURL: URL(filePath: path))
+      guard FileManager.default.isReadableFile(atPath: path) else { fatalError("USD scene not found or unreadable: \(path)") }
+      guard Pixar.HdAkariLayerOpens(std.string(path)) else { fatalError("USD scene failed to parse: \(path)") }
+      return (stage: UsdStage.open(path), fileURL: URL(filePath: path))
     }
     else
     {
-      buildStage()
+      return buildStage()
     }
+  }
+
+  /// Final render options, to render with Akari from the command line.
+  public struct RenderArguments
+  {
+    /// `-b`, render without opening the viewport while keeping Akari in the Dock.
+    public var background = false
+    /// Internal entry point for the child process that performs a `-b` render.
+    var backgroundWorker = false
+    /// `-a` renders the animation, `-f <frame>` one frame.
+    public var job: Akari.FinalRender.Job?
+    /// `-o <path>`, `#` runs become the frame number.
+    public var path: String?
+    /// `-s <frame>`, `-e <frame>`, `-j <step>`.
+    public var frameStart: Int?
+    public var frameEnd: Int?
+    public var frameStep: Int?
+    /// `-F PNG|MPEG4` (`FFMPEG` is accepted too).
+    public var format: OutputFormat?
+    /// `--resolution <w>x<h>`, `--percentage <n>`.
+    public var resolution: (width: Int, height: Int)?
+    public var percentage: Int?
+    /// `--samples <n>`, the render sample count.
+    public var samples: Int?
+    /// `--camera <prim path>`, or `viewport`.
+    public var camera: String?
+    /// `--fps <rate>`.
+    public var frameRate: Double?
+    /// `--quality <featureset>`.
+    public var quality: RenderQuality?
+  }
+
+  public static func renderArguments() -> RenderArguments
+  {
+    var options = RenderArguments()
+    let arguments = Array(CommandLine.arguments.dropFirst())
+    var i = 0
+    func next() -> String?
+    {
+      i += 1
+      return i < arguments.count ? arguments[i] : nil
+    }
+    while i < arguments.count
+    {
+      switch arguments[i]
+      {
+        case "-b", "--background": options.background = true
+        case "--akari-background-worker": options.backgroundWorker = true
+        case "-a", "--render-anim": options.job = .animation
+        case "-f", "--render-frame": if let frame = next().flatMap(Int.init) { options.job = .image(frame: frame) }
+        case "-o", "--render-output": options.path = next()
+        case "-s", "--frame-start": options.frameStart = next().flatMap(Int.init)
+        case "-e", "--frame-end": options.frameEnd = next().flatMap(Int.init)
+        case "-j", "--frame-jump": options.frameStep = next().flatMap(Int.init)
+        case "-F", "--render-format":
+          switch next()?.uppercased()
+          {
+            case "PNG": options.format = .png
+            case "MPEG4", "FFMPEG", "MP4": options.format = .mpeg4
+            default: break
+          }
+        case "--resolution":
+          let size = next()?.lowercased().split(separator: "x").compactMap { Int($0) } ?? []
+          if size.count == 2 { options.resolution = (size[0], size[1]) }
+        case "--percentage": options.percentage = next().flatMap(Int.init)
+        case "--samples": options.samples = next().flatMap(Int.init)
+        case "--camera": options.camera = next()
+        case "--fps": options.frameRate = next().flatMap(Double.init)
+        case "--quality": options.quality = next().flatMap(RenderQuality.init)
+        default: break
+      }
+      i += 1
+    }
+    return options
   }
 }

@@ -88,7 +88,7 @@ extension Akari.LabFXEngine
     {
       guard enabled, shader != 0, let probes else { return }
       let total = probes.captureTotal
-      guard total > 0, probes.captured < total || !probes.isReady else { return }
+      guard total > 0, probes.inView, probes.captured < total || !probes.isReady else { return }
 
       let progress = min(max(Float(probes.captured) / Float(total), 0), 1)
 

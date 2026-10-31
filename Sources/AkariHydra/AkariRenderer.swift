@@ -41,7 +41,7 @@
 import AkariCore
 import AkariRender
 import HdAkari
-import OpenUSDKit
+import HydraKit
 
 /// Registers a live ``Akari/RenderEngine`` with Hydra.
 public func registerAkariRenderer(engine: Akari.RenderEngine)

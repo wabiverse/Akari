@@ -323,13 +323,11 @@ extension Akari.ShadowAtlas
     layout(std430, binding = 0) buffer Tiles { uint tiles_buf[]; };
     layout(binding = 0) uniform sampler2D u_position;
     uniform mat4 u_invView;
-    uniform vec4 u_lightPosRadius0;
-    uniform vec4 u_lightPosRadius1;
-    uniform vec4 u_lightPosRadius2;
-    uniform vec4 u_lightPosRadius3;
+    \(punctualUniforms("u_lightPosRadius"))
+    \(punctualUniforms("u_lightLodBias"))
     uniform vec4 u_params;
     \(tagUsagePunctualCommon)
-    void akpTag(vec3 worldPos, float distToCamera, int lightIdx, vec4 posRadius)
+    void akpTag(vec3 worldPos, float distToCamera, int lightIdx, vec4 posRadius, float lodBias)
     {
       vec3 lL = worldPos - posRadius.xyz;
       float distanceToLight = max(max(abs(lL.x), abs(lL.y)), abs(lL.z));
@@ -340,28 +338,25 @@ extension Akari.ShadowAtlas
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
       float footprint = max(u_params.x * distToCamera, 1e-6) / distanceToLight;
       float ratio = clamp(shadowPixelRadius / max(footprint, 1e-8), 0.0, 1.0);
-      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)), 0.0, float(\(lodMax))));
+      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)) + lodBias, 0.0, float(\(lodMax))));
       int tilesPerSide = \(tilemapRes) >> level;
       vec2 uv = clamp(fL.xy / max(abs(fL.z), 1e-6) * 0.5 + 0.5, 0.0, 0.999999);
       ivec2 tile = clamp(ivec2(uv * float(tilesPerSide)), ivec2(0), ivec2(tilesPerSide - 1));
       int tilemapIndex = lightIdx * 6 + face;
       int tileIdx = tilemapIndex * \(tilesPerTilemap) + akpTileOffset(tile, level);
-      atomicOr(tiles_buf[tileIdx], 0x80000000u);
+      if ((tiles_buf[tileIdx] & 0x80000000u) == 0u) atomicOr(tiles_buf[tileIdx], 0x80000000u);
     }
     void main()
     {
       ivec2 screenSize = ivec2(u_params.yz);
       int lightCount = int(u_params.w);
-      ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+      ivec2 pixel = ivec2(gl_GlobalInvocationID.xy) * 2;
       if (pixel.x >= screenSize.x || pixel.y >= screenSize.y) return;
       vec3 posEye = texelFetch(u_position, pixel, 0).xyz;
       if (posEye == vec3(0.0)) return;
       vec3 worldPos = (u_invView * vec4(posEye, 1.0)).xyz;
       float distToCamera = abs(posEye.z);
-      if (lightCount > 0) akpTag(worldPos, distToCamera, 0, u_lightPosRadius0);
-      if (lightCount > 1) akpTag(worldPos, distToCamera, 1, u_lightPosRadius1);
-      if (lightCount > 2) akpTag(worldPos, distToCamera, 2, u_lightPosRadius2);
-      if (lightCount > 3) akpTag(worldPos, distToCamera, 3, u_lightPosRadius3);
+      \(punctualCalls { "akpTag(worldPos, distToCamera, \($0), u_lightPosRadius\($0), u_lightLodBias\($0).x)" })
     }
     """
 
@@ -397,10 +392,11 @@ extension Akari.ShadowAtlas
     struct U
     {
       float4x4 invView;
-      float4 lightPosRadius[4];
+      float4 lightPosRadius[\(maxPunctualLights)];
+      float4 lightLodBias[\(maxPunctualLights)];
       float4 params;
     };
-    inline void akpTag(float3 worldPos, float filmFootprint, int lightIdx, float4 posRadius,
+    inline void akpTag(float3 worldPos, float filmFootprint, int lightIdx, float4 posRadius, float lodBias,
                        device atomic_uint* tiles_buf)
     {
       float3 lL = worldPos - posRadius.xyz;
@@ -412,13 +408,14 @@ extension Akari.ShadowAtlas
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
       float footprint = max(filmFootprint, 1e-6) / distanceToLight;
       float ratio = clamp(shadowPixelRadius / max(footprint, 1e-8), 0.0, 1.0);
-      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)), 0.0, float(\(lodMax))));
+      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)) + lodBias, 0.0, float(\(lodMax))));
       int tilesPerSide = \(tilemapRes) >> level;
       float2 uv = clamp(fL.xy / max(abs(fL.z), 1e-6) * 0.5 + 0.5, 0.0, 0.999999);
       int2 tile = clamp(int2(uv * float(tilesPerSide)), int2(0), int2(tilesPerSide - 1));
       int tilemapIndex = lightIdx * 6 + face;
       int tileIdx = tilemapIndex * \(tilesPerTilemap) + akpTileOffset(tile, level);
-      atomic_fetch_or_explicit(&tiles_buf[tileIdx], 0x80000000u, memory_order_relaxed);
+      if ((atomic_load_explicit(&tiles_buf[tileIdx], memory_order_relaxed) & 0x80000000u) == 0u)
+        atomic_fetch_or_explicit(&tiles_buf[tileIdx], 0x80000000u, memory_order_relaxed);
     }
     kernel void compute_main(constant U& u [[buffer(0)]],
                              device atomic_uint* tiles_buf [[buffer(1)]],
@@ -428,14 +425,14 @@ extension Akari.ShadowAtlas
     {
       int2 screenSize = int2(u.params.yz);
       int lightCount = int(u.params.w);
-      int2 pixel = int2(gid);
+      int2 pixel = int2(gid) * 2;
       if (pixel.x >= screenSize.x || pixel.y >= screenSize.y) return;
       float3 posEye = posTex.read(uint2(pixel)).xyz;
       if (all(posEye == float3(0))) return;
       float3 worldPos = (u.invView * float4(posEye, 1.0)).xyz;
       float distToCamera = abs(posEye.z);
       for (int i = 0; i < lightCount; ++i)
-        akpTag(worldPos, distToCamera * u.params.x, i, u.lightPosRadius[i], tiles_buf);
+        akpTag(worldPos, distToCamera * u.params.x, i, u.lightPosRadius[i], u.lightLodBias[i].x, tiles_buf);
     }
     """
 
@@ -580,10 +577,8 @@ extension Akari.ShadowAtlas
     uniform mat4 u_eyeToLightRotation;
     uniform mat4 u_invProj;
     uniform vec4 u_directionalRefOffset;
-    uniform vec4 u_lightPosRadius0;
-    uniform vec4 u_lightPosRadius1;
-    uniform vec4 u_lightPosRadius2;
-    uniform vec4 u_lightPosRadius3;
+    \(punctualUniforms("u_lightPosRadius"))
+    \(punctualUniforms("u_lightLodBias"))
     uniform vec4 u_volume;
     uniform vec4 u_params;
     uniform vec4 u_lodRange;
@@ -635,7 +630,7 @@ extension Akari.ShadowAtlas
       tagTile(levelSlot(i) * \(tilesPerTilemap) + tile.y * \(tilemapRes) + tile.x);
     }
 
-    void tagPunctual(vec3 worldPos, float footprint, int lightIdx, vec4 posRadius)
+    void tagPunctual(vec3 worldPos, float footprint, int lightIdx, vec4 posRadius, float lodBias)
     {
       vec3 lL = worldPos - posRadius.xyz;
       float distanceToLight = max(max(abs(lL.x), abs(lL.y)), abs(lL.z));
@@ -645,7 +640,7 @@ extension Akari.ShadowAtlas
       vec3 fL = akpFaceLocal(face, lL);
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
       float ratio = clamp(shadowPixelRadius / max(max(footprint, 1e-6) / distanceToLight, 1e-8), 0.0, 1.0);
-      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)), 0.0, float(\(lodMax))));
+      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)) + lodBias, 0.0, float(\(lodMax))));
       int tilesPerSide = \(tilemapRes) >> level;
       vec2 uv = clamp(fL.xy / max(abs(fL.z), 1e-6) * 0.5 + 0.5, 0.0, 0.999999);
       ivec2 tile = clamp(ivec2(uv * float(tilesPerSide)), ivec2(0), ivec2(tilesPerSide - 1));
@@ -677,10 +672,7 @@ extension Akari.ShadowAtlas
       vec3 worldPos = (u_invView * vec4(posEye, 1.0)).xyz;
       float footprint = u_params.x * depth;
       int lightCount = int(u_params.y);
-      if (lightCount > 0) tagPunctual(worldPos, footprint, 0, u_lightPosRadius0);
-      if (lightCount > 1) tagPunctual(worldPos, footprint, 1, u_lightPosRadius1);
-      if (lightCount > 2) tagPunctual(worldPos, footprint, 2, u_lightPosRadius2);
-      if (lightCount > 3) tagPunctual(worldPos, footprint, 3, u_lightPosRadius3);
+      \(punctualCalls { "tagPunctual(worldPos, footprint, \($0), u_lightPosRadius\($0), u_lightLodBias\($0).x)" })
     }
     """
 
@@ -695,7 +687,8 @@ extension Akari.ShadowAtlas
       float4x4 eyeToLightRotation;
       float4x4 invProj;
       float4 directionalRefOffset;
-      float4 lightPosRadius[4];
+      float4 lightPosRadius[\(maxPunctualLights)];
+      float4 lightLodBias[\(maxPunctualLights)];
       float4 volume;
       float4 params;
       float4 lodRange;
@@ -749,7 +742,7 @@ extension Akari.ShadowAtlas
       tagTile(levelSlot(i, dataTex) * \(tilesPerTilemap) + tile.y * \(tilemapRes) + tile.x, tiles_buf);
     }
 
-    inline void tagPunctual(float3 worldPos, float footprint, int lightIdx, float4 posRadius,
+    inline void tagPunctual(float3 worldPos, float footprint, int lightIdx, float4 posRadius, float lodBias,
                             device atomic_uint* tiles_buf)
     {
       float3 lL = worldPos - posRadius.xyz;
@@ -760,7 +753,7 @@ extension Akari.ShadowAtlas
       float3 fL = akpFaceLocal(face, lL);
       float shadowPixelRadius = (2.0 * 1.4142135) / float(\(shadowMapMaxRes));
       float ratio = clamp(shadowPixelRadius / max(max(footprint, 1e-6) / distanceToLight, 1e-8), 0.0, 1.0);
-      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)), 0.0, float(\(lodMax))));
+      int level = int(clamp(-log2(max(ratio, 1e-8)) + \(Float(punctualLodBias)) + lodBias, 0.0, float(\(lodMax))));
       int tilesPerSide = \(tilemapRes) >> level;
       float2 uv = clamp(fL.xy / max(abs(fL.z), 1e-6) * 0.5 + 0.5, 0.0, 0.999999);
       int2 tile = clamp(int2(uv * float(tilesPerSide)), int2(0), int2(tilesPerSide - 1));
@@ -798,7 +791,7 @@ extension Akari.ShadowAtlas
       float footprint = u.params.x * depth;
       int lightCount = int(u.params.y);
       for (int i = 0; i < lightCount; ++i)
-        tagPunctual(worldPos, footprint, i, u.lightPosRadius[i], tiles_buf);
+        tagPunctual(worldPos, footprint, i, u.lightPosRadius[i], u.lightLodBias[i].x, tiles_buf);
     }
     """
 

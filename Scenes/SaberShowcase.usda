@@ -1,0 +1,113 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    doc = """Akari tube light showcase, two saber cylinder lights over a floor, a wall and a sphere."""
+    endTimeCode = 1
+    framesPerSecond = 24
+    metersPerUnit = 1
+    startTimeCode = 1
+    upAxis = "Z"
+)
+
+def Xform "World"
+{
+    def Scope "Looks"
+    {
+        def Material "Floor"
+        {
+            token outputs:surface.connect = </World/Looks/Floor/S.outputs:surface>
+            def Shader "S"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.5, 0.5, 0.52)
+                float inputs:roughness = 0.3
+                token outputs:surface
+            }
+        }
+        def Material "Matte"
+        {
+            token outputs:surface.connect = </World/Looks/Matte/S.outputs:surface>
+            def Shader "S"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.7, 0.7, 0.7)
+                float inputs:roughness = 0.8
+                token outputs:surface
+            }
+        }
+    }
+    def Cube "Floor" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        rel material:binding = </World/Looks/Floor>
+        double size = 1
+        double3 xformOp:translate = (0, 0, -0.5)
+        float3 xformOp:scale = (12, 12, 1)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    def Cube "Wall" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        rel material:binding = </World/Looks/Matte>
+        double size = 1
+        double3 xformOp:translate = (0, 2.0, 1.5)
+        float3 xformOp:scale = (8, 0.2, 3)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+    def Sphere "Ball" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        rel material:binding = </World/Looks/Matte>
+        double radius = 0.35
+        double3 xformOp:translate = (0, 0.6, 0.35)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "Dark" (
+        prepend references = @../../../Downloads/Pointe_of_Origin/usd/assets/saber.usda@
+        variants = { string side = "dark" }
+    )
+    {
+        double3 xformOp:translate = (-0.9, 0.3, 0.9)
+        float3 xformOp:rotateXYZ = (0, 30, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }
+    def Xform "Light" (
+        prepend references = @../../../Downloads/Pointe_of_Origin/usd/assets/saber.usda@
+        variants = { string side = "light" }
+    )
+    {
+        double3 xformOp:translate = (0.9, 0.3, 0.9)
+        float3 xformOp:rotateXYZ = (0, -30, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }
+    def Camera "Close"
+    {
+        float focalLength = 35
+        float horizontalAperture = 36
+        float verticalAperture = 20.25
+        double3 xformOp:translate = (-0.2, -1.6, 0.45)
+        float3 xformOp:rotateXYZ = (80, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }
+    def DomeLight "Night"
+    {
+        color3f inputs:color = (0.3, 0.35, 0.5)
+        float inputs:intensity = 0.03
+    }
+    def Camera "Wide"
+    {
+        float focalLength = 28
+        float horizontalAperture = 36
+        float verticalAperture = 20.25
+        double3 xformOp:translate = (0, -4.4, 1.35)
+        float3 xformOp:rotateXYZ = (86, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }
+
+    def Camera "Main"
+    {
+        float focalLength = 28
+        float horizontalAperture = 36
+        float verticalAperture = 20.25
+        double3 xformOp:translate = (0, -3.2, 1.1)
+        float3 xformOp:rotateXYZ = (82, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }
+}

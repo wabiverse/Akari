@@ -413,4 +413,13 @@ def Xform "World"
             uniform token[] xformOpOrder = ["xformOp:translate"]
         }
     }
+
+    def Camera "Main"
+    {
+        float focalLength = 35
+        float horizontalAperture = 36
+        float verticalAperture = 20.25
+        double3 xformOp:translate = (0, 2, 11)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
 }

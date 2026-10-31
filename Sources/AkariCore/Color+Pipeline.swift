@@ -61,6 +61,9 @@ public extension Akari
         }
       }
 
+      /// The AgX look graded ahead of the view transform's curve.
+      public var look: Akari.Color.Look = .punchy
+
       /// Exposure in stops (EV). 0 is neutral, +1 doubles scene luminance.
       public var exposure: Float = 0
 

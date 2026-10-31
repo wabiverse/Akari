@@ -41,7 +41,6 @@
 import AkariCore
 import AkariRender
 import HydraKit
-import OpenUSDKit
 import SwiftCrossUI
 
 extension AkariDemo

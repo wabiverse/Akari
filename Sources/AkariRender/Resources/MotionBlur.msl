@@ -1,0 +1,87 @@
+float2 motionPixels(int2 pixel, texture2d<float> velocity, texture2d<float> normal, texture2d<float> transparentVelocity,
+                    float4x4 view, float4x4 invProj, float4x4 prevViewProj, float4x4 currViewProj, float4 params,
+                    float2 outSize)
+{
+  int2 size = int2(velocity.get_width(), velocity.get_height());
+  uint2 p = uint2(clamp(pixel, int2(0), size - 1));
+  float2 motion;
+  if (normal.read(p).a >= 0.5) {
+    motion = velocity.read(p).xy;
+  } else {
+    float2 uv = (float2(p) + 0.5) / float2(size);
+    float4 e = invProj * float4(uv * 2.0 - 1.0, -1.0, 1.0);
+    float3x3 invView = float3x3(float3(view[0][0], view[1][0], view[2][0]),
+                                float3(view[0][1], view[1][1], view[2][1]),
+                                float3(view[0][2], view[1][2], view[2][2]));
+    float3 d = invView * (e.xyz / e.w);
+    float4 prevClip = prevViewProj * float4(d, 0.0);
+    float4 currClip = currViewProj * float4(d, 0.0);
+    motion = prevClip.w > 0.0 && currClip.w > 0.0 ? (prevClip.xy / prevClip.w - currClip.xy / currClip.w) * 0.5 : float2(0.0);
+  }
+  float4 t = transparentVelocity.read(p);
+  if (t.w > 0.15) {
+    float2 m = t.xy / t.w;
+    if (dot(m, m) > dot(motion, motion)) motion = m;
+  }
+  float2 v = motion * outSize * params.x;
+  float l = length(v);
+  return l > params.y ? v * (params.y / l) : v;
+}
+
+float motionCone(float distance, float radius)
+{
+  return saturate(1.0 - distance / max(radius, 1e-3));
+}
+
+float motionCylinder(float distance, float radius)
+{
+  return 1.0 - smoothstep(0.95 * radius, 1.05 * radius + 1e-3, distance);
+}
+
+float motionSoftDepth(float za, float zb, float extent)
+{
+  return saturate(1.0 - (za - zb) / extent);
+}
+
+float motionDepth(int2 pixel, texture2d<float> position, texture2d<float> normal)
+{
+  int2 size = int2(position.get_width(), position.get_height());
+  uint2 p = uint2(clamp(pixel, int2(0), size - 1));
+  return normal.read(p).a >= 0.5 ? position.read(p).z : -1e20;
+}
+
+/// McGuire 2012's reconstruction filter at `pixel` (output pixels), gathering along the
+/// tile neighborhood's dominant motion `vn`.
+float3 motionReconstruct(float2 pixel, float2 vn, float noise, texture2d<float> color, sampler colorSmp,
+                         texture2d<float> velocity, texture2d<float> normal, texture2d<float> position,
+                         texture2d<float> transparentVelocity,
+                         float4x4 view, float4x4 invProj, float4x4 prevViewProj, float4x4 currViewProj,
+                         float4 params, float2 outSize)
+{
+  float3 center = color.read(uint2(pixel)).rgb;
+  float rn = length(vn) * 0.5;
+  if (rn < 0.5) return center;
+  float2 gscale = float2(velocity.get_width(), velocity.get_height()) / outSize;
+  int2 gc = int2(pixel * gscale);
+  float rc = max(length(motionPixels(gc, velocity, normal, transparentVelocity, view, invProj, prevViewProj, currViewProj, params, outSize)) * 0.5, 0.5);
+  float zc = motionDepth(gc, position, normal);
+  float extent = max(abs(zc) * 0.02, 1e-3);
+  float weight = 1.0 / rc;
+  float3 sum = center * weight;
+  const int N = 15;
+  for (int i = 0; i < N; ++i) {
+    float t = mix(-1.0, 1.0, (float(i) + noise + 0.5) / float(N));
+    float2 s = pixel + 0.5 + vn * 0.5 * t;
+    if (any(s < float2(0.0)) || any(s >= outSize)) continue;
+    int2 gs = int2(s * gscale);
+    float rs = max(length(motionPixels(gs, velocity, normal, transparentVelocity, view, invProj, prevViewProj, currViewProj, params, outSize)) * 0.5, 0.5);
+    float zs = motionDepth(gs, position, normal);
+    float dist = abs(t) * rn;
+    float f = motionSoftDepth(zc, zs, extent);
+    float b = motionSoftDepth(zs, zc, extent);
+    float w = f * motionCone(dist, rs) + b * motionCone(dist, rc) + motionCylinder(dist, rs) * motionCylinder(dist, rc) * 2.0;
+    sum += color.sample(colorSmp, s / outSize, level(0.0)).rgb * w;
+    weight += w;
+  }
+  return sum / weight;
+}

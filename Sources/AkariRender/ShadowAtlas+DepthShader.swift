@@ -73,6 +73,7 @@ extension Akari.ShadowAtlas
       float4 position [[position]];
       uint   view [[user(akari_view)]];
       float2 uv [[user(akari_uv)]];
+      float  primId [[user(akari_prim)]];
       float  clip [[clip_distance]] [4];
     };
     struct FragIn
@@ -80,6 +81,7 @@ extension Akari.ShadowAtlas
       float4 position [[position]];
       uint   view [[user(akari_view)]];
       float2 uv [[user(akari_uv)]];
+      float  primId [[user(akari_prim)]];
     };
     struct U { int u_viewBase; int u_alphaTest; };
     inline void clipToRect(thread VertOut& out, const device uint* render_rect, uint view)
@@ -111,7 +113,25 @@ extension Akari.ShadowAtlas
     {
       VertOut out;
       out.uv = in.a_texcoord;
+      out.primId = in.a_color.r;
       out.position = B.u_modelviewProjection * in.a_position;
+      out.position.z = (out.position.z + out.position.w) * 0.5;
+      out.view = uint(u.u_viewBase);
+      out.clip[0] = out.clip[1] = out.clip[2] = out.clip[3] = 1.0;
+      return out;
+    }
+
+    vertex VertOut vert_instanced_main(VertIn in [[stage_in]],
+                                       constant float4x4* instanceXf [[buffer(1)]],
+                                       constant U& u [[buffer(2)]],
+                                       constant LabGLBuiltins& B [[buffer(3)]],
+                                       uint instance [[instance_id]],
+                                                 uint base [[base_instance]])
+    {
+      VertOut out;
+      out.uv = in.a_texcoord;
+      out.primId = in.a_color.r;
+      out.position = B.u_modelviewProjection * (instanceXf[instance - base] * in.a_position);
       out.position.z = (out.position.z + out.position.w) * 0.5;
       out.view = uint(u.u_viewBase);
       out.clip[0] = out.clip[1] = out.clip[2] = out.clip[3] = 1.0;
@@ -127,8 +147,32 @@ extension Akari.ShadowAtlas
     {
       VertOut out;
       out.uv = in.a_texcoord;
+      out.primId = in.a_color.r;
       out.position = viewsXf[ampId] * in.a_position;
       out.view = uint(u.u_viewBase) + uint(ampId);
+      clipToRect(out, render_rect, out.view);
+      out.position.z = (out.position.z + out.position.w) * 0.5;
+      return out;
+    }
+
+    // Amplified instanced draws read the instance matrices from buffer(1),
+    // which instanced draws always bind, and the per view matrices from a
+    // buffer the shadow pass uploads at buffer(4).
+    vertex VertOut vert_amplified_instanced_main(VertIn in [[stage_in]],
+                                                 constant float4x4* instanceXf [[buffer(1)]],
+                                                 constant U& u [[buffer(2)]],
+                                                 constant LabGLBuiltins& B [[buffer(3)]],
+                                                 const device float4x4* viewsXf [[buffer(4)]],
+                                                 const device uint* render_rect [[buffer(5)]],
+                                                 ushort ampId [[amplification_id]],
+                                                 uint instance [[instance_id]],
+                                                 uint base [[base_instance]])
+    {
+      VertOut out;
+      out.uv = in.a_texcoord;
+      out.primId = in.a_color.r;
+      out.view = uint(u.u_viewBase) + uint(ampId);
+      out.position = viewsXf[out.view] * (instanceXf[instance - base] * in.a_position);
       clipToRect(out, render_rect, out.view);
       out.position.z = (out.position.z + out.position.w) * 0.5;
       return out;
@@ -142,10 +186,12 @@ extension Akari.ShadowAtlas
                                                 const device float4x4* view_xf [[buffer(7)]],
                                                 const device uint* instance_view [[buffer(8)]],
                                                 ushort ampId [[amplification_id]],
-                                                uint instance [[instance_id]])
+                                                uint instance [[instance_id]],
+                                                 uint base [[base_instance]])
     {
       VertOut out;
       out.uv = in.a_texcoord;
+      out.primId = in.a_color.r;
       if (u.u_viewBase < 0)
       {
         out.view = instance_view[instance];
@@ -171,6 +217,7 @@ extension Akari.ShadowAtlas
     {
       VertOut out;
       out.uv = in.a_texcoord;
+      out.primId = in.a_color.r;
       out.position = (viewsXf[0] * model) * in.a_position;
       out.position.z = (out.position.z + out.position.w) * 0.5;
       out.view = uint(u.u_viewBase);
@@ -194,12 +241,27 @@ extension Akari.ShadowAtlas
                             constant AtlasImages& images [[buffer(1)]],
                             constant U& u [[buffer(2)]],
                             const device int* slot_of_view [[buffer(4)]],
-                            constant MaterialImages& materials [[buffer(6)]])
+                            constant MaterialImages& constants [[buffer(5)]],
+                            constant MaterialImages& materials [[buffer(6)]],
+                            constant MaterialImages& styles [[buffer(7)]])
     {
-      if (u.u_alphaTest != 0)
+      if ((u.u_alphaTest & 2) != 0)
+      {
+        int id = int(in.primId + 0.5);
+        int perRow = int(styles.atlas.get_width()) / 8;
+        if (id >= 0 && perRow > 0 && id / perRow < int(styles.atlas.get_height()))
+        {
+          float4 flags = styles.atlas.read(uint2((id % perRow) * 8 + 4, id / perRow));
+          if (flags.z > 0.5 || (flags.y > 0.5 && flags.w < 0.5)) return;
+        }
+      }
+      if ((u.u_alphaTest & 1) != 0)
       {
         constexpr sampler linear(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 mat = materials.atlas.sample(linear, in.uv);
+        // an untextured material's uv is -(row + 1), its constants instead of the atlas.
+        int row = int(-in.uv.x + 0.5) - 1;
+        if (row >= 0) mat = float4(0.0, 0.0, constants.atlas.read(uint2(0, row)).a, constants.atlas.read(uint2(1, row)).b);
         if (mat.b < (mat.a > 0.0 ? mat.a : 0.5)) return;
       }
       int2 texel = int2(in.position.xy);

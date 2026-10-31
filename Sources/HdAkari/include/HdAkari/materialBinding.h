@@ -63,6 +63,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 class HdSceneDelegate;
 class HdMeshUtil;
+class HdMeshTopology;
 struct HdAkariMeshData;
 
 /// Resolved per-material texture info for
@@ -75,7 +76,9 @@ struct HdAkariMaterialTextures
   std::string colorPath;
   std::string normalPath;
   std::string emissivePath;
+  std::string ptexPath; // a Ptex color map, drawn as each face's average color.
   GfVec3f emissiveColor = GfVec3f(0.0f); // used when emissive isn't textured.
+  HdAkariScalarSources sources;   // the r/g/b/a output each scalar texture is read through.
   TfToken uvVarname = TfToken("st");
   bool hasAny = false;
 };
@@ -89,16 +92,30 @@ void HdAkariApplyMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
                           HdAkariMaterialTextures &textures,
                           SdfPath &materialIdOut);
 
+/// Reads UsdPreviewSurface's inputs from a given material.
+void HdAkariApplyMaterialId(HdSceneDelegate *sceneDelegate, SdfPath const &materialId,
+                            GfVec3f &color, float &opacity,
+                            float &roughness, float &metallic,
+                            float &opacityThreshold,
+                            HdAkariMaterialTextures &textures,
+                            SdfPath &materialIdOut);
+
+/// Drops a material's parsed inputs after its network changes.
+void HdAkariForgetMaterial(SdfPath const &materialId);
+
 /// Fetches the prim's raw UV primvar, remapped into its atlas cell.
 void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, HdMeshUtil &meshUtil,
                             HdAkariMaterialTextures const &textures, HdAkariAtlasCell const &cell,
                             VtVec3iArray const &triangleIndices, VtVec2fArray &outUvs);
 
 /// Resolves the prim's bound material into `data`, bakes its atlas
-/// cell, and fills one atlas UV per triangle corner.
+/// cell, and fills one atlas UV per triangle corner, triangles of
+/// material bound face subsets take their subset's material instead.
 void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
                          HdAkariTextureAtlas *atlas, HdMeshUtil &meshUtil,
-                         HdAkariMeshData &data);
+                         HdAkariMeshData &data,
+                         HdMeshTopology const *topology = nullptr,
+                         VtIntArray const *primitiveParams = nullptr);
 
 PXR_NAMESPACE_CLOSE_SCOPE
 

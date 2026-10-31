@@ -38,6 +38,7 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
+import HydraKit
 import SwiftCrossUI
 #if os(macOS)
   import AppKit
@@ -50,6 +51,7 @@ extension AkariDemo
   enum Properties
   {
     static let region = Color(white: 0.188)
+    static let tabs = Color(white: 0.114)
     static let panel = Color(white: 0.24)
     static let subpanel = Color(white: 0.215)
     static let field = Color(white: 0.33)
@@ -584,13 +586,13 @@ extension AkariDemo
     {
       expanded
         ? Path()
-          .move(to: SIMD2(bounds.x, bounds.y + bounds.height * 0.25))
-          .addLine(to: SIMD2(bounds.center.x, bounds.y + bounds.height * 0.75))
-          .addLine(to: SIMD2(bounds.maxX, bounds.y + bounds.height * 0.25))
+        .move(to: SIMD2(bounds.x, bounds.y + bounds.height * 0.25))
+        .addLine(to: SIMD2(bounds.center.x, bounds.y + bounds.height * 0.75))
+        .addLine(to: SIMD2(bounds.maxX, bounds.y + bounds.height * 0.25))
         : Path()
-          .move(to: SIMD2(bounds.x + bounds.width * 0.25, bounds.y))
-          .addLine(to: SIMD2(bounds.x + bounds.width * 0.75, bounds.center.y))
-          .addLine(to: SIMD2(bounds.x + bounds.width * 0.25, bounds.maxY))
+        .move(to: SIMD2(bounds.x + bounds.width * 0.25, bounds.y))
+        .addLine(to: SIMD2(bounds.x + bounds.width * 0.75, bounds.center.y))
+        .addLine(to: SIMD2(bounds.x + bounds.width * 0.25, bounds.maxY))
     }
   }
 

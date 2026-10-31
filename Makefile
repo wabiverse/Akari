@@ -5,6 +5,7 @@ all: bundle
 
 # Configurable app name (override via command line: make bundle APP_NAME=MyApp)
 APP_NAME ?= AkariDemo
+CODESIGN_IDENTITY ?=
 # Build configuration to use (override via command line: make bundle BUILD_CONFIG=debug)
 BUILD_CONFIG ?= release
 # USD scene for akari to render (override via command line: make run USD_SCENE=/path/to/scene.usd)
@@ -28,7 +29,7 @@ install:
 
 bundle: install
 	@echo "📦 Bundling $(APP_NAME)..."
-	SWIFTUSD_BUILD_FROM_SOURCE=1 swift-bundler bundle -c $(BUILD_CONFIG) $(APP_NAME)
+	SWIFTUSD_BUILD_FROM_SOURCE=1 swift-bundler bundle -c $(BUILD_CONFIG) $(if $(CODESIGN_IDENTITY),--identity $(CODESIGN_IDENTITY) --codesign) $(APP_NAME)
 
 run: install
 	@echo "▶️  Running $(APP_NAME)..."

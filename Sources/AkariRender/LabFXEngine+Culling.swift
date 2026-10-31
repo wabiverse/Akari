@@ -341,7 +341,23 @@ extension Akari.LabFXEngine
     geometry.cameraCull.viewProjection = viewProjection
     geometry.cameraCull.perspective = projection[2, 3] < -0.5
     geometry.cameraCull.encoded = encodeCameraCull(viewProjection)
-    runtime.setMeshCaptureCulledSlot("mesh", slot: geometry.cameraCull.encoded ? Self.cameraCullSlot : -1)
+    runtime.setMeshCaptureCulledSlot("mesh-static", slot: geometry.cameraCull.encoded ? Self.cameraCullSlot : -1)
+    geometry.instancesCulled = cullInstances(viewProjection, pixelScale: projection[1, 1] * Float(renderHeight) * 0.5)
+  }
+
+  /// Instances smaller than this, in radius on screen, aren't drawn.
+  static let instanceMinPixels: Float = 0.25
+
+  /// Keeps the instances in front of the camera, inside its sides
+  /// and covering some of a pixel, for the instanced gbuffer pass.
+  private func cullInstances(_ viewProjection: Akari.Matrix4, pixelScale: Float) -> Bool
+  {
+    guard !geometry.instancedBatch.isEmpty, let capture = geometry.staticInstancedCapture else { return false }
+    return viewProjection.withUnsafeFloats
+    {
+      labgl.captureCullInstances(capture, viewProjection: $0.baseAddress, pixelScale: pixelScale,
+                                 minPixels: Self.instanceMinPixels, slot: 0) != 0
+    }
   }
 
   private func compile(_ kernel: inout GLuint, _ name: String, _ glsl: String, _ msl: String,

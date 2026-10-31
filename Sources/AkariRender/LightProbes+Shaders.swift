@@ -78,6 +78,12 @@ extension Akari.LightProbes
       texture2d<float> t [[texture(0)]];
     };
 
+    float3x3 probe_normal_matrix(float4x4 world)
+    {
+      float3x3 m = float3x3(world[0].xyz, world[1].xyz, world[2].xyz);
+      return float3x3(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1])) / determinant(m);
+    }
+
     vertex VertOut vert_main(VertIn in [[stage_in]],
                              constant LabGLBuiltins& B [[buffer(3)]])
     {
@@ -99,6 +105,20 @@ extension Akari.LightProbes
       return out;
     }
 
+    vertex VertOut vert_instanced_main(VertIn in [[stage_in]],
+                                       constant float4x4* instanceXf [[buffer(1)]],
+                                       constant LabGLBuiltins& B [[buffer(3)]],
+                                       uint instance [[instance_id]],
+                                                 uint base [[base_instance]])
+    {
+      VertOut out;
+      float4x4 world = instanceXf[instance - base];
+      out.position = B.u_modelviewProjection * (world * in.a_position);
+      out.normal = (probe_normal_matrix(world) * in.a_normal);
+      out.uv = in.a_texcoord;
+      return out;
+    }
+
     vertex VertOut vert_amplified_main(VertIn in [[stage_in]],
                                        constant float4x4* viewsXf [[buffer(1)]],
                                        ushort ampId [[amplification_id]])
@@ -106,6 +126,21 @@ extension Akari.LightProbes
       VertOut out;
       out.position = viewsXf[ampId] * in.a_position;
       out.normal = in.a_normal;
+      out.uv = in.a_texcoord;
+      return out;
+    }
+
+    vertex VertOut vert_amplified_instanced_main(VertIn in [[stage_in]],
+                                                 constant float4x4* instanceXf [[buffer(1)]],
+                                                 const device float4x4* viewsXf [[buffer(4)]],
+                                                 ushort ampId [[amplification_id]],
+                                                 uint instance [[instance_id]],
+                                                 uint base [[base_instance]])
+    {
+      VertOut out;
+      float4x4 world = instanceXf[instance - base];
+      out.position = viewsXf[ampId] * (world * in.a_position);
+      out.normal = (probe_normal_matrix(world) * in.a_normal);
       out.uv = in.a_texcoord;
       return out;
     }
@@ -127,11 +162,21 @@ extension Akari.LightProbes
                                constant U& u [[buffer(2)]],
                                constant AtlasTexture& material [[buffer(0)]],
                                constant AtlasTexture& color [[buffer(1)]],
-                               constant AtlasTexture& emissive [[buffer(4)]])
+                               constant AtlasTexture& emissive [[buffer(4)]],
+                               constant AtlasTexture& constants [[buffer(5)]])
     {
       constexpr sampler smp(filter::linear, mip_filter::linear, address::clamp_to_edge);
       float4 mat = material.t.sample(smp, in.uv);
-      if (mat.a > 0.0 && mat.b < mat.a) discard_fragment();
+      int row = int(-in.uv.x + 0.5) - 1;
+      float4 c0 = float4(0.0), c2 = float4(0.0);
+      if (row >= 0)
+      {
+        c0 = constants.t.read(uint2(0, row));
+        float4 c1 = constants.t.read(uint2(1, row));
+        c2 = constants.t.read(uint2(2, row));
+        mat = float4(c1.r, c1.g, c0.a, c1.b);
+      }
+      if (mat.b < (mat.a > 0.0 ? mat.a : 0.5)) discard_fragment();
       FragOut out;
       if (u.u_mode.x > 0.5)
       {
@@ -141,9 +186,11 @@ extension Akari.LightProbes
         return out;
       }
       float len = length(in.normal);
-      out.albedo = float4(color.t.sample(smp, in.uv).rgb, front ? 1.0 : -1.0);
+      float3 albedo = color.t.sample(smp, in.uv).rgb;
+      out.albedo = float4(row >= 0 ? c0.rgb : albedo, front ? 1.0 : -1.0);
       out.normal = float4(len > 1e-8 ? in.normal / len : float3(0.0, 1.0, 0.0), in.position.z);
-      out.emission = float4(emissive.t.sample(smp, in.uv).rgb, mat.g);
+      float4 e = emissive.t.sample(smp, in.uv);
+      out.emission = float4(row >= 0 ? c2.rgb : e.rgb / max(e.a, 1.0 / 255.0), mat.g);
       return out;
     }
     """
@@ -170,6 +217,7 @@ extension Akari.LightProbes
       float4x4 u_sunMatrix;
       float4 u_sun;
       float4 u_sky;
+      float4 u_sunColor;
       float4 u_sunMap;
       float4 u_gridMin;
       float4 u_gridMax;
@@ -376,7 +424,8 @@ extension Akari.LightProbes
         float3 dayColor = mix(skyL, float3(1.0), saturate(sunHeight));
         float3 nightColor = mix(skyL, float3(0.95, 0.95, 1.0), saturate(-sunHeight));
         float3 dynamicSky = mix(nightColor * 0.12, dayColor * 3.0, nightFade);
-        irradiance += dynamicSky * NoL * sunVisibility(x, N, sunMap, u);
+        float3 sunL = u.u_sunColor.w > 1.5 ? u.u_sunColor.rgb : dynamicSky * u.u_sunColor.w;
+        irradiance += sunL * NoL * sunVisibility(x, N, sunMap, u);
       }
 
       int count = int(u.u_params.x);
@@ -460,10 +509,36 @@ extension Akari.LightProbes
       if (isVolume)
       {
         uint2 t = uint2((probe % SH_PER_ROW) * 4, probe / SH_PER_ROW);
-        shOut.write(float4(float3(total[0], total[1], total[2]) * norm, validity), t);
-        shOut.write(float4(float3(total[3], total[4], total[5]) * norm, 0.0), t + uint2(1, 0));
-        shOut.write(float4(float3(total[6], total[7], total[8]) * norm, 0.0), t + uint2(2, 0));
-        shOut.write(float4(float3(total[9], total[10], total[11]) * norm, 0.0), t + uint2(3, 0));
+        float4 c[4] = { float4(float3(total[0], total[1], total[2]) * norm, 0.0),
+                        float4(float3(total[3], total[4], total[5]) * norm, 0.0),
+                        float4(float3(total[6], total[7], total[8]) * norm, 0.0),
+                        float4(float3(total[9], total[10], total[11]) * norm, 0.0) };
+
+        if (validity < 0.5)
+        {
+          int3 dims = int3(u.u_gridSize.xyz);
+          int3 g = int3(probe % dims.x, (probe / dims.x) % dims.y, probe / (dims.x * dims.y));
+          float4 acc[4] = { float4(0.0), float4(0.0), float4(0.0), float4(0.0) };
+          float weight = 0.0;
+          for (int n = 0; n < 27; ++n)
+          {
+            int3 q = g + int3(n % 3, (n / 3) % 3, n / 9) - 1;
+            if (n == 13 || any(q < 0) || any(q >= dims)) continue;
+            int index = q.x + dims.x * (q.y + dims.y * q.z);
+            uint2 nt = uint2((index % SH_PER_ROW) * 4, index / SH_PER_ROW);
+            float4 n0 = shIn.read(nt);
+            float w = n0.a + 0.02;
+            acc[0] += n0 * w;
+            for (int k = 1; k < 4; ++k) acc[k] += shIn.read(nt + uint2(k, 0)) * w;
+            weight += w;
+          }
+          float keep = validity / 0.5;
+          for (int k = 0; k < 4; ++k) c[k] = mix(acc[k] / max(weight, 1e-6), c[k], keep);
+        }
+        shOut.write(float4(c[0].rgb, validity), t);
+        shOut.write(float4(c[1].rgb, 0.0), t + uint2(1, 0));
+        shOut.write(float4(c[2].rgb, 0.0), t + uint2(2, 0));
+        shOut.write(float4(c[3].rgb, 0.0), t + uint2(3, 0));
       }
       else
       {

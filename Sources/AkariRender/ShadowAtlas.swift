@@ -135,9 +135,21 @@ public extension Akari
     var frameFit = FrameFit()
     var casterMotion = CasterMotion()
     var casterRedraw = CasterRedraw.none
+    /// Raised while the page pool runs short, coarsening the secondary lights first.
+    public internal(set) var punctualPressure = 0
+    /// The slots whose lights keep full resolution until the pool runs out for them too.
+    public var mainSlots: Set<Int> = []
+    var punctualHeadroom = 0
+    var punctualHold = 60
+    var punctualSinceDrop = Int.max / 2
+    var punctualSettle = 0
     var lastStaticGeneration: UInt64 = .max
     /// The material atlas, whose opacity lets light through the static casters.
     public var materialAtlas: GLuint = 0
+    /// Untextured materials constants, what the alpha test reads for a uv of -(row + 1).
+    public var materialConstants: GLuint = 0
+    /// Each prim's style texels, whose emitter flag keeps a mesh out of the maps.
+    public var styles: GLuint = 0
 
     public init()
     {}
@@ -147,11 +159,59 @@ public extension Akari
       release()
     }
 
+    /// LODs added to `punctualLodBias` for a slot's light, the main ones match the screen
+    /// and the secondary ones start one coarser, each pressure step coarsening them in turn.
+    public func lodBias(slot: Int) -> Float
+    {
+      mainSlots.contains(slot)
+        ? Float(min(punctualPressure / 2 - 1, Self.lodMax))
+        : Float(min(1 + (punctualPressure + 1) / 2, Self.lodMax))
+    }
+
+    /// Raises the pressure a step when the pool ran short, and lowers
+    /// it once the finer levels would comfortably fit again.
+    func adaptPunctualBias()
+    {
+      punctualSinceDrop &+= 1
+      if punctualSinceDrop > 3600 { punctualHold = 60 }
+      withMappedBuffer(buffers.pagesInfo, as: Int32.self)
+      { info in
+        if punctualSettle > 0
+        {
+          punctualSettle -= 1
+        }
+        else if info[5] > 0, punctualPressure < 2 * Self.lodMax + 2
+        {
+          // short again soon after stepping down, so wait longer before the next try.
+          if punctualSinceDrop < 120 { punctualHold = min(punctualHold * 2, 1920) }
+          punctualPressure += 1
+          punctualHeadroom = 0
+          punctualSettle = 8
+        }
+        else if punctualPressure > 0, Int(info[7]) * 2 < Self.maxPage * 4 / 5
+        {
+          punctualHeadroom += 1
+          if punctualHeadroom >= punctualHold
+          {
+            punctualPressure -= 1
+            punctualHeadroom = 0
+            punctualSettle = 8
+            punctualSinceDrop = 0
+          }
+        }
+        else
+        {
+          punctualHeadroom = 0
+        }
+      }
+    }
+
     /// Fits this frame's views, then tags and allocates the pages it samples.
     public func markPageUsage(gbufferPosition: GLuint,
                               camera: Camera,
                               screenWidth: Int,
                               screenHeight: Int,
+                              footprintHeight: Int,
                               lightDirection: SIMD3<Float>,
                               sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
                               settings: ShadowSettings,
@@ -172,6 +232,7 @@ public extension Akari
 
       ringCursor = (ringCursor + 1) % Self.bufferRing
       let lightCount = min(lights.count, Self.maxPunctualLights)
+      adaptPunctualBias()
 
       fitViews(camera: camera, lightDirection: lightDirection, sceneBounds: sceneBounds,
                settings: settings, lights: lights, punctualFarDistance: punctualFarDistance)
@@ -195,7 +256,6 @@ public extension Akari
 
       frameFit.castersMoved = sceneChanged
       frameFit.redraw = sceneChanged ? casterRedraw : .none
-      frameFit.forcePunctual = frameFit.forcePunctual || frameFit.redraw.isNeeded
 
       dispatchBeginFrame(dirty: punctualDirty)
       dispatchTilemapShift(forceFullShift: frameFit.redraw == .all)
@@ -228,6 +288,7 @@ public extension Akari
                                  invView: invView,
                                  screenWidth: screenWidth,
                                  screenHeight: screenHeight,
+                                 footprintHeight: footprintHeight,
                                  camera: camera,
                                  lights: lights,
                                  lightCount: lightCount)
@@ -280,7 +341,7 @@ public extension Akari
       let punctualFaces: [[PunctualFace]] = (0 ..< Self.maxPunctualLights).map
       { slot in
         guard slot < lightCount else { return [] }
-        let near = max(lights[slot].radius, 0.02)
+        let near = max(lights[slot].radius * 0.25, 0.02)
         return Self.fitPunctual(lightPosition: lights[slot].position,
                                 near: near,
                                 far: max(min(punctualFarDistance, lights[slot].reach), near * 2))
@@ -302,10 +363,7 @@ public extension Akari
                           lightDirection: lightDirection,
                           cameraWorld: SIMD3(inverseView[3, 0], inverseView[3, 1], inverseView[3, 2]),
                           sunChanged: sunChanged,
-                          forcePunctual: camera.view.simd != directionalHistory.view.simd
-                            || punctualHistory.invalidated,
                           isCurrent: true)
-      punctualHistory.invalidated = punctualHistory.pendingDirty != 0
 
       directionalHistory.slots = directionalSlots
       directionalHistory.view = camera.view
@@ -340,8 +398,7 @@ public extension Akari
                             dynamicDrawBounds: dynamicDrawBounds,
                             directional: directional,
                             directionalSlots: directionalSlots, punctualFaces: punctualFaces,
-                            forced: forceDirectional ? Set(directionalSlots) : [],
-                            forcePunctual: frameFit.forcePunctual)
+                            forced: forceDirectional ? Set(directionalSlots) : [])
 
       retireDrawn(views: drawn)
       if !drawn.isEmpty { dispatchPageTable() }

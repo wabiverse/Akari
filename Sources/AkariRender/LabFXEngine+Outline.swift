@@ -154,15 +154,18 @@ extension Akari.LabFXEngine
     }
     guard
       outline.needsRecord
-        || changed.contains(where: { isSelected($0.primId) })
-        || removed.contains(where: outline.recordedIDs.contains)
+      || changed.contains(where: { isSelected($0.primId) })
+      || removed.contains(where: outline.recordedIDs.contains)
     else { return }
 
-    let ids = Set(geometry.primIds.compactMap { key, primId in
+    let ids = Set(geometry.primIds.compactMap
+    { key, primId in
       isSelected(primId) && !geometry.animated.contains(key) ? key : nil
     })
     guard outline.needsRecord || ids != outline.recordedIDs else { return }
-    let selected = ids.compactMap { geometry.meshes[$0] }
+    // the outline capture draws with the plain mesh path, so instances expand.
+    let selected = ids.compactMap { geometry.meshes[$0] }.flatMap
+    { mesh in mesh.instances.isEmpty ? [mesh] : Self.expandInstances(mesh) }
 
     outline.needsRecord = false
     outline.recordedIDs = ids

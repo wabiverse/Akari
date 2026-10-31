@@ -65,27 +65,12 @@ public struct LightSettings: Sendable
   /// on the same light no matter how `sunHeight` is driven.
   public var sunDirection: SIMD3<Float>
   {
-    let angle = min(max(abs(sunHeight) + 0.01, 0), 1) * 75 * .pi / 180
+    let height = Akari.Math.saturate(abs(sunHeight) + 0.01)
+    let angle = Akari.Math.radians(height * 75)
     let c = cos(angle)
-    let sun = Self.normalize(SIMD3<Float>(0.4 * c, sin(angle), -0.5 * c))
+    let sun = Akari.Math.normalize(SIMD3<Float>(0.4 * c, sin(angle), -0.5 * c))
     let moon = SIMD3<Float>(-sun.x, sun.y, -sun.z)
-
-    let t = Self.smoothstep(-0.3, 0.05, sunHeight)
-    return Self.normalize(moon + (sun - moon) * t)
-  }
-}
-
-public extension LightSettings
-{
-  private static func normalize(_ v: SIMD3<Float>) -> SIMD3<Float>
-  {
-    let length = (v * v).sum().squareRoot()
-    return length > 1e-6 ? v / length : SIMD3<Float>(0, 1, 0)
-  }
-
-  private static func smoothstep(_ edge0: Float, _ edge1: Float, _ x: Float) -> Float
-  {
-    let t = min(max((x - edge0) / (edge1 - edge0), 0), 1)
-    return t * t * (3 - 2 * t)
+    let t = Akari.Math.smoothstep(-0.3, 0.05, sunHeight)
+    return Akari.Math.normalize(moon + (sun - moon) * t)
   }
 }

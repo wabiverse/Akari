@@ -51,7 +51,7 @@ extension Akari.ShadowAtlas
   func drawViews(staticCaptures: [OpaquePointer], dynamicCaptures: [OpaquePointer],
                  dynamicDrawBounds: [[Float]?],
                  directional: [Cascade], directionalSlots: [Int],
-                 punctualFaces: [[PunctualFace]], forced: Set<Int>, forcePunctual: Bool) -> [Int]
+                 punctualFaces: [[PunctualFace]], forced: Set<Int>) -> [Int]
   {
     let captures = staticCaptures + dynamicCaptures
     let rects = staticCaptures.map { _ in buffers.renderRectStatic } + dynamicCaptures.map { _ in buffers.renderRect }
@@ -77,7 +77,7 @@ extension Akari.ShadowAtlas
         forced.contains(directionalSlots[$0]) ||
           dirty.contains(UInt32(Self.directionalTilemapBase + directionalSlots[$0]))
       }
-      views += forcePunctual ? Array(punctualViews) : punctualViews.filter { published[$0] != .max }
+      views += punctualViews.filter { published[$0] != .max }
     }
     guard !views.isEmpty else { return [] }
 
@@ -92,7 +92,7 @@ extension Akari.ShadowAtlas
     let punctualSelected = views.filter { $0 >= Self.punctualViewBase }
     var runs = Self.buildRuns(views.filter { $0 < Self.punctualViewBase })
     var culled = cullRuns(captures: captures, rects: rects, drawBounds: drawBounds, runs: runs, viewProjection: viewProjection)
-    let instanced = culled &&
+    let instanced = culled.allSatisfy(\.self) &&
       !punctualSelected.isEmpty &&
       cullPunctual(captures: captures, rects: rects, views: punctualSelected, slot: runs.count,
                    viewProjection: viewProjection)
@@ -101,8 +101,27 @@ extension Akari.ShadowAtlas
       runs += Self.buildRuns(punctualSelected)
       culled = cullRuns(captures: captures, rects: rects, drawBounds: drawBounds, runs: runs, viewProjection: viewProjection)
     }
-
+    // a capture of GPU instanced draws has no per draw bounds, its instances are culled to each run instead.
     let res = GLsizei(Self.tilemapRes * Self.pageResolution)
+    let instancesCulled: [[Bool]] = captures.indices.map
+    { i in
+      runs.indices.map
+      { r in
+        guard !culled[i], r < Self.maxInstanceCullRuns else { return false }
+        let matrices = runs[r].map { viewProjection($0).simd }
+        let scales = matrices.map { simd_length(SIMD3($0.columns.0.x, $0.columns.1.x, $0.columns.2.x)) }
+        guard let widest = scales.indices.min(by: { scales[$0] < scales[$1] }) else { return false }
+        let pixelScale = runs[r][0] < Self.punctualViewBase ? (scales.max() ?? 0) * Float(res) / 2 : .greatestFiniteMagnitude
+        var matrix = matrices[widest]
+        return withUnsafeBytes(of: &matrix)
+        {
+          labgl.captureCullInstances(captures[i], viewProjection: $0.baseAddress!.assumingMemoryBound(to: Float.self),
+                                     pixelScale: pixelScale, minPixels: Self.instanceMinTexels,
+                                     slot: UInt32(r + 1)) != 0
+        }
+      }
+    }
+
     func drawPass(_ indices: Range<Int>, into image: GLuint, renderMap: GLuint, renderRect: GLuint,
                   alphaTest: Bool)
     {
@@ -116,13 +135,35 @@ extension Akari.ShadowAtlas
       // LabGL lays uniforms out in first set order, so set them in `U`'s.
       var base: Int32 = 0
       gl.setShaderUniform(depthShader, name: "u_viewBase", type: GL_INT, data: &base)
-      var test: Int32 = alphaTest && materialAtlas != 0 ? 1 : 0
+      var test: Int32 = (alphaTest && materialAtlas != 0 ? 1 : 0) | (styles != 0 ? 2 : 0)
       gl.setShaderUniform(depthShader, name: "u_alphaTest", type: GL_INT, data: &test)
-      if test != 0 { gl.setShaderImageArgument(depthShader, bufferIndex: 6, texture: materialAtlas) }
+      if test & 1 != 0
+      {
+        gl.setShaderImageArgument(depthShader, bufferIndex: 5, texture: materialConstants != 0 ? materialConstants : materialAtlas)
+        gl.setShaderImageArgument(depthShader, bufferIndex: 6, texture: materialAtlas)
+      }
+      if test & 2 != 0
+      {
+        gl.setShaderImageArgument(depthShader, bufferIndex: 7, texture: styles)
+      }
       gl.setShaderBuffer(depthShader, index: 4, buffer: frame.slotOfView)
       gl.setShaderVertexBuffer(depthShader, index: 5, buffer: renderRect)
       gl.setShaderVertexBuffer(depthShader, index: 7, buffer: frame.viewXf)
       gl.setShaderVertexBuffer(depthShader, index: 8, buffer: frame.viewXf)
+      // the instanced amplification entry point reads its per view matrices
+      // here, since buffer(1) carries the draw's instance transforms.
+      gl.setShaderVertexBuffer(depthShader, index: 4, buffer: frame.viewXf)
+      if let xfPtr = gl.mapBuffer(frame.viewXf)
+      {
+        for run in runs
+        {
+          for view in run
+          {
+            (xfPtr + view * 64).storeBytes(of: viewProjection(view).simd, as: simd_float4x4.self)
+          }
+        }
+        gl.unmapBuffer(frame.viewXf)
+      }
 
       for (r, run) in runs.enumerated()
       {
@@ -137,10 +178,11 @@ extension Akari.ShadowAtlas
           viewports += [0, 0, viewRes, viewRes]
         }
         setAmplification(transforms: transforms, viewports: viewports, viewBase: Int32(run[0]), count: run.count)
-        for capture in captures[indices]
+        for i in indices
         {
-          if culled { labgl.capturePlaybackCulled(capture, slot: UInt32(r + Self.cullSlotBase)) }
-          else { labgl.capturePlaybackIndirectDraws(capture) }
+          if culled[i] { labgl.capturePlaybackCulled(captures[i], slot: UInt32(r + Self.cullSlotBase)) }
+          else if instancesCulled[i][r] { labgl.capturePlaybackInstancesCulled(captures[i], slot: UInt32(r + 1)) }
+          else { labgl.capturePlaybackIndirectDraws(captures[i]) }
         }
         gl.disableVertexAmplification()
       }
@@ -224,17 +266,15 @@ extension Akari.ShadowAtlas
   }
 
   private func cullRuns(captures: [OpaquePointer], rects: [GLuint], drawBounds: [[Float]?], runs: [[Int]],
-                        viewProjection: (Int) -> Akari.Matrix4) -> Bool
+                        viewProjection: (Int) -> Akari.Matrix4) -> [Bool]
   {
-    guard
-      kernels.cull != 0,
-      runs.count <= Self.maxRuns,
-      captures.indices.allSatisfy({ ensureDrawBounds(capture: captures[$0], culling: $0, bounds: drawBounds[$0]) })
-    else { return false }
+    let none = [Bool](repeating: false, count: captures.count)
+    guard kernels.cull != 0, runs.count <= Self.maxRuns else { return none }
+    var culled = captures.indices.map { ensureDrawBounds(capture: captures[$0], culling: $0, bounds: drawBounds[$0]) }
 
-    guard !runs.isEmpty else { return true }
+    guard !runs.isEmpty else { return culled }
 
-    guard let viewsPtr = gl.mapBuffer(frame.runViews) else { return false }
+    guard let viewsPtr = gl.mapBuffer(frame.runViews) else { return none }
     let runViews = viewsPtr.assumingMemoryBound(to: Int32.self)
     runViews.update(repeating: -1, count: Self.maxRuns * Self.maxAmplificationViews)
     for (r, run) in runs.enumerated()
@@ -246,7 +286,7 @@ extension Akari.ShadowAtlas
     }
     gl.unmapBuffer(frame.runViews)
 
-    guard let xfPtr = gl.mapBuffer(frame.runXf) else { return false }
+    guard let xfPtr = gl.mapBuffer(frame.runXf) else { return none }
     for (r, run) in runs.enumerated()
     {
       for (k, view) in run.enumerated()
@@ -258,7 +298,7 @@ extension Akari.ShadowAtlas
     gl.unmapBuffer(frame.runXf)
 
     let kernel = kernels.cull
-    for (i, (capture, entry)) in zip(captures, culling).enumerated()
+    for (i, (capture, entry)) in zip(captures, culling).enumerated() where culled[i]
     {
       setUniform(kernel, "u_params", GL_INT_VEC4,
                  SIMD4<Int32>(Int32(entry.count),
@@ -278,11 +318,15 @@ extension Akari.ShadowAtlas
         guard labgl.captureEncodeCulled(capture, visibility: entry.visibility,
                                         offset: Int32(r * entry.count * MemoryLayout<UInt32>.size),
                                         slot: UInt32(r + Self.cullSlotBase), instanceStride: 0) != 0
-        else { return false }
+        else
+        {
+          culled[i] = false
+          break
+        }
       }
     }
 
-    return true
+    return culled
   }
 
   private func cullPunctual(captures: [OpaquePointer], rects: [GLuint], views: [Int], slot: Int,

@@ -102,11 +102,23 @@ public:
     _hgi = hgi;
   }
 
+  /// The render camera's shutter interval, in frames around the frame.
+  void SetShutter(double open, double close)
+  {
+    _shutterOpen = open;
+    _shutterClose = close;
+  }
+
+  double GetShutterOpen() const { return _shutterOpen; }
+  double GetShutterClose() const { return _shutterClose; }
+
 private:
   void *_renderEngine;
   Hgi *_hgi;
   std::shared_ptr<HdAkariScene> _scene;
   std::shared_ptr<HdAkariTextureAtlas> _textureAtlas;
+  double _shutterOpen = 0.0;
+  double _shutterClose = 0.0;
 
   mutable std::mutex _hgiMutex;
 };

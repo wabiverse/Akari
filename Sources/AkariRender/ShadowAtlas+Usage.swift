@@ -44,6 +44,7 @@ import LabGL
 extension Akari.ShadowAtlas
 {
   private static let lightPosRadiusNames = (0 ..< maxPunctualLights).map { "u_lightPosRadius\($0)" }
+  private static let lightLodBiasNames = (0 ..< maxPunctualLights).map { "u_lightLodBias\($0)" }
   private static let lightPosNames = (0 ..< maxPunctualLights).map { "u_lightPos\($0)" }
 
   /// Clears whether a tile is used everywhere and forces an
@@ -101,6 +102,7 @@ extension Akari.ShadowAtlas
                                 invView: Akari.Matrix4,
                                 screenWidth: Int,
                                 screenHeight: Int,
+                                footprintHeight: Int,
                                 camera: Akari.Camera,
                                 lights: [Akari.Lux.PointLight],
                                 lightCount: Int)
@@ -109,7 +111,7 @@ extension Akari.ShadowAtlas
     setUniform(kernel, "u_invView", invView)
     setLightPositions(kernel, lights: lights, lightCount: lightCount)
     let filmPixelRadius: Float = camera.projection[1, 1] > 1e-6
-      ? 2 / (camera.projection[1, 1] * Float(screenHeight))
+      ? 2 / (camera.projection[1, 1] * Float(footprintHeight))
       : 0
     setUniform(kernel, "u_params", GL_FLOAT_VEC4,
                SIMD4<Float>(filmPixelRadius,
@@ -120,8 +122,8 @@ extension Akari.ShadowAtlas
     gl.setComputeShaderSampler(kernel, index: 0, texture: gbufferPosition, samplerIndex: 0)
     gl.setComputeShaderBuffer(kernel, binding: 0, buffer: buffers.tiles)
     gl.dispatchCompute(kernel,
-                       groupsX: GLuint((screenWidth + 7) / 8),
-                       groupsY: GLuint((screenHeight + 7) / 8),
+                       groupsX: GLuint((screenWidth + 15) / 16),
+                       groupsY: GLuint((screenHeight + 15) / 16),
                        groupsZ: 1)
 
     gl.setComputeShaderBuffer(kernels.dilateUsagePunctual, binding: 0, buffer: buffers.tiles)
@@ -256,6 +258,11 @@ extension Akari.ShadowAtlas
                 lights[slot].reach)
         : SIMD4<Float>(repeating: 0)
       setUniform(kernel, Self.lightPosRadiusNames[slot], GL_FLOAT_VEC4, posRadius)
+    }
+    // LabGL lays uniforms out in first set order, every position before any bias as in `U`.
+    for slot in 0 ..< Self.maxPunctualLights
+    {
+      setUniform(kernel, Self.lightLodBiasNames[slot], GL_FLOAT_VEC4, SIMD4<Float>(lodBias(slot: slot), 0, 0, 0))
     }
   }
 }

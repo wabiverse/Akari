@@ -40,11 +40,15 @@
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
 # include <Hd/rendererPluginRegistry.h>
+# include <Hd/sceneIndexPlugin.h>
+# include <Hd/sceneIndexPluginRegistry.h>
 # include <Tf/registryManager.h>
 # include <Tf/type.h>
 #else
 # include <pxr/pxr.h>
 # include <pxr/imaging/hd/rendererPluginRegistry.h>
+# include <pxr/imaging/hd/sceneIndexPlugin.h>
+# include <pxr/imaging/hd/sceneIndexPluginRegistry.h>
 # include <pxr/base/tf/registryManager.h>
 # include <pxr/base/tf/type.h>
 #endif
@@ -52,6 +56,10 @@
 #include "HdAkari/rendererPlugin.h"
 #include "HdAkari/renderDelegate.h"
 #include "HdAkari/akariBridge.h"
+#include "HdAkari/prototypeMerging.h"
+
+#include <cstdlib>
+#include <cstring>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -59,6 +67,21 @@ PXR_NAMESPACE_OPEN_SCOPE
 TF_REGISTRY_FUNCTION(TfType)
 {
   HdRendererPluginRegistry::Define<HdAkariRendererPlugin>();
+}
+
+// merge each instancer prototype's meshes ahead of the render index,
+// `AKARI_MERGE_PROTOTYPES=0` leaves them as authored.
+TF_REGISTRY_FUNCTION(HdSceneIndexPlugin)
+{
+  HdSceneIndexPluginRegistry::GetInstance().RegisterSceneIndexForRenderer(
+    "Akari",
+    [](std::string const &, HdSceneIndexBaseRefPtr const &input, HdContainerDataSourceHandle const &)
+      -> HdSceneIndexBaseRefPtr {
+      const char *env = std::getenv("AKARI_MERGE_PROTOTYPES");
+      if (env && std::strcmp(env, "0") == 0) return input;
+      return HdAkariPrototypeMergingSceneIndex::New(input);
+    },
+    nullptr, 0, HdSceneIndexPluginRegistry::InsertionOrderAtEnd);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

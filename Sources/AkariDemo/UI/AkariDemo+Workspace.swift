@@ -57,8 +57,12 @@ extension AkariDemo
     let hydra: Hydra.RenderEngine
     let driver: any Akari.HydraFrameDriver
     let sceneName: String
+    let timeline: AkariDemo.Timeline
 
     @State private var settings: AkariDemo.HUDState
+    @State private var renderJob: AkariDemo.RenderJob
+    @State private var showsTimeline = true
+    @State private var showsPlaybackMenu = false
     @State private var openMenu: TopMenu?
     @State private var showsProperties = true
     @State private var showsStatistics = true
@@ -68,6 +72,8 @@ extension AkariDemo
          hydra: Hydra.RenderEngine,
          driver: any Akari.HydraFrameDriver,
          settings: AkariDemo.HUDState,
+         renderJob: AkariDemo.RenderJob,
+         timeline: AkariDemo.Timeline,
          sceneName: String)
     {
       self.engine = engine
@@ -75,6 +81,8 @@ extension AkariDemo
       self.driver = driver
       self.sceneName = sceneName
       _settings = State(wrappedValue: settings)
+      _renderJob = State(wrappedValue: renderJob)
+      self.timeline = timeline
     }
 
     var body: some View
@@ -87,24 +95,44 @@ extension AkariDemo
           .frame(height: 1)
         HStack(spacing: 0)
         {
-          Hydra.Viewport(engine: hydra)
-            .frame(minWidth: 560, minHeight: 600)
-            .overlay(alignment: .topLeading)
+          VStack(spacing: 0)
+          {
+            Hydra.Viewport(engine: hydra)
+              .frame(minWidth: 560, minHeight: 600)
+              .overlay(alignment: .topLeading)
+              {
+                if showsStatistics { ViewportOverlay(driver: driver) }
+              }
+              .overlay(alignment: .topTrailing) { OutlineButton(engine: engine, hydra: hydra).padding(16) }
+              .overlay
+              {
+                if renderJob.showsPassepartout { Passepartout(aspect: renderJob.aspect) }
+              }
+              .overlay
+              {
+                if renderJob.showsResult { RenderResult(job: renderJob) }
+              }
+            if showsTimeline
             {
-              if showsStatistics { ViewportOverlay(driver: driver) }
+              Rectangle()
+                .fill(Color(white: 0.09))
+                .frame(height: 1)
+              TimelineView(timeline: timeline, job: renderJob) { showsPlaybackMenu.toggle() }
             }
-            .overlay(alignment: .topTrailing) { OutlineButton(engine: engine, hydra: hydra).padding(16) }
+          }
           if showsProperties
           {
             Rectangle()
               .fill(Color(white: 0.09))
               .frame(width: 1)
-            HUD(state: settings)
+            HUD(state: settings, job: renderJob)
           }
         }
         .overlay(alignment: .topLeading) { menuLayer }
+        .overlay(alignment: .bottomLeading) { playbackMenuLayer }
         .overlay { aboutLayer }
       }
+      .onAppear { renderJob.startPendingJob() }
     }
 
     private var topBar: some View
@@ -135,6 +163,7 @@ extension AkariDemo
           .padding(.horizontal, 8)
           .frame(height: 20)
           .background(RoundedRectangle(cornerRadius: 4).fill(Properties.menu))
+        ReloadButton(reload: { renderJob.reloadStage() }, status: { renderJob.reloadStatus })
       }
       .padding(.horizontal, TopMenu.barPadding)
       .frame(height: 28)
@@ -153,6 +182,28 @@ extension AkariDemo
             .onTapGesture { openMenu = nil }
           MenuList(entries: entries(for: menu)) { openMenu = nil }
             .padding(.leading, menu.x)
+        }
+      }
+    }
+
+    @ViewBuilder
+    private var playbackMenuLayer: some View
+    {
+      if showsPlaybackMenu
+      {
+        ZStack(alignment: .bottomLeading)
+        {
+          Rectangle()
+            .fill(Color.clear)
+            .onTapGesture { showsPlaybackMenu = false }
+          MenuList(entries: [
+            MenuEntry(title: "Mute Audio", checked: timeline.playback.isMuted)
+            {
+              timeline.playback.isMuted.toggle()
+            },
+          ]) { showsPlaybackMenu = false }
+            .padding(.leading, 6)
+            .padding(.bottom, TimelineView.height - 4)
         }
       }
     }
@@ -200,6 +251,13 @@ extension AkariDemo
           return [MenuEntry(title: "Quit Akari", shortcut: "⌘Q") { Self.quit() }]
         case .render:
           let settings = settings
+          let renderJob = renderJob
+          let renders: [MenuEntry] = [
+            MenuEntry(title: "Render Image", shortcut: "F12") { renderJob.renderImage() },
+            MenuEntry(title: "Render Animation", shortcut: "⌃F12") { renderJob.renderAnimation() },
+            MenuEntry(title: "View Render", shortcut: "F11", checked: renderJob.showsResult) { renderJob.toggleResult() },
+            MenuEntry.separator,
+          ]
           let qualities: [MenuEntry] = RenderQuality.allCases.map
           { q in
             MenuEntry(title: "\(q) Quality", checked: settings.quality == q)
@@ -216,10 +274,16 @@ extension AkariDemo
               settings.apply()
             }
           }
-          return qualities + [MenuEntry.separator] + upscalers
+          return renders + qualities + [MenuEntry.separator] + upscalers
         case .view:
           return [
+            MenuEntry(title: "Camera", shortcut: "Numpad 0", checked: renderJob.lookingThrough)
+            {
+              renderJob.toggleCameraView()
+            },
+            MenuEntry.separator,
             MenuEntry(title: "Properties", checked: showsProperties) { showsProperties.toggle() },
+            MenuEntry(title: "Timeline", checked: showsTimeline) { showsTimeline.toggle() },
             MenuEntry(title: "Statistics", checked: showsStatistics) { showsStatistics.toggle() },
           ]
         case .help:

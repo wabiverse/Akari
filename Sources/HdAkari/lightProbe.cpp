@@ -121,6 +121,7 @@ bool HdAkariSyncLightProbe(HdSceneDelegate *sceneDelegate,
   data.id = id;
   data.transform = sceneDelegate->GetTransform(id);
   data.isSphere = kind == "sphere";
+  data.visible = sceneDelegate->GetVisible(id);
 
   if (points && !points->empty()) {
     GfVec3f lo = (*points)[0], hi = (*points)[0];

@@ -1,0 +1,659 @@
+//@include Planet.msl
+
+constexpr constant float ATMOS_PI = 3.14159265358979;
+
+struct Atmosphere
+{
+  float bottom;
+  float top;
+  float3 rayleigh;
+  float rayleighHeight;
+  float3 mie;
+  float mieHeight;
+  float3 mieAbsorption;
+  float g;
+  float3 ozone;
+  float ozoneCenter;
+  float ozoneWidth;
+  float3 albedo;
+};
+
+Atmosphere makeAtmosphere(float4 shape, float4 rayleigh, float4 mie, float4 mieExtra, float4 ozone, float4 ground)
+{
+  Atmosphere a;
+  a.bottom = shape.y;
+  a.top = shape.z;
+  a.rayleigh = rayleigh.rgb;
+  a.rayleighHeight = rayleigh.w;
+  a.mie = mie.rgb;
+  a.mieHeight = mie.w;
+  a.mieAbsorption = mieExtra.rgb;
+  a.g = mieExtra.w;
+  a.ozone = ozone.rgb;
+  a.ozoneCenter = ozone.w;
+  a.ozoneWidth = ground.w;
+  a.albedo = ground.rgb;
+  return a;
+}
+
+struct AtmosphereMedium
+{
+  float3 rayleigh;
+  float3 mie;
+  float3 scattering;
+  float3 extinction;
+};
+
+AtmosphereMedium atmosphereMedium(Atmosphere a, float h)
+{
+  AtmosphereMedium m;
+  float dr = exp(-max(h, 0.0) / a.rayleighHeight);
+  float dm = exp(-max(h, 0.0) / a.mieHeight);
+  float dozone = max(0.0, 1.0 - abs(h - a.ozoneCenter) / (0.5 * a.ozoneWidth));
+  m.rayleigh = a.rayleigh * dr;
+  m.mie = a.mie * dm;
+  m.scattering = m.rayleigh + m.mie;
+  m.extinction = m.scattering + a.mieAbsorption * dm + a.ozone * dozone;
+  return m;
+}
+
+float atmosphereRayleighPhase(float c)
+{
+  return 3.0 / (16.0 * ATMOS_PI) * (1.0 + c * c);
+}
+
+float atmosphereMiePhase(float g, float c)
+{
+  float k = 3.0 / (8.0 * ATMOS_PI) * (1.0 - g * g) / (2.0 + g * g);
+  return k * (1.0 + c * c) / pow(max(1.0 + g * g - 2.0 * g * c, 1e-4), 1.5);
+}
+
+float atmosphereGroundDisc(Atmosphere a, float r, float mu)
+{
+  return r * r * mu * mu - (r - a.bottom) * (r + a.bottom);
+}
+
+bool atmosphereHitsGround(Atmosphere a, float r, float mu)
+{
+  return mu < 0.0 && atmosphereGroundDisc(a, r, mu) >= 0.0;
+}
+
+float atmosphereDistanceToGround(Atmosphere a, float r, float mu)
+{
+  return max(-r * mu - sqrt(max(atmosphereGroundDisc(a, r, mu), 0.0)), 0.0);
+}
+
+float atmosphereDistanceToTop(Atmosphere a, float r, float mu)
+{
+  return max(-r * mu + sqrt(max(r * r * mu * mu + (a.top - r) * (a.top + r), 0.0)), 0.0);
+}
+
+float2 atmosphereTransmittanceUv(Atmosphere a, float r, float mu)
+{
+  float H = sqrt(max((a.top - a.bottom) * (a.top + a.bottom), 0.0));
+  float rho = sqrt(max((r - a.bottom) * (r + a.bottom), 0.0));
+  float d = atmosphereDistanceToTop(a, r, mu);
+  float dMin = a.top - r;
+  float dMax = rho + H;
+  return float2((d - dMin) / max(dMax - dMin, 1e-6), rho / H);
+}
+
+float2 atmosphereTransmittanceParams(Atmosphere a, float2 uv)
+{
+  float H = sqrt(max((a.top - a.bottom) * (a.top + a.bottom), 0.0));
+  float rho = H * uv.y;
+  float r = sqrt(rho * rho + a.bottom * a.bottom);
+  float dMin = a.top - r;
+  float dMax = rho + H;
+  float d = dMin + uv.x * (dMax - dMin);
+  float mu = d <= 0.0 ? 1.0 : (H * H - rho * rho - d * d) / (2.0 * r * d);
+  return float2(r, clamp(mu, -1.0, 1.0));
+}
+
+float3 atmosphereOpticalDepth(Atmosphere a, float r, float mu)
+{
+  float d = atmosphereDistanceToTop(a, r, mu);
+  float dt = d / 40.0;
+  float3 depth = float3(0.0);
+  for (int i = 0; i < 40; ++i) {
+    float t = (float(i) + 0.5) * dt;
+    float rq = sqrt(t * t + 2.0 * r * mu * t + r * r);
+    depth += atmosphereMedium(a, rq - a.bottom).extinction * dt;
+  }
+  return depth;
+}
+
+float3 atmosphereTransmittance(Atmosphere a, float r, float mu, texture2d<float> lut, sampler smp)
+{
+  float2 uv = atmosphereTransmittanceUv(a, min(r, a.top), mu);
+  float2 texel = 0.5 / float2(lut.get_width(), lut.get_height());
+  return lut.sample(smp, clamp(uv, texel, 1.0 - texel), level(0.0)).rgb;
+}
+
+float3 atmosphereSunTransmittance(Atmosphere a, float r, float mu, texture2d<float> lut, sampler smp)
+{
+  if (atmosphereHitsGround(a, r, mu)) return float3(0.0);
+  return atmosphereTransmittance(a, r, mu, lut, smp);
+}
+
+float2 atmosphereMultiScatterUv(Atmosphere a, float r, float mu, float size)
+{
+  float2 uv = float2(mu * 0.5 + 0.5, saturate((r - a.bottom) / (a.top - a.bottom)));
+  return clamp(uv, 0.5 / size, 1.0 - 0.5 / size);
+}
+
+float3 atmosphereMultiScatter(Atmosphere a, float r, float mu, texture2d<float> lut, sampler smp)
+{
+  return lut.sample(smp, atmosphereMultiScatterUv(a, r, mu, float(lut.get_width())), level(0.0)).rgb;
+}
+
+struct AtmosphereScatter
+{
+  float3 L;
+  float3 T;
+  float3 multiScatterAs1;
+};
+
+/// Single scattering along `d` from `p` (km from the planet center), for a unit sun
+/// toward `sun`, up to `tMax` or the ground. A ray starting above the atmosphere skips
+/// to where it enters. `uniformPhase` and `ground` are the multiple scattering LUT's.
+AtmosphereScatter atmosphereIntegrate(Atmosphere a, float3 p, float3 d, float3 sun, float tMax, int samples,
+                                      bool uniformPhase, bool ground, bool multiScatter,
+                                      texture2d<float> transmittanceLut, sampler transmittanceSmp,
+                                      texture2d<float> multiScatterLut, sampler multiScatterSmp)
+{
+  AtmosphereScatter result;
+  result.L = float3(0.0);
+  result.T = float3(1.0);
+  result.multiScatterAs1 = float3(0.0);
+
+  float r = length(p);
+  float mu = dot(p, d) / max(r, 1e-6);
+  bool outside = r > a.top;
+  if (outside) {
+    float disc = r * r * mu * mu + (a.top - r) * (a.top + r);
+    if (disc < 0.0 || mu >= 0.0) return result;
+    float enter = -r * mu - sqrt(disc);
+    p += d * enter;
+    tMax -= enter;
+    r = length(p);
+    mu = dot(p, d) / r;
+    if (tMax <= 0.0) return result;
+  }
+  bool hitsGround = atmosphereHitsGround(a, r, mu);
+  float tEnd = min(hitsGround ? atmosphereDistanceToGround(a, r, mu) : atmosphereDistanceToTop(a, r, mu), tMax);
+  if (tEnd <= 0.0) return result;
+
+  float cosTheta = dot(sun, d);
+  float phaseR = uniformPhase ? 1.0 / (4.0 * ATMOS_PI) : atmosphereRayleighPhase(cosTheta);
+  float phaseM = uniformPhase ? 1.0 / (4.0 * ATMOS_PI) : atmosphereMiePhase(a.g, cosTheta);
+
+  float n = float(samples);
+  for (int i = 0; i < samples; ++i) {
+    float f0 = float(i) / n, f1 = float(i + 1) / n;
+    float t0 = outside ? tEnd * f0 : tEnd * f0 * f0;
+    float t1 = outside ? tEnd * f1 : tEnd * f1 * f1;
+    float t = mix(t0, t1, 0.3);
+    float dt = t1 - t0;
+    float3 q = p + d * t;
+    float rq = length(q);
+    float3 up = q / rq;
+    AtmosphereMedium m = atmosphereMedium(a, rq - a.bottom);
+    float3 sampleT = exp(-m.extinction * dt);
+    float muSun = dot(up, sun);
+    float3 sunT = atmosphereSunTransmittance(a, rq, muSun, transmittanceLut, transmittanceSmp);
+    float3 ms = multiScatter ? atmosphereMultiScatter(a, rq, muSun, multiScatterLut, multiScatterSmp) : float3(0.0);
+    float3 S = sunT * (m.rayleigh * phaseR + m.mie * phaseM) + ms * m.scattering;
+    float3 integral = (S - S * sampleT) / max(m.extinction, float3(1e-9));
+    result.L += result.T * integral;
+    result.multiScatterAs1 += result.T * (m.scattering - m.scattering * sampleT) / max(m.extinction, float3(1e-9));
+    result.T *= sampleT;
+  }
+
+  if (ground && hitsGround && tEnd < tMax) {
+    float3 q = p + d * tEnd;
+    float3 up = normalize(q);
+    float muSun = dot(up, sun);
+    float3 sunT = atmosphereSunTransmittance(a, a.bottom, muSun, transmittanceLut, transmittanceSmp);
+    result.L += result.T * sunT * saturate(muSun) * a.albedo / ATMOS_PI;
+  }
+  return result;
+}
+
+/// The sky view LUT's (u, v) for a direction `viewZenith` (cos) and `sunAzimuth` (cos of the
+/// angle around the zenith from the sun), the horizon at v = 0.5 seen from altitude `h`.
+float2 atmosphereSkyViewUv(Atmosphere a, float h, float viewZenith, float sunAzimuth)
+{
+  float r = a.bottom + h;
+  float horizon = sqrt(max(h * (2.0 * a.bottom + h), 0.0));
+  float beta = acos(clamp(horizon / r, -1.0, 1.0));
+  float zenithHorizon = ATMOS_PI - beta;
+  float viewAngle = acos(clamp(viewZenith, -1.0, 1.0));
+  float v;
+  if (viewAngle < zenithHorizon) {
+    float coord = saturate(viewAngle / zenithHorizon);
+    v = (1.0 - sqrt(max(1.0 - coord, 0.0))) * 0.5;
+  } else {
+    float coord = saturate((viewAngle - zenithHorizon) / beta);
+    v = sqrt(coord) * 0.5 + 0.5;
+  }
+  float u = sqrt(saturate((1.0 - sunAzimuth) * 0.5));
+  return float2(u, v);
+}
+
+void atmosphereSkyViewDirection(Atmosphere a, float h, float2 uv, thread float& viewZenith, thread float& sunAzimuth)
+{
+  float r = a.bottom + h;
+  float horizon = sqrt(max(h * (2.0 * a.bottom + h), 0.0));
+  float beta = acos(clamp(horizon / r, -1.0, 1.0));
+  float zenithHorizon = ATMOS_PI - beta;
+  float viewAngle;
+  if (uv.y < 0.5) {
+    float coord = 1.0 - 2.0 * uv.y;
+    viewAngle = zenithHorizon * (1.0 - coord * coord);
+  } else {
+    float coord = uv.y * 2.0 - 1.0;
+    viewAngle = zenithHorizon + beta * coord * coord;
+  }
+  viewZenith = cos(viewAngle);
+  sunAzimuth = 1.0 - 2.0 * uv.x * uv.x;
+}
+
+float3 atmosphereSrgbToLinear(float3 c)
+{
+  return select(pow((c + 0.055) / 1.055, float3(2.4)), c / 12.92, c <= 0.04045);
+}
+
+float2 atmosphereLatLong(float3 d)
+{
+  return float2(fract((atan2(d.z, d.x) + 0.5 * ATMOS_PI) / (2.0 * ATMOS_PI)), acos(clamp(d.y, -1.0, 1.0)) / ATMOS_PI);
+}
+
+float atmosphereAerialSlice(float t, float maxDistance)
+{
+  return sqrt(max(t, 0.0) / maxDistance) * 32.0 - 0.5;
+}
+
+float4 atmosphereAerialTap(texture2d<float> lut, sampler smp, float2 local, int slice)
+{
+  float2 origin = float2(float(slice % 8), float(slice / 8)) * 32.0;
+  float2 xy = clamp(local, float2(0.5), float2(31.5));
+  return lut.sample(smp, (origin + xy) / float2(256.0, 128.0), level(0.0));
+}
+
+/// In scattering (rgb, for a unit sun) and mean transmittance (a) from the eye to `t` km
+/// along the pixel at `screenUv`.
+float4 atmosphereAerial(texture2d<float> lut, sampler smp, float2 screenUv, float t, float maxDistance)
+{
+  float2 local = screenUv * 32.0;
+  float w = atmosphereAerialSlice(t, maxDistance);
+  if (w <= 0.0) return mix(float4(0.0, 0.0, 0.0, 1.0), atmosphereAerialTap(lut, smp, local, 0), saturate(2.0 * w + 1.0));
+  int s0 = min(int(w), 31);
+  int s1 = min(s0 + 1, 31);
+  return mix(atmosphereAerialTap(lut, smp, local, s0), atmosphereAerialTap(lut, smp, local, s1), saturate(w - float(s0)));
+}
+
+struct AtmosphereSurface
+{
+  float3x3 planetFromWorld;
+  float zUp;
+  float hasGround;
+  float hasNight;
+  float nightIntensity;
+  float pixelAngle;
+  Planet planet;
+};
+
+float3 atmosphereToPlanet(AtmosphereSurface surface, float3 w)
+{
+  float3 local = surface.planetFromWorld * w;
+  return mix(local, float3(local.x, local.z, -local.y), surface.zUp);
+}
+
+float3 atmosphereFromPlanet(AtmosphereSurface surface, float3 local)
+{
+  float3 v = mix(local, float3(local.x, -local.z, local.y), surface.zUp);
+  return transpose(surface.planetFromWorld) * v;
+}
+
+/// Where the ray from `r` km along `mu` meets the cloud shell, negative when it doesn't.
+float atmosphereCloudDistance(float r, float mu, float rc)
+{
+  float disc = r * r * mu * mu - (r - rc) * (r + rc);
+  if (r < rc) return -r * mu + sqrt(max(disc, 0.0));
+  if (mu >= 0.0 || disc < 0.0) return -1.0;
+  return (r - rc) * (r + rc) / max(-r * mu + sqrt(disc), 1e-9);
+}
+
+/// Where the ray from radius `r` along `mu` runs inside the shell between radii `r0` and `r1`, x >= y when it doesn't.
+float2 atmosphereShell(float r, float mu, float r0, float r1)
+{
+  float b = r * mu;
+  float c1 = (r - r1) * (r + r1);
+  float disc1 = b * b - c1;
+  if (disc1 < 0.0) return float2(1.0, 0.0);
+  float s1 = sqrt(disc1);
+  float far1 = -b + s1;
+  if (far1 <= 0.0) return float2(1.0, 0.0);
+  float t0 = r > r1 ? c1 / far1 : 0.0;
+  float t1 = far1;
+  float c0 = (r - r0) * (r + r0);
+  float disc0 = b * b - c0;
+  if (disc0 > 0.0) {
+    float s0 = sqrt(disc0);
+    if (r >= r0) { if (b < 0.0) t1 = min(t1, c0 / (-b + s0)); }
+    else t0 = max(t0, -b + s0);
+  }
+  return float2(t0, t1);
+}
+
+float atmosphereCloudPhase(float c, float g)
+{
+  float d = 1.0 + g * g - 2.0 * g * c;
+  return (1.0 - g * g) / (4.0 * ATMOS_PI * d * sqrt(max(d, 1e-6)));
+}
+
+/// The cloud slab from `cloudAltitude` up `cloudThickness` km, ray marched from `p` along `d` up to `tMax`:
+/// the light it scatters toward the eye and what it lets through. Sun shadowed by a few steps toward
+/// `sun`, multiple scattering by octaves (Wrenninge), a forward and back lobe, and the sky from above.
+float4 atmosphereCloudSlab(Atmosphere a, AtmosphereSurface surface, float3 p, float3 d, float tMax, float3 sun,
+                           float3 sunE, float skyScale, texture2d<float> transmittanceLut, sampler transmittanceSmp,
+                           texture2d<float> irradianceLut, sampler irradianceSmp,
+                           texture2d<float> cloudMap, sampler cloudSmp, int maxSteps)
+{
+  Planet pl = surface.planet;
+  float thick = max(pl.cloudThickness, 0.05);
+  float r0 = a.bottom + pl.cloudAltitude, r1 = r0 + thick;
+  float r = length(p);
+  float2 seg = atmosphereShell(r, dot(p, d) / r, r0, r1);
+  seg.y = min(seg.y, tMax);
+  if (seg.x >= seg.y) return float4(0.0, 0.0, 0.0, 1.0);
+
+  float len = seg.y - seg.x;
+  int steps = int(clamp(len / (thick * 0.15), float(min(10, maxSteps)), float(maxSteps)));
+  float dt = len / float(steps);
+  float jitter = fract(sin(dot(d, float3(12.9898, 78.233, 37.719)) * 43758.5453));
+  float c = dot(d, sun);
+  float phases[3];
+  for (int k = 0; k < 3; ++k) {
+    float g = 0.8 * pow(0.5, float(k));
+    phases[k] = mix(atmosphereCloudPhase(c, g), atmosphereCloudPhase(c, -0.3 * g), 0.25);
+  }
+
+  float3 L = float3(0.0);
+  float T = 1.0;
+  for (int i = 0; i < steps && T > 0.01; ++i) {
+    float t = seg.x + (float(i) + jitter) * dt;
+    float3 q = p + d * t;
+    float rq = length(q);
+    float3 up = q / rq;
+    float h = (rq - r0) / thick;
+    float footprint = max(t * surface.pixelAngle, dt * 0.25);
+    float3 local = atmosphereToPlanet(surface, up);
+    float cover = planetCloudsMapped(cloudMap, cloudSmp, local);
+    float density = planetCloudDensity(pl, cover, h, local * rq, footprint);
+    if (density <= 1e-3) continue;
+    float sigma = 12.0 * density;
+
+    // toward the sun in growing steps, so at a grazing sun a tower shades the cloud tens of km behind it.
+    float tau = 0.0, along = 0.0;
+    for (int j = 0; j < 5; ++j) {
+      float step = thick * 0.15 * pow(2.2, float(j));
+      float3 s = q + sun * (along + 0.5 * step);
+      along += step;
+      float rs = length(s);
+      float hs = (rs - r0) / thick;
+      if (hs > 1.0 || hs < 0.0) break;
+      float3 ls = atmosphereToPlanet(surface, s / rs);
+      float fs = max(footprint, step * 0.5);
+      tau += 12.0 * planetCloudDensity(pl, planetCloudsMapped(cloudMap, cloudSmp, ls), hs, ls * rs, fs) * step;
+    }
+
+    float muSun = dot(up, sun);
+    // taller columns toward a low sun shade this one, the relief that reads from orbit.
+    float3 across = sun - up * muSun;
+    float acrossLength = length(across);
+    if (acrossLength > 1e-4 && muSun > -0.05) {
+      float3 toward = across / acrossLength;
+      float slope = max(muSun, 0.0) / acrossLength;
+      float hk = h * thick;
+      for (int j = 0; j < 4; ++j) {
+        float x = 3.0 * pow(2.6, float(j));
+        float3 w = normalize(q + toward * x);
+        float3 lw = atmosphereToPlanet(surface, w);
+        float cw = planetCloudsMapped(cloudMap, cloudSmp, lw);
+        float above = planetCloudTop(pl, cw, lw * r0) * thick - (hk + x * slope);
+        tau += max(above, 0.0) * 12.0 * cw;
+      }
+    }
+    float3 sunT = atmosphereSunTransmittance(a, rq, muSun, transmittanceLut, transmittanceSmp);
+    float direct = 0.0, b = 1.0;
+    for (int k = 0; k < 3; ++k) {
+      direct += b * phases[k] * exp(-tau * pow(0.4, float(k)));
+      b *= 0.6;
+    }
+    float powder = 1.0 - 0.7 * exp(-2.0 * sigma * dt);
+    float3 sky = irradianceLut.sample(irradianceSmp, atmosphereMultiScatterUv(a, rq, muSun, float(irradianceLut.get_width())),
+                                      level(0.0)).rgb * skyScale;
+    // McGuire's cloud shading: lit where the density falls off toward the sun (a directional derivative),
+    // darker underneath toward the planet.
+    float ao = 1.0;
+    if (pl.cloudShading > 0.0) {
+      float3 qs = q + sun * thick * 0.15;
+      float rqs = length(qs);
+      float3 lqs = atmosphereToPlanet(surface, qs / rqs);
+      float ds = planetCloudDensity(pl, planetCloudsMapped(cloudMap, cloudSmp, lqs), (rqs - r0) / thick, lqs * rqs, footprint);
+      float wrap = clamp(-(ds - density) * 4.0, -1.0, 1.0) * 0.5 + 0.5;
+      ao = mix(0.35, 1.0, smoothstep(0.0, 0.6, h));
+      direct *= mix(1.0, (0.5 + wrap) * mix(1.0, ao, 0.5), pl.cloudShading);
+      ao = mix(1.0, ao, pl.cloudShading);
+    }
+    float3 S = sigma * 0.99 * sunE * (sunT * direct * powder * 2.6 + (sky * mix(0.25, 1.0, saturate(h)) * 0.35
+                                      + surface.planet.look[2].rgb * surface.planet.look[2].w * 1.5) * ao);
+    float stepT = exp(-sigma * dt);
+    L += T * S * (1.0 - stepT) / sigma;
+    T *= stepT;
+  }
+  return float4(L, T);
+}
+
+/// How much of the sun the cloud layer lets through to `p` (km from the planet center).
+float atmosphereCloudShadow(Atmosphere a, AtmosphereSurface surface, float3 p, float3 sun,
+                            texture2d<float> cloudMap, sampler cloudSmp)
+{
+  if (surface.planet.enabled < 0.5 || surface.planet.cloudCoverage <= 0.0) return 1.0;
+  float r = length(p);
+  float rc = a.bottom + surface.planet.cloudAltitude;
+  if (r > rc) return 1.0;
+  // the slab's own density along the sun through it, a few taps.
+  float thick = max(surface.planet.cloudThickness, 0.05);
+  float2 seg = atmosphereShell(r, dot(p, sun) / r, rc, rc + thick);
+  if (seg.x >= seg.y) return 1.0;
+  float len = min(seg.y - seg.x, thick * 12.0);
+  float tau = 0.0;
+  for (int i = 0; i < 4; ++i) {
+    float3 s = p + sun * (seg.x + len * (float(i) + 0.5) / 4.0);
+    float rs = length(s);
+    float3 ls = atmosphereToPlanet(surface, s / rs);
+    float cover = planetCloudsMapped(cloudMap, cloudSmp, ls);
+    tau += 12.0 * planetCloudDensity(surface.planet, cover, (rs - rc) / thick, ls * rs, 2.0) * len / 4.0;
+  }
+  return mix(0.08, 1.0, exp(-tau));
+}
+
+float atmosphereGGX(float3 n, float3 v, float3 l, float alpha)
+{
+  float3 h = normalize(v + l);
+  float nh = saturate(dot(n, h));
+  float nl = saturate(dot(n, l));
+  float nv = max(dot(n, v), 1e-3);
+  float a2 = alpha * alpha;
+  float dd = nh * nh * (a2 - 1.0) + 1.0;
+  float D = a2 / (ATMOS_PI * dd * dd);
+  float k = alpha * 0.5;
+  float G = 1.0 / ((nl * (1.0 - k) + k) * (nv * (1.0 - k) + k));
+  float F = 0.02 + 0.98 * pow(1.0 - saturate(dot(h, v)), 5.0);
+  return D * G * F * nl * 0.25;
+}
+
+/// What the eye at `altitude` km above the ground along `up` sees toward `d`: the sky's in
+/// scattering, scaled by `skyScale`, and the lit planet behind it, for a sun of illuminance
+/// `sunE` toward `sun`. `transmittance` is what reaches the eye from beyond, zero on the planet.
+float3 atmosphereRadiance(Atmosphere a, float3 up, float altitude, float3 d, float3 sun, float3 sunE, float skyScale,
+                          bool skyView, AtmosphereSurface surface, thread float3& transmittance,
+                          texture2d<float> transmittanceLut, sampler transmittanceSmp,
+                          texture2d<float> multiScatterLut, sampler multiScatterSmp,
+                          texture2d<float> irradianceLut, sampler irradianceSmp,
+                          texture2d<float> skyViewLut, sampler skyViewSmp,
+                          texture2d<float> groundMap, sampler groundSmp,
+                          texture2d<float> nightMap, sampler nightSmp,
+                          texture2d<float> cloudMap, sampler cloudSmp, int cloudSteps)
+{
+  float h = max(altitude, 1e-3);
+  float r = a.bottom + h;
+  float3 p = up * r;
+  float mu = dot(up, d);
+  float c = h * (2.0 * a.bottom + h);
+  float disc = r * r * mu * mu - c;
+  bool hitGround = mu < 0.0 && disc >= 0.0;
+  float tGround = hitGround ? c / max(-r * mu + sqrt(max(disc, 0.0)), 1e-9) : 1e30;
+
+  float3 L;
+  float3 T;
+  if (skyView && r < a.top) {
+    float muSun = dot(up, sun);
+    float3 dp = d - up * mu;
+    float3 sp = sun - up * muSun;
+    float dl = length(dp), sl = length(sp);
+    float azimuth = dl > 1e-5 && sl > 1e-5 ? dot(dp, sp) / (dl * sl) : 1.0;
+    float2 uv = atmosphereSkyViewUv(a, h, mu, azimuth);
+    float2 texel = 0.5 / float2(skyViewLut.get_width(), skyViewLut.get_height());
+    L = skyViewLut.sample(skyViewSmp, clamp(uv, texel, 1.0 - texel), level(0.0)).rgb;
+    if (hitGround) {
+      float3 g = p + d * tGround;
+      float muGround = dot(normalize(g), -d);
+      T = atmosphereTransmittance(a, a.bottom, muGround, transmittanceLut, transmittanceSmp)
+        / max(atmosphereTransmittance(a, r, -mu, transmittanceLut, transmittanceSmp), float3(1e-6));
+      T = min(T, float3(1.0));
+    } else {
+      T = atmosphereTransmittance(a, r, mu, transmittanceLut, transmittanceSmp);
+    }
+  } else {
+    AtmosphereScatter s = atmosphereIntegrate(a, p, d, sun, tGround, r < a.top ? 32 : 48, false, false, true,
+                                              transmittanceLut, transmittanceSmp, multiScatterLut, multiScatterSmp);
+    L = s.L;
+    T = s.T;
+  }
+  L *= sunE * skyScale;
+
+  float3 behind = float3(0.0);
+  if (hitGround) {
+    float3 g = p + d * tGround;
+    float3 n = normalize(g);
+    float muSun = dot(n, sun);
+    float3 albedo = a.albedo;
+    float3 emission = float3(0.0);
+    float3 shade = n;
+    float ocean = 0.0;
+    float footprint = tGround * surface.pixelAngle / max(abs(dot(n, d)), 0.05);
+    if (surface.planet.enabled > 0.5) {
+      PlanetSample ps = planetSurface(surface.planet, atmosphereToPlanet(surface, n), a.bottom, footprint, muSun);
+      albedo = ps.albedo;
+      emission = ps.emission;
+      shade = atmosphereFromPlanet(surface, ps.normal);
+      ocean = ps.ocean;
+    }
+    if (surface.hasGround > 0.5 || surface.hasNight > 0.5) {
+      float2 uv = atmosphereLatLong(atmosphereToPlanet(surface, n));
+      if (surface.hasGround > 0.5) {
+        float lod = log2(max(footprint * float(groundMap.get_width()) / (2.0 * ATMOS_PI * a.bottom), 1.0));
+        albedo = atmosphereSrgbToLinear(groundMap.sample(groundSmp, uv, level(lod)).rgb);
+      }
+      if (surface.hasNight > 0.5) {
+        float lod = log2(max(footprint * float(nightMap.get_width()) / (2.0 * ATMOS_PI * a.bottom), 1.0));
+        emission = atmosphereSrgbToLinear(nightMap.sample(nightSmp, uv, level(lod)).rgb) * surface.nightIntensity
+                 * (1.0 - smoothstep(-0.05, 0.1, muSun));
+      }
+    }
+    float3 sunT = atmosphereSunTransmittance(a, a.bottom, muSun, transmittanceLut, transmittanceSmp)
+                * atmosphereCloudShadow(a, surface, g, sun, cloudMap, cloudSmp);
+    float3 sky = irradianceLut.sample(irradianceSmp, atmosphereMultiScatterUv(a, a.bottom, muSun, float(irradianceLut.get_width())),
+                                      level(0.0)).rgb * skyScale;
+    float terminator = smoothstep(-0.02, 0.02, muSun);
+    float3 direct = sunE * sunT * terminator;
+    behind = albedo / ATMOS_PI * (direct * saturate(dot(shade, sun)) + sunE * sky) + emission;
+    if (ocean > 0.0) {
+      float alpha = max(surface.planet.oceanRoughness, 0.02);
+      float F = 0.02 + 0.98 * pow(1.0 - saturate(dot(shade, -d)), 5.0);
+      behind += ocean * (direct * atmosphereGGX(shade, -d, sun, alpha) + F * sunE * sky / ATMOS_PI);
+    }
+    // an unshadowed fill from the eye's side away from the sun, so the night side reads as land and sea, not a black disk.
+    float4 fill = surface.planet.look[2];
+    if (fill.w > 0.0)
+      behind += albedo / ATMOS_PI * fill.rgb * fill.w * sunE * saturate(dot(shade, normalize(-d - sun * 0.6)) * 0.6 + 0.4);
+  }
+
+  float4 slab = float4(0.0, 0.0, 0.0, 1.0);
+  float3 slabT = T;
+  float rc = a.bottom + surface.planet.cloudAltitude;
+  if (surface.planet.enabled > 0.5 && surface.planet.cloudCoverage > 0.0) {
+    slab = atmosphereCloudSlab(a, surface, p, d, tGround, sun, sunE, skyScale, transmittanceLut, transmittanceSmp,
+                               irradianceLut, irradianceSmp, cloudMap, cloudSmp, cloudSteps);
+    // the clouds sit above the thickest air, so they're dimmed by the air between the eye and them, not the ground.
+    if (slab.w < 0.999) {
+      float2 seg = atmosphereShell(r, mu, rc, rc + max(surface.planet.cloudThickness, 0.05));
+      float3 x = p + d * seg.x;
+      float rx = length(x);
+      float mx = dot(x, d) / rx;
+      slabT = r < rc ? atmosphereTransmittance(a, r, mu, transmittanceLut, transmittanceSmp)
+                         / max(atmosphereTransmittance(a, rx, mx, transmittanceLut, transmittanceSmp), float3(1e-6))
+                     : atmosphereTransmittance(a, rx, -mx, transmittanceLut, transmittanceSmp)
+                         / max(r < a.top ? atmosphereTransmittance(a, r, -mu, transmittanceLut, transmittanceSmp) : float3(1.0), float3(1e-6));
+      slabT = min(slabT, float3(1.0));
+    }
+  }
+  float cloud = 1.0 - slab.w;
+
+  if (r < rc) {
+    L = L * (1.0 - 0.5 * cloud) + slabT * slab.rgb + T * slab.w * behind;
+  } else {
+    L += slabT * slab.rgb + T * slab.w * behind;
+  }
+  // toward the limb the planet and its clouds dissolve into the (shadowed) color of the sky around them.
+  float4 rim = surface.planet.look[3];
+  if (hitGround && rim.w > 0.0) {
+    float3 n0 = normalize(p + d * tGround);
+    float edge = 1.0 - saturate(dot(n0, -d));
+    float shadow = mix(0.5, 1.0, smoothstep(-0.35, 0.25, dot(n0, sun)));
+    L = mix(L, rim.rgb * sunE * shadow, min(0.8, edge * edge) * saturate(rim.w));
+  }
+
+  // the halo of terrestrial sky the planet sits in, with streaks out from it and its own shadow on the far side.
+  float4 halo = surface.planet.look[0], haloShape = surface.planet.look[1];
+  if (halo.w > 0.0 && !hitGround && r > a.top) {
+    float3 q = p + d * max(-dot(p, d), 0.0);
+    float R = max(haloShape.x, 1e-3) * a.bottom;
+    float x = max(0.0, 1.444 - 0.555 * (length(q) - a.bottom) / R);
+    float glow = x * x * x * x;
+    glow = min(1.0, 0.06 * glow * glow);
+    float3 qd = normalize(q);
+    float streaks = mix(1.0, planetNoise(atmosphereToPlanet(surface, qd) * 40.0).x * 0.5 + 0.5, haloShape.y);
+    float lit = mix(1.0 - haloShape.z, 1.0, smoothstep(-0.35, 0.25, dot(qd, sun)));
+    L += T * slab.w * halo.rgb * halo.w * sunE * glow * streaks * lit * smoothstep(a.top, a.top + 0.25 * R, r);
+  }
+  T *= slab.w * (hitGround ? 0.0 : 1.0);
+  transmittance = T;
+  return L;
+}
+
+/// The sun's disk toward `d`, limb darkened, for a sun of illuminance `sunE` and angular radius `radius`.
+float3 atmosphereSunDisk(float3 d, float3 sun, float3 sunE, float radius)
+{
+  float cosR = cos(max(radius, 1e-4));
+  float c = dot(d, sun);
+  if (c < cosR) return float3(0.0);
+  float s = sin(max(radius, 1e-4));
+  float x = saturate(sqrt(max(1.0 - c * c, 0.0)) / s);
+  float limb = 1.0 - 0.6 * (1.0 - sqrt(max(1.0 - x * x, 0.0)));
+  return sunE / (ATMOS_PI * s * s * 0.8) * limb;
+}

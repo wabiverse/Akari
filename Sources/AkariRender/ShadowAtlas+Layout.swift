@@ -72,8 +72,8 @@ extension Akari.ShadowAtlas
     return 2
   }()
 
-  /// Bound by the deferred shader's fixed `u_pointLight*` slot count.
-  static let maxPunctualLights = 4
+  /// Bound by the deferred shader's four `pointShadow` targets.
+  static let maxPunctualLights = 16
   static let facesPerLight = 6
   /// Punctual tilemaps occupy slots [0, maxPunctualTilemaps).
   static let maxPunctualTilemaps = maxPunctualLights * facesPerLight
@@ -89,6 +89,10 @@ extension Akari.ShadowAtlas
   static let maxRuns = maxViews + 1
   /// Culled replay slots below this belong to the camera.
   static let cullSlotBase = 2
+  /// Runs whose instances are culled to them, each a copy of every instance's transform, the rest draw them all.
+  static let maxInstanceCullRuns = 4
+  /// Instances under this radius in a run's finest texels aren't drawn into it.
+  static let instanceMinTexels: Float = 0.5
   /// Static redraws a frame at most, the rest wait on their coarser level.
   /// Tiles only dynamic casters moved over always draw, deferring those flickers.
   static let renderTileBudget = 64
@@ -121,6 +125,16 @@ extension Akari.ShadowAtlas
   static let levelParamsStride = 16
   /// Texels per row of `data`.
   static let dataTextureWidth = 6
+
+  static func punctualUniforms(_ name: String) -> String
+  {
+    (0 ..< maxPunctualLights).map { "uniform vec4 \(name)\($0);" }.joined(separator: "\n")
+  }
+
+  static func punctualCalls(_ call: (Int) -> String) -> String
+  {
+    (0 ..< maxPunctualLights).map { "if (lightCount > \($0)) \(call($0));" }.joined(separator: "\n")
+  }
 
   static func flatIndex(tileX: Int, tileY: Int, lod: Int) -> Int
   {

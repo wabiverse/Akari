@@ -41,9 +41,10 @@
 import AkariCore
 import Foundation
 import HdAkari
+import HydraKit
 import LabFX
 import LabGL
-import OpenUSDKit
+import simd
 
 public extension Akari
 {
@@ -80,11 +81,19 @@ public extension Akari
     var upscaleRegistered = false
     /// MetalFX turned an upscale down, the TAA pass takes over.
     var upscaleFailed = false
+    /// The scene's sheet of water, shaded as a plane, and the meshes it came from.
+    var water: WaterPlane?
+    var waterKeys: Set<UInt64> = []
+    /// MetalFX's temporal scaler waits out a heavy frame or memory pressure on the TAA pass until then.
+    var neuralUpscaleHeldUntil = Date.distantPast
+    /// The geometry records `prepareUpscale` last saw.
+    var upscaleRecords = 0
     /// The temporal history starts over this frame.
     var temporalReset: Bool
     {
       temporal.reset
     }
+
     /// The G-buffer's size, `renderScale` of the target's.
     var renderWidth = 0
     var renderHeight = 0
@@ -94,9 +103,10 @@ public extension Akari
     /// This frame's projection jitter, in G-buffer pixels.
     public var taaJitter = SIMD2<Float>(repeating: 0)
 
-    /// Buffers at the G-buffer's size, and at half of it.
-    private static let renderBuffers = ["gbuffer", "color"]
-    private static let halfRenderBuffers = ["ssgiPrep", "ssgiPyramid", "ssgi", "ssgiAccum", "ssgiHistory", "pointShadow",
+    // Buffers at the G-buffer's size, and at half of it.
+
+    private static let renderBuffers = ["gbuffer", "color", "transparentAccum", "transparentResolved", "upscaleInput"]
+    private static let halfRenderBuffers = ["ssgiPrep", "ssgiPyramid", "ssgi", "ssgiAccum", "ssgiHistory", "pointShadowRaw", "pointShadowBlur", "pointShadow", "fogSimHalf",
                                             "volumeScatter", "volumeIntegrated", "ssr", "ssrAccum", "ssrHistory"]
 
     /// Pins the scene buffers to `renderScale` of `width` by `height`, for the next build or resize.
@@ -116,6 +126,7 @@ public extension Akari
       {
         runtime.stageBufferSize(name, width: Int32(halfWidth), height: Int32(halfHeight))
       }
+      stageMotionBlurSize(width: width, height: height)
       supersampleWidth = supersampleScale > 1 ? Int(Float(width) * supersampleScale) : 1
       supersampleHeight = supersampleScale > 1 ? Int(Float(height) * supersampleScale) : 1
       runtime.stageBufferSize("supersample", width: Int32(supersampleWidth), height: Int32(supersampleHeight))
@@ -142,11 +153,35 @@ public extension Akari
     private var ssgi = ScreenSpaceGI()
     private var ssr = ScreenSpaceReflections()
     var volumetrics = Volumetrics()
+    public let fogSim = Akari.FogSim()
+    var atmosphere = Atmosphere()
+    var motionBlur = MotionBlur()
+    var post = Post()
+    var volumes = Volumes()
+    var styles = Styles()
+    var transparency = Transparency()
     var outline = Outline()
     /// Froxel depth reduction + column integration.
     let froxelVolume = Akari.FroxelVolume()
 
     var syncedPointLights: [Akari.Lux.PointLight] = []
+    /// Each shadowed light's path, by the slot its shadow maps stay in.
+    var shadowSlots: [String] = []
+    /// The shadowed lights kept at full resolution, swapped only for one lighting the view far more.
+    var mainShadowKeys: Set<String> = []
+    /// Each shadowed light's visible, shadowed light on screen, smoothed over frames.
+    var lightImportance: [String: Float] = [:]
+    var importanceKernel: GLuint = 0
+    var importanceReadback: GLuint = 0
+    var importanceBoxes: [GLuint] = []
+    var importanceBoxCursor = 0
+    /// The frame each main light took its place, its hold on it fading from then.
+    var mainSince: [String: UInt64] = [:]
+    var lightSyncs: UInt64 = 0
+    var lightPositions: [String: SIMD3<Float>] = [:]
+    /// Lights seen moving, the ones that follow a character.
+    var followLights: Set<String> = []
+    static let mainShadowLights = 4
     /// The lights that shade, `syncedPointLights` are the shadowed front of them.
     var litPointLights: [Akari.Lux.PointLight] = []
     var pointLightTexture: GLuint = 0
@@ -154,12 +189,13 @@ public extension Akari
 
     /// Volume + sphere light probes baked from the scene capture.
     let lightProbes = Akari.LightProbes()
+    let ptex = Akari.PtexStream()
     var probeOverrides: [Akari.LightProbes.Override] = []
     var probeOverrideRevision: UInt64 = .max
     /// Probe identity without the transform, keys the probe layout bake.
     var probeStructuralRevision: UInt64 = 0
     /// The material, color and emissive atlases the probe capture samples.
-    var probeMaterials: (material: GLuint, color: GLuint, emissive: GLuint) = (0, 0, 0)
+    var probeMaterials: (material: GLuint, color: GLuint, emissive: GLuint, constants: GLuint) = (0, 0, 0, 0)
 
     /// This is `true` when the opened usd stage's upAxis is "Z".
     var stageIsZUp = false
@@ -182,15 +218,66 @@ public extension Akari
     /// Compute sun direction based on the opened usd stages's upAxis.
     func worldSpaceSunDirection(_ light: LightSettings) -> SIMD3<Float>
     {
+      if let distant = distantSun { return distant.direction }
+      if let sun = dome?.sunDirection { return sun }
       let sky = light.sunDirection
       return stageIsZUp ? SIMD3(sky.x, -sky.z, sky.y) : sky
     }
+
+    /// AgX look LUTs, uploaded the first time each is used.
+    var agxLooks: [Akari.Color.Look: GLuint] = [:]
 
     /// The last GL_TONEMAP_* operator applied to the tonemap pass.
     private var lastTonemap = GLenum(0)
 
     /// IBL is expensive, this sets a flag to bake it once.
-    private var iblNeedsBake = true
+    var iblNeedsBake = true
+    /// The DFG table only depends on the BRDF, it bakes again only after the buffers are rebuilt.
+    var dfgNeedsBake = true
+    /// The viewport reads big files (a volume's density) off the render thread instead of waiting on them.
+    public var loadsInBackground = false
+    /// The viewport is playing, so a probe bake goes a little each frame instead of all at once.
+    public var isPlaying = false
+    /// The stage's dome light, in place of the procedural sky.
+    var dome: Dome?
+    /// The stage's brightest distant light, shading as the sun in place of the dome's or the sky's.
+    var distantSun: (direction: SIMD3<Float>, irradiance: SIMD3<Float>, angle: Float)?
+    /// The rect light shading as `distantSun`, out of the local lights.
+    var rectSunKey: String?
+    var domeRevision: UInt64 = .max
+    /// What the image based lighting was last baked from, the dome's file, frame and banded color.
+    var domeBakeKey: (file: String, values: [Float]) = ("\u{0}", [])
+    /// Set by `reloadTextures()` from the main actor, taken by the next sync.
+    var forceDomeReload: Bool
+    {
+      get { reloadState.pointee.force }
+      set { reloadState.pointee.force = newValue }
+    }
+
+    /// Bumped when the environment changes, the light probes relight from it.
+    var environmentRevision: UInt64 = 0
+    /// Set by `reloadTextures()` until the next sync rereads them.
+    public internal(set) var reloadPending: Bool
+    {
+      get { reloadState.pointee.pending }
+      set { reloadState.pointee.pending = newValue }
+    }
+
+    /// How far a reload has come, 0 to 1, written as the dome decodes.
+    public var reloadProgress: Float
+    {
+      get { reloadState.pointee.progress }
+      set { reloadState.pointee.progress = newValue }
+    }
+
+    /// Heap storage the image loader writes into while the main actor reads it.
+    let reloadState: UnsafeMutablePointer<(pending: Bool, force: Bool, progress: Float)> =
+    {
+      let state = UnsafeMutablePointer<(pending: Bool, force: Bool, progress: Float)>.allocate(capacity: 1)
+      state.initialize(to: (false, false, 0))
+      return state
+    }()
+
     /// The last sunHeight value to determine if IBL needs rebaking.
     private var lastSunHeight: Float = 0
     {
@@ -201,7 +288,7 @@ public extension Akari
 
         // when sunHeight changes the sky cubemap changes,
         // so the prefiltered IBL maps must be regenerated.
-        setPasses(Self.iblPassNames, active: true)
+        setIBLPasses(active: true)
         iblNeedsBake = true
       }
     }
@@ -215,7 +302,13 @@ public extension Akari
       var samples = 0
       /// This frame starts the history over.
       var reset = true
+      /// The next frame starts the accumulation over, keeping the last camera for motion.
+      var restart = false
+      var lastFrame = 0.0
     }
+
+    /// Seconds of history a moving view keeps, so a slow frame doesn't trail further behind.
+    static let movingHistorySeconds = 0.15
 
     private struct ScreenSpaceGI
     {
@@ -230,13 +323,6 @@ public extension Akari
       var passesActive = true
       var needsReset = true
     }
-
-    private static let iblPassNames = [
-      "sky",
-      "prefilter",
-      "irradiance",
-      "dfg"
-    ]
 
     private static let ssgiPassNames = [
       "ssgi prep",
@@ -255,6 +341,7 @@ public extension Akari
     private static let gbufferPassNames = [
       "clear gbuffer",
       "geometry",
+      "geometry instanced",
       "geometry dynamic"
     ]
 
@@ -288,6 +375,8 @@ public extension Akari
         // so rerun the IBL passes on the next frame to
         // rebake, then disable them again.
         iblNeedsBake = true
+        dfgNeedsBake = true
+        volumes.bakedShadow = []
         temporal.prevViewProjection = nil
         volumetrics.previousViewProjection = nil
         ssgi.needsReset = true
@@ -309,7 +398,7 @@ public extension Akari
         ssr.needsReset = true
       }
 
-      if iblNeedsBake { setPasses(Self.iblPassNames, active: true) }
+      if iblNeedsBake { setIBLPasses(active: true) }
 
       if !temporal.thisFrame { temporal.prevViewProjection = nil }
       temporal.thisFrame = false
@@ -355,7 +444,8 @@ public extension Akari
                                view: Matrix4,
                                projection: Matrix4,
                                unjitteredProjection: Matrix4,
-                               selection: Akari.Selection?)
+                               selection: Akari.Selection?,
+                               planetCloudMarchSteps: Int)
     {
       guard
         geometry.staticCapture != nil,
@@ -379,42 +469,135 @@ public extension Akari
         setSampler("u_color_atlas", colorTex)
         setSampler("u_normal_atlas", normalTex)
         setSampler("u_emissive_atlas", emissiveTex)
-        probeMaterials = (materialTex, colorTex, emissiveTex)
+        let constantsTex = materialAtlas.uploadConstants(atlas)
+        setSampler("u_materialConstants", constantsTex)
+        probeMaterials = (materialTex, colorTex, emissiveTex, constantsTex)
       }
 
+      syncDome(scene)
+      syncDistant(scene)
+
+      setMatrix("u_eyeToWorld", view.inverse())
       let eye = view.inverse().transform(.zero)
-      let lights = scene.LightSnapshot().map
+      syncAtmosphere(scene, eye: eye, cloudMarchSteps: planetCloudMarchSteps)
+      syncVolumes(scene)
+      let snapshot = scene.LightSnapshot().filter { $0.id.string != rectSunKey }
+      let domeSun = dome.flatMap { dome in dome.sun.map { ($0.irradiance * dome.color).max() } }
+      let sunFloor = (distantSun?.irradiance.max() ?? domeSun ?? 0) * 0.05
+      let keys = snapshot.map(\.id.string)
+      var lights = snapshot.map
       { light in
         let mat = Pixar.GfMatrix4f(light.transform)
-        let position: SIMD3<Float> = if let mPtr = mat.GetArray()
+        let (position, xAxis, yAxis): (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) = if let mPtr = mat.GetArray()
         {
-          SIMD3(mPtr[12], mPtr[13], mPtr[14])
+          (SIMD3(mPtr[12], mPtr[13], mPtr[14]), SIMD3(mPtr[0], mPtr[1], mPtr[2]), SIMD3(mPtr[4], mPtr[5], mPtr[6]))
         }
         else
         {
-          .zero
+          (.zero, .zero, .zero)
         }
-        return Akari.Lux.PointLight(position: position,
-                                    color: SIMD3(light.colorR, light.colorG, light.colorB),
-                                    intensity: light.intensity * exp2(light.exposure),
-                                    radius: light.radius)
+        var point = Akari.Lux.PointLight(position: position,
+                                         color: SIMD3(light.colorR, light.colorG, light.colorB),
+                                         intensity: light.intensity * exp2(light.exposure),
+                                         radius: light.radius,
+                                         diffuse: light.diffuse,
+                                         specular: light.specular,
+                                         halfAxis: xAxis * light.length * 0.5,
+                                         tubeRadius: light.tubeRadius)
+        point.halfWidth = xAxis * light.width * 0.5
+        point.halfHeight = yAxis * light.height * 0.5
+        point.cameraVisible = light.cameraVisible
+        point.probes = light.probes && light.tubeRadius <= 0
+        // under a sun a lamp's shadow fades out where it gives 1/20th of the sun's light.
+        point.shadowFloor = max(1e-3, sunFloor)
+        return point
       }
-      /// the ones that light the view the most, by their irradiance at the camera.
-      func weight(_ light: Akari.Lux.PointLight) -> Float
+      // the ones that light the view the most, by their irradiance at the camera
+      // or at the animated geometry, whichever they light more.
+      let subject = geometry.dynamicBatch.bounds.map { ($0.min + $0.max) * 0.5 }
+      func irradiance(_ light: Akari.Lux.PointLight, at point: SIMD3<Float>) -> Float
       {
-        let d = light.position - eye
+        let d = light.position - point
         let r2 = light.radius * light.radius
         return light.intensity * light.color.max() * r2 / max((d * d).sum(), r2)
       }
+      func weight(_ light: Akari.Lux.PointLight) -> Float
+      {
+        max(irradiance(light, at: eye), subject.map { irradiance(light, at: $0) } ?? 0)
+      }
       // practicals (LEDs and the like) sit in their own fixture, so only lights
       // reaching past a meter cast shadows, and those take the first slots.
-      let sorted = lights.sorted { weight($0) > weight($1) }
+      // a light keeps its slot while it stays shadowed, so reranking never hands its maps to another.
+      // a light that has moved and reaches an animated mesh follows a character, so it's a hero too.
+      for (i, key) in keys.enumerated()
+      {
+        if let last = lightPositions[key], ((last - lights[i].position) * (last - lights[i].position)).sum() > 1e-8
+        {
+          followLights.insert(key)
+          lights[i].moved = ((lights[i].position - last) * (lights[i].position - last)).sum().squareRoot()
+        }
+        lightPositions[key] = lights[i].position
+      }
+      let animated = geometry.dynamicBatch.bounds
+      let heroes = Set(snapshot.filter(\.hero).map(\.id.string)).union(zip(keys, lights).compactMap
+      { key, light in
+        guard followLights.contains(key), let animated else { return nil }
+        let gap = light.position - pointwiseMin(pointwiseMax(light.position, animated.min), animated.max)
+        return (gap * gap).sum() < light.reach * light.reach ? key : nil
+      })
+      let sorted = lights.indices.sorted
+      {
+        heroes.contains(keys[$0]) != heroes.contains(keys[$1]) ? heroes.contains(keys[$0]) : weight(lights[$0]) > weight(lights[$1])
+      }
       let minShadowReach = 1 / stageMetersPerUnit
-      let shadowed = Array(sorted.indices.filter { sorted[$0].reach >= minShadowReach }.prefix(4))
-      syncedPointLights = shadowed.map { sorted[$0] }
-      litPointLights = Array((syncedPointLights + sorted.indices.filter { !shadowed.contains($0) }.map { sorted[$0] })
+      let wanted = Set(sorted.filter { lights[$0].reach >= minShadowReach }
+        .prefix(Akari.ShadowAtlas.maxPunctualLights).map { keys[$0] })
+      var slots = shadowSlots
+      var slot = 0
+      while slot < slots.count
+      {
+        if wanted.contains(slots[slot]) { slot += 1 } else { slots[slot] = slots[slots.count - 1]; slots.removeLast() }
+      }
+      slots += sorted.map { keys[$0] }.filter { wanted.contains($0) && !slots.contains($0) }
+      shadowSlots = slots
+      let index = Dictionary(keys.indices.map { (keys[$0], $0) }, uniquingKeysWith: { first, _ in first })
+      var weights: [String: Float] = [:]
+      for key in slots
+      {
+        if let i = index[key] { weights[key] = lightImportance[key] ?? weight(lights[i]) * Float(Self.importanceSamples) }
+      }
+      lightSyncs &+= 1
+      // heroes win outright, the rest by score, a light already main holding on
+      // with a bonus that starts high and settles, so assignments never flicker.
+      for key in Array(mainSince.keys) where !mainShadowKeys.contains(key) || weights[key] == nil
+      {
+        mainSince[key] = nil
+      }
+      func held(_ key: String) -> Float
+      {
+        guard let since = mainSince[key] else { return 1 }
+        return 2 + 2 * exp(-Float(lightSyncs &- since) / 120)
+      }
+      let ranked = slots.sorted
+      {
+        heroes.contains($0) != heroes.contains($1)
+          ? heroes.contains($0)
+          : weights[$0, default: 0] * held($0) > weights[$1, default: 0] * held($1)
+      }
+      let mains = Set(ranked.prefix(Self.mainShadowLights))
+      for key in mains where mainSince[key] == nil
+      {
+        mainSince[key] = lightSyncs
+      }
+      mainShadowKeys = mains
+      shadowAtlas.mainSlots = Set(slots.indices.filter { mains.contains(slots[$0]) })
+      syncedPointLights = slots.compactMap { index[$0].map { lights[$0] } }
+      litPointLights = Array((syncedPointLights + sorted.filter { !wanted.contains(keys[$0]) }.map { lights[$0] })
         .prefix(Self.maxPointLights))
 
+      geometry.restyled = syncStyles(scene) || geometry.restyled
+      geometry.deformer.eye = eye
+      geometry.deformer.zUp = stageIsZUp
       let drained = scene.DrainMeshChanges()
       var changed: [Akari.Geom.Recorder.RawMesh] = []
       var removed = Array(drained.removed)
@@ -438,27 +621,101 @@ public extension Akari
         let normalMatrix = Matrix.normalMatrix3x3(mPtr)
         let flipWinding = Matrix.determinant3x3(mPtr) < 0
 
-        changed.append(Akari.Geom.Recorder.RawMesh(id: mesh.id.string,
-                                                   key: key,
-                                                   primId: mesh.primId,
-                                                   dataRevision: mesh.dataRevision,
-                                                   topologyRevision: mesh.topologyRevision,
-                                                   flipWinding: flipWinding,
-                                                   points: mesh.points,
-                                                   tris: mesh.triangleIndices,
-                                                   uvs: mesh.uvs,
-                                                   worldMatrix: worldMatrix,
-                                                   normalMatrix: normalMatrix))
+        var raw = Akari.Geom.Recorder.RawMesh(id: mesh.id.string,
+                                              key: key,
+                                              primId: mesh.primId,
+                                              dataRevision: mesh.dataRevision,
+                                              topologyRevision: mesh.topologyRevision,
+                                              flipWinding: flipWinding,
+                                              points: mesh.points,
+                                              tris: mesh.triangleIndices,
+                                              uvs: mesh.uvs,
+                                              worldMatrix: worldMatrix,
+                                              normalMatrix: normalMatrix,
+                                              contentKey: mesh.contentKey)
+        raw.transparent = mesh.transparent
+        raw.emitter = mesh.emitter
+        raw.opacity = mesh.opacity
+        raw.smooth = mesh.smooth
+        raw.color = SIMD3(mesh.displayColor[0], mesh.displayColor[1], mesh.displayColor[2])
+        raw.roughness = mesh.roughness
+        raw.triangleFaces = mesh.triangleFaces
+        raw.faceRes = mesh.faceRes
+        raw.ptexMap = Int32(mesh.ptexMap)
+        let instanceCount = Int(mesh.instances.size())
+        if instanceCount > 0
+        {
+          // every mesh under one prototype shares its set, copied once.
+          raw.instancesKey = mesh.instancesKey
+          if let shared = geometry.instanceSets[mesh.instancesKey], shared.count == instanceCount * 16
+          {
+            raw.instances = shared
+          }
+          else
+          {
+            raw.instances = [Float](repeating: 0, count: instanceCount * 16)
+            raw.instances.withUnsafeMutableBufferPointer
+            { buffer in
+              Pixar.HdAkariCopyInstances(mesh, buffer.baseAddress!)
+            }
+            geometry.instanceSets[mesh.instancesKey] = raw.instances
+          }
+          if let live = Akari.LiveInstances.prototype(of: raw.id), live.slot.count == instanceCount { raw.livePrototype = live.path }
+        }
+        let joints = Int(Pixar.HdAkariSkinJointCount(mesh))
+        if joints > 0
+        {
+          raw.skinInfluencesPerPoint = Int(mesh.skinInfluencesPerPoint)
+          raw.skinInfluences = mesh.skinInfluences
+          raw.skinRevision = mesh.skinRevision
+          raw.skinPalette = [Float](repeating: 0, count: joints * 12)
+          raw.skinBounds = [Float](repeating: 0, count: 6)
+          raw.skinPalette.withUnsafeMutableBufferPointer
+          { palette in
+            raw.skinBounds.withUnsafeMutableBufferPointer { Pixar.HdAkariCopySkin(mesh, palette.baseAddress!, $0.baseAddress!) }
+          }
+        }
+        changed.append(raw)
       }
       lastGeometryRevision = scene.Revision()
 
-      if !changed.isEmpty || !removed.isEmpty || geometry.records == 0
+      // the viewport chooses its geometry again where the camera settles,past
+      // the margin it was chosen for or 1/30th of the scene from before.
+      let forward = simd_normalize(view.inverse().transform(SIMD3(0, 0, -1)) - eye)
+      if eye != geometry.lastEye || forward != geometry.lastForward
       {
+        geometry.lastEye = eye
+        geometry.lastForward = forward
+        geometry.eyeMoved = Date()
+      }
+      if loadsInBackground, let recorded = geometry.camera, let bounds = sceneBounds,
+         simd_distance(eye, recorded.eye) > simd_length(bounds.max - bounds.min) * 0.03
+         || simd_dot(forward, recorded.forward) < cos(RecordCamera.margin),
+         Date().timeIntervalSince(geometry.eyeMoved) > 0.5
+      {
+        geometry.reframe = true
+      }
+      // a record during a load's peak held less than the scene can have once it settles.
+      if loadsInBackground, geometry.records > 0, Date().timeIntervalSince(geometry.recordedAt) > 5,
+         triangleBudgetGrew()
+      {
+        geometry.reframe = true
+      }
+
+      if !changed.isEmpty || !removed.isEmpty || geometry.records == 0 || geometry.restyled || geometry.reframe
+      {
+        geometry.camera = RecordCamera(view: view, projection: unjitteredProjection, height: renderHeight,
+                                       frustum: !loadsInBackground)
         recordCaptures(changed: changed, removed: removed)
       }
       else
       {
         geometry.deformer.settle()
+      }
+      // the shadow maps cache static pages, so the flags meshes just brought have to be up before they're drawn.
+      if geometry.emitters != styles.emitters || geometry.transparent != styles.transparent || geometry.opacity != styles.opacity
+      {
+        geometry.restyled = syncStyles(scene) || geometry.restyled
       }
       recordOutline(changed: changed, removed: removed)
     }
@@ -476,7 +733,7 @@ public extension Akari
         runtime.renderPass(name)
         if name == "geometry", encodeLateCull()
         {
-          runtime.setMeshCaptureCulledSlot("mesh", slot: Self.cameraLateCullSlot)
+          runtime.setMeshCaptureCulledSlot("mesh-static", slot: Self.cameraLateCullSlot)
           runtime.renderPass(name)
         }
         runtime.setPassActive(name, active: false)
@@ -493,6 +750,7 @@ public extension Akari
     ///   - shadowsEnabled: gates the cascade lookup.
     public func setLighting(iblEnabled: Bool,
                             projection: Matrix4,
+                            view: Matrix4,
                             light: LightSettings,
                             shadowsEnabled: Bool)
     {
@@ -504,10 +762,15 @@ public extension Akari
       lastSunHeight = light.sunHeight // handles IBL rebaking, if changed.
 
       let sun = worldSpaceSunDirection(light)
-      setVector("u_sunDirection", SIMD4(sun.x, sun.y, sun.z, light.sunAngle * 0.5))
+      setVector("u_sunDirection", SIMD4(sun.x, sun.y, sun.z, distantSun.map { $0.angle * 0.5 } ?? light.sunAngle * 0.5))
+      setVector("u_sunOverride", distantSun.map { SIMD4($0.irradiance, 1) } ?? .zero)
+      applyAtmosphere(sun: sun)
+      applyVolumes(sun: sun)
+      applyTransparency(projection: projection, view: view)
 
       setFloat("u_shadowEnabled", shadowsEnabled && shadowsReady ? 1 : 0)
       setFloat("u_zUp", stageIsZUp ? 1 : 0)
+      applyDome()
 
       setFloat("u_punctualShadowEnabled", shadowsEnabled && shadowsReady ? 1 : 0)
       setFloat("u_pointLightCount", Float(litPointLights.count))
@@ -529,7 +792,7 @@ public extension Akari
       uploadPointLights()
     }
 
-    /// Every lit point light, two texels a light, for the lighting pass.
+    /// Every lit point light, six texels a light, for the lighting pass.
     private func uploadPointLights()
     {
       if pointLightTexture == 0
@@ -539,21 +802,30 @@ public extension Akari
         gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_NEAREST))
         gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GLint(GL_NEAREST))
         gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA32F,
-                      width: 2, height: GLsizei(Self.maxPointLights), border: 0,
+                      width: 6, height: GLsizei(Self.maxPointLights), border: 0,
                       format: GL_RGBA, type: GL_FLOAT, pixels: nil)
       }
       guard pointLightTexture != 0 else { return }
 
-      let texels = litPointLights.flatMap
-      {
-        [$0.position.x, $0.position.y, $0.position.z, $0.intensity,
-         $0.color.x, $0.color.y, $0.color.z, $0.radius]
+      let texels: [Float] = litPointLights.enumerated().flatMap
+      { i, light in
+        let shadowed = i < syncedPointLights.count
+        // a tube's half axis and radius, or a rect's half width and -1, then a rect's half height.
+        let shape = light.halfWidth != .zero ? SIMD4(light.halfWidth, -1) : SIMD4(light.halfAxis, light.tubeRadius)
+        return [light.position.x, light.position.y, light.position.z, light.intensity,
+                light.color.x, light.color.y, light.color.z, light.radius,
+                light.diffuse, light.specular,
+                shadowed ? shadowAtlas.lodBias(slot: i) : 0,
+                shadowed && shadowAtlas.mainSlots.contains(i) ? 1 : 0,
+                shape.x, shape.y, shape.z, shape.w,
+                light.halfHeight.x, light.halfHeight.y, light.halfHeight.z, light.moved,
+                light.cameraVisible ? 1 : 0, 0, 0, 0]
       }
       if !texels.isEmpty
       {
         gl.bindTexture(target: GL_TEXTURE_2D, texture: pointLightTexture)
         gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: 0,
-                         width: 2, height: GLsizei(litPointLights.count),
+                         width: 6, height: GLsizei(litPointLights.count),
                          format: GL_RGBA, type: GL_FLOAT, pixels: texels)
       }
       setSampler("u_pointLightData", pointLightTexture)
@@ -570,17 +842,42 @@ public extension Akari
       let viewProjection = camera.projection * camera.view
       let limit = max(samples, 1)
       let previous = temporal.prevViewProjection
-      temporal.samples = previous == nil ? 1
-        : moving ? min(10, limit)
+      let restart = previous == nil || temporal.restart
+      let now = ProcessInfo.processInfo.systemUptime
+      let elapsed = max(now - temporal.lastFrame, 1e-3)
+      temporal.lastFrame = now
+      let moved = min(10, limit, max(2, Int(Self.movingHistorySeconds / elapsed)))
+      temporal.samples = restart ? 1
+        : moving && motionBlur.subframes == 0 ? moved
         : min(temporal.samples + 1, limit)
 
       setMatrix("u_prevViewProj", previous ?? viewProjection)
       setMatrix("u_currViewProj", viewProjection)
-      setVector("u_taa", SIMD4(1, previous == nil ? 1 : 0, 1 / Float(temporal.samples), 0))
+      setVector("u_taa", SIMD4(1, restart ? 1 : 0, 1 / Float(temporal.samples), motionBlur.subframes > 0 ? 1 : 0))
       setVector("u_taaJitter", SIMD4(taaJitter.x, taaJitter.y, 0, 0))
-      temporal.reset = previous == nil
+      temporal.reset = restart
+      temporal.restart = false
       temporal.prevViewProjection = viewProjection
       temporal.thisFrame = true
+    }
+
+    /// Starts every temporal accumulation over on the next frame,
+    /// so a final render frame never blends in the one before it.
+    public func resetHistory()
+    {
+      temporal.prevViewProjection = nil
+      volumetrics.previousViewProjection = nil
+      ssgi.needsReset = true
+      ssr.needsReset = true
+    }
+
+    /// Starts the temporal accumulation over on the next frame, keeping this frame's
+    /// camera and geometry as the previous ones so the next frame still has motion.
+    public func restartAccumulation()
+    {
+      temporal.restart = true
+      ssgi.needsReset = true
+      ssr.needsReset = true
     }
 
     /// Turns on screen space GI for this frame.
@@ -614,15 +911,18 @@ public extension Akari
     ///   - exposure: exposure setting the tonemap pass reads.
     ///   - gamma: gamma setting the tonemap pass reads.
     ///   - viewTransform: (e.g. AgX) selects the LabGL tonemap operator.
+    ///   - look: the AgX look, its baked LUT.
     ///   - frameIndex: per frame counter to seed the dither.
     public func setTonemap(exposure: Float,
                            gamma: Float,
                            viewTransform: Akari.Color.ViewTransform,
+                           look: Akari.Color.Look,
                            frameIndex: UInt64)
     {
       setFloat("exposure", exposure)
       setFloat("gamma", gamma)
       setInt("frameIndex", Int32(frameIndex & 0xFFFF))
+      bindAgXLook(viewTransform == .agx ? look : nil)
 
       if viewTransform.uniform != lastTonemap
       {
@@ -667,15 +967,21 @@ public extension Akari
       runtime.setPassActive("ssgi prep", active: ssgi.thisFrame || ssr.thisFrame)
 
       syncVolumetrics()
+      syncMotionBlur()
+      syncPost()
       setVector("u_aovProjection", SIMD4(projection[2, 2], projection[3, 2], 0, 0))
 
       prepareUpscale()
+      syncPtex()
+      if iblNeedsBake { setIBLPasses(active: true) }
       runtime.render()
+      finishAtmosphereFrame()
 
       // bake the IBL once.
       if iblNeedsBake
       {
-        setPasses(Self.iblPassNames, active: false)
+        setIBLPasses(active: false)
+        dfgNeedsBake = false
         iblNeedsBake = false
       }
       labgl.present(windowHandle)
@@ -760,7 +1066,7 @@ public extension Akari
       // parse + build the deferred graph once.
       guard
         let url = Bundle.akari.url(forResource: "DeferredGraph", withExtension: "labfx"),
-        let graphSource = try? String(contentsOf: url, encoding: .utf8)
+        let graphSource = (try? String(contentsOf: url, encoding: .utf8)).map(Self.expandIncludes)
       else
       {
         print("[akari/labgl] DeferredGraph.labfx missing from bundle")
@@ -805,6 +1111,24 @@ public extension Akari
 
       lastWidth = width
       lastHeight = height
+    }
+
+    /// Splices each `//@include <resource>` line's bundled file in its place, at its indent.
+    private static func expandIncludes(_ source: String) -> String
+    {
+      source.split(separator: "\n", omittingEmptySubsequences: false).map
+      { line in
+        let trimmed = line.drop { $0 == " " }
+        guard trimmed.hasPrefix("//@include ") else { return String(line) }
+        let name = trimmed.dropFirst("//@include ".count).trimmingCharacters(in: .whitespaces)
+        let file = name as NSString
+        guard
+          let url = Bundle.akari.url(forResource: file.deletingPathExtension, withExtension: file.pathExtension),
+          let text = (try? String(contentsOf: url, encoding: .utf8)).map(expandIncludes)
+        else { return String(line) }
+        let indent = String(line.prefix(line.count - trimmed.count))
+        return text.split(separator: "\n", omittingEmptySubsequences: false).map { $0.isEmpty ? "" : indent + $0 }.joined(separator: "\n")
+      }.joined(separator: "\n")
     }
 
     private func teardown()

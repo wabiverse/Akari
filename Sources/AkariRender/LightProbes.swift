@@ -39,6 +39,7 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
+import Foundation
 import LabGL
 import simd
 
@@ -74,6 +75,10 @@ public extension Akari
       public var sunHeight: Float
       public var zUp: Bool
       public var iblEnabled: Bool
+      /// The sun's color when `w` is 2, the procedural sky's scaled by `w` otherwise.
+      public var sunColor: SIMD4<Float>
+      /// Changes with the environment cube so the probes relight from it.
+      public var environment: UInt64
       /// Per point light, position + intensity then color + radius.
       public var lights: [SIMD4<Float>]
     }
@@ -98,7 +103,7 @@ public extension Akari
 
       var cell: SIMD3<Float>
       {
-        (gridMax - gridMin) / SIMD3<Float>(simd_max(dims &- 1, SIMD3(repeating: 1)))
+        (gridMax - gridMin) / SIMD3<Float>(Akari.Math.max(dims &- 1, SIMD3(repeating: 1)))
       }
 
       /// How far along the normal a shading point steps before picking its probes.
@@ -154,6 +159,14 @@ public extension Akari
     public private(set) var sphereInfo: GLuint = 0
     /// Set once every probe has been captured and lit.
     public private(set) var isReady = false
+    /// Authored probes are in view, set each frame, true until the first frame says otherwise.
+    public var inView = true
+    /// Probes in view still baking, which a final render waits out.
+    public var isBaking: Bool
+    {
+      inView && !isReady
+    }
+
     /// Cube faces the current layout needs captured, zero before the first layout.
     public var captureTotal: Int
     {
@@ -178,6 +191,9 @@ public extension Akari
     var sh: [GLuint] = [0, 0]
     var shIndex = 0
     var amplification = Akari.ShadowAtlas.Amplification()
+    /// One projection per amplified view, read by the combined instanced
+    /// entry point whose buffer(1) carries the instance transforms.
+    var captureViewXf: GLuint = 0
     var near: Float = 1e-3
 
     private var resourcesReady = false
@@ -205,7 +221,7 @@ public extension Akari
                 overrides: [Override],
                 overrideRevision: UInt64,
                 upAxis: Int,
-                materials: (material: GLuint, color: GLuint, emissive: GLuint),
+                materials: (material: GLuint, color: GLuint, emissive: GLuint, constants: GLuint),
                 environment: GLuint,
                 lighting: Lighting,
                 settings: LightProbeSettings) -> Bool
@@ -224,8 +240,7 @@ public extension Akari
       if key != layoutKey
       {
         layoutKey = key
-        let next = Self.place(bounds: sceneBounds,
-                              overrides: overrides,
+        let next = Self.place(overrides: overrides,
                               resolution: settings.volumeResolution,
                               upAxis: upAxis)
         if next != layout
@@ -327,82 +342,48 @@ public extension Akari
       (SIMD3(0, 0, -1), SIMD3(0, 1, 0))
     ]
 
-    /// Auto places the volume grid over the scene and a few
-    /// sphere probes across it, authored probes replace either.
-    static func place(bounds: (min: SIMD3<Float>, max: SIMD3<Float>),
-                      overrides: [Override],
+    /// The authored volume's grid, and the authored sphere probes.
+    static func place(overrides: [Override],
                       resolution: Int,
-                      upAxis: Int) -> Layout
+                      upAxis _: Int) -> Layout
     {
       var layout = Layout()
 
       let volumes = overrides.filter { !$0.isSphere }
-      var lo = bounds.min
-      var hi = bounds.max
-      var requested = SIMD3<Int32>(repeating: 0)
       if let first = volumes.first
       {
-        lo = volumes.reduce(first.min) { simd_min($0, $1.min) }
-        hi = volumes.reduce(first.max) { simd_max($0, $1.max) }
-        requested = first.resolution
-      }
-      else
-      {
-        let pad = (hi - lo) * 0.02 + 1e-3
-        lo -= pad
-        hi += pad
-      }
-      let extent = simd_max(hi - lo, SIMD3(repeating: 1e-3))
-
-      var dims: [Int]
-      if requested.x > 0, requested.y > 0, requested.z > 0
-      {
-        dims = [Int(requested.x), Int(requested.y), Int(requested.z)].map { min(max($0, 2), 32) }
-      }
-      else
-      {
-        var spacing = extent.max() / Float(max(resolution - 1, 1))
-        repeat
+        let lo = volumes.reduce(first.min) { Akari.Math.min($0, $1.min) }
+        let hi = volumes.reduce(first.max) { Akari.Math.max($0, $1.max) }
+        let requested = first.resolution
+        let extent = Akari.Math.max(hi - lo, SIMD3(repeating: 1e-3))
+        var dims: [Int]
+        if requested.x > 0, requested.y > 0, requested.z > 0
         {
-          dims = (0 ..< 3).map { min(max(Int((extent[$0] / spacing).rounded(.up)) + 1, 2), 32) }
-          spacing *= 1.1
+          dims = [Int(requested.x), Int(requested.y), Int(requested.z)].map { min(max($0, 2), 32) }
         }
-        while dims.reduce(1, *) > maxVolumeProbes
+        else
+        {
+          var spacing = extent.max() / Float(max(resolution - 1, 1))
+          repeat
+          {
+            dims = (0 ..< 3).map { min(max(Int((extent[$0] / spacing).rounded(.up)) + 1, 2), 32) }
+            spacing *= 1.1
+          }
+          while dims.reduce(1, *) > maxVolumeProbes
+        }
+        while dims.reduce(1, *) > maxVolumeProbes, let k = dims.indices.max(by: { dims[$0] < dims[$1] })
+        {
+          dims[k] -= 1
+        }
+        layout.gridMin = lo
+        layout.gridMax = hi
+        layout.dims = SIMD3(Int32(dims[0]), Int32(dims[1]), Int32(dims[2]))
       }
-      while dims.reduce(1, *) > maxVolumeProbes, let k = dims.indices.max(by: { dims[$0] < dims[$1] })
-      {
-        dims[k] -= 1
-      }
-      layout.gridMin = lo
-      layout.gridMax = hi
-      layout.dims = SIMD3(Int32(dims[0]), Int32(dims[1]), Int32(dims[2]))
 
-      var spheres = overrides.filter(\.isSphere).map
+      let spheres = overrides.filter(\.isSphere).map
       { probe -> SIMD4<Float> in
         let center = (probe.min + probe.max) * 0.5
         return SIMD4(center, ((probe.max - probe.min) * 0.5).max())
-      }
-      if spheres.isEmpty
-      {
-        let size = simd_max(bounds.max - bounds.min, SIMD3(repeating: 1e-3))
-        let axes = [0, 1, 2].filter { $0 != upAxis }
-        let longest = max(size[axes[0]], size[axes[1]])
-        let counts = axes.map { size[$0] > longest * 0.5 ? 2 : 1 }
-        var cell = size
-        cell[axes[0]] /= Float(counts[0])
-        cell[axes[1]] /= Float(counts[1])
-        let radius = (cell * cell).sum().squareRoot() * 0.6
-        for i in 0 ..< counts[0]
-        {
-          for j in 0 ..< counts[1]
-          {
-            var center = bounds.min
-            center[axes[0]] += (Float(i) + 0.5) * cell[axes[0]]
-            center[axes[1]] += (Float(j) + 0.5) * cell[axes[1]]
-            center[upAxis] += 0.35 * size[upAxis]
-            spheres.append(SIMD4(center, radius))
-          }
-        }
       }
       layout.spheres = Array(spheres.sorted { $0.w > $1.w }.prefix(maxSphereProbes))
 
@@ -423,6 +404,7 @@ public extension Akari
       {
         gl.deleteComputeShader(kernel)
       }
+      if captureViewXf != 0 { gl.deleteBuffer(captureViewXf) }
       if captureShader != 0 { gl.deleteShader(captureShader) }
       if amplification.views != 0
       {
@@ -441,6 +423,7 @@ public extension Akari
       sphereAtlas = 0; sphereInfo = 0
       kernels = Kernels()
       captureShader = 0
+      captureViewXf = 0
       amplification = Akari.ShadowAtlas.Amplification()
       resourcesReady = false
       isReady = false
@@ -485,9 +468,13 @@ public extension Akari
 
       amplification.views = gl.genInstanceTransforms(count: GLsizei(Akari.ShadowAtlas.maxAmplificationViews))
       amplification.viewports = gl.genInstanceViewports(count: GLsizei(Akari.ShadowAtlas.maxAmplificationViews))
+      captureViewXf = gl.createBuffer(usage: LGL_BUFFER_VERTEX | LGL_BUFFER_MAP_WRITE,
+                                      sizeBytes: GLsizei(Akari.ShadowAtlas.maxAmplificationViews
+                                        * 16 * MemoryLayout<Float>.stride))
       guard
         amplification.views != 0,
-        amplification.viewports != 0
+        amplification.viewports != 0,
+        captureViewXf != 0
       else { return fail("amplification handle allocation failed") }
 
       captureTextures = (0 ..< 3).map
@@ -549,7 +536,7 @@ public extension Akari
       {
         for count in 1 ... maxCount
         {
-          for flags in [0, LGL_SHADER_VARIANT_INDIRECT]
+          for flags in [0, LGL_SHADER_VARIANT_INDIRECT, LGL_SHADER_VARIANT_INSTANCED]
           {
             gl.precompileShaderVariant(captureShader,
                                        renderTarget: target,

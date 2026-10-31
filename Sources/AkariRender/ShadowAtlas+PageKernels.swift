@@ -159,6 +159,7 @@ extension Akari.ShadowAtlas
           }
           if (tile.is_used)
           {
+            atomicAdd(pages_info_buf[6], 1);
             if (tile.is_cached) { page_cache_remove(tile); }
             if (!tile.is_allocated) { atomicAdd(pages_info_buf[1], 1); }
           }
@@ -274,6 +275,9 @@ extension Akari.ShadowAtlas
       pages_info_buf[3] = int(src);
       pages_info_buf[4] = int(end);
       pages_info_buf[1] = 0;
+      pages_info_buf[5] = max(additional_pages, 0);
+      pages_info_buf[7] = pages_info_buf[6];
+      pages_info_buf[6] = 0;
       if (uint(pages_info_buf[3]) > uint(MAX_PAGE))
       {
         pages_info_buf[2] -= MAX_PAGE;
@@ -399,6 +403,7 @@ extension Akari.ShadowAtlas
           }
           if (tile.is_used)
           {
+            atomic_fetch_add_explicit(&pages_info_buf[6], 1, memory_order_relaxed);
             if (tile.is_cached) { page_cache_remove(tile, pages_cached_buf); }
             if (!tile.is_allocated) { atomic_fetch_add_explicit(&pages_info_buf[1], 1, memory_order_relaxed); }
           }
@@ -528,6 +533,10 @@ extension Akari.ShadowAtlas
       atomic_store_explicit(&pages_info_buf[3], int(src), memory_order_relaxed);
       atomic_store_explicit(&pages_info_buf[4], int(end), memory_order_relaxed);
       atomic_store_explicit(&pages_info_buf[1], 0, memory_order_relaxed);
+      atomic_store_explicit(&pages_info_buf[5], max(additional_pages, 0), memory_order_relaxed);
+      atomic_store_explicit(&pages_info_buf[7], atomic_load_explicit(&pages_info_buf[6], memory_order_relaxed),
+                            memory_order_relaxed);
+      atomic_store_explicit(&pages_info_buf[6], 0, memory_order_relaxed);
       if (uint(src) > uint(MAX_PAGE))
       {
         atomic_fetch_add_explicit(&pages_info_buf[2], -int(MAX_PAGE), memory_order_relaxed);

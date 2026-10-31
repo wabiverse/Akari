@@ -167,8 +167,6 @@ extension Akari.ShadowAtlas
     private var lastFingerprint: [UInt64?] = Array(repeating: nil, count: maxPunctualTilemaps)
     /// Punctual only dirty bits.
     var pendingDirty: Int32 = 0
-    /// Last fit invalidated a cube face.
-    var invalidated = false
 
     mutating func update(_ punctualFaces: [[PunctualFace]])
     {
@@ -199,7 +197,6 @@ extension Akari.ShadowAtlas
     var lightDirection = SIMD3<Float>(0, 0, 1)
     var cameraWorld = SIMD3<Float>.zero
     var sunChanged = false
-    var forcePunctual = false
     var isCurrent = false
     var castersMoved = false
     var redraw = CasterRedraw.none

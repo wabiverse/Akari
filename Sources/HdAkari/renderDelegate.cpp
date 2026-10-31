@@ -66,9 +66,14 @@
 #include "HdAkari/renderPass.h"
 #include "HdAkari/renderBuffer.h"
 #include "HdAkari/mesh.h"
+#include "HdAkari/instancer.h"
 #include "HdAkari/sphere.h"
+#include "HdAkari/implicit.h"
+#include "HdAkari/volume.h"
+#include "HdAkari/basisCurves.h"
 #include "HdAkari/cube.h"
 #include "HdAkari/light.h"
+#include "HdAkari/material.h"
 #include "HdAkari/scene.h"
 #include "HdAkari/textureAtlas.h"
 #include "HdAkari/akariBridge.h"
@@ -84,6 +89,11 @@ const TfTokenVector HdAkariRenderDelegate::SUPPORTED_RPRIM_TYPES = {
   HdPrimTypeTokens->mesh,
   HdPrimTypeTokens->sphere,
   HdPrimTypeTokens->cube,
+  HdPrimTypeTokens->cylinder,
+  HdPrimTypeTokens->cone,
+  HdPrimTypeTokens->capsule,
+  HdPrimTypeTokens->volume,
+  HdPrimTypeTokens->basisCurves,
 };
 
 const TfTokenVector HdAkariRenderDelegate::SUPPORTED_SPRIM_TYPES = {
@@ -94,6 +104,7 @@ const TfTokenVector HdAkariRenderDelegate::SUPPORTED_SPRIM_TYPES = {
 
 const TfTokenVector HdAkariRenderDelegate::SUPPORTED_BPRIM_TYPES = {
   HdPrimTypeTokens->renderBuffer,
+  TfToken("openvdbAsset"),
 };
 
 namespace {
@@ -195,6 +206,11 @@ HdAkariRenderDelegate::GetSupportedBprimTypes() const
 }
 
 HdResourceRegistrySharedPtr HdAkariRenderDelegate::GetResourceRegistry() const { return _resourceRegistry; }
+
+TfTokenVector HdAkariRenderDelegate::GetMaterialRenderContexts() const
+{
+  return {TfToken(""), TfToken("glslfx")};
+}
 HdRenderParam *HdAkariRenderDelegate::GetRenderParam() const { return _renderParam.get(); }
 
 HdRenderPassSharedPtr
@@ -208,8 +224,7 @@ HdInstancer *
 HdAkariRenderDelegate::CreateInstancer(HdSceneDelegate *delegate,
                                        SdfPath const &id)
 {
-  // todo: support instancing.
-  return new HdInstancer(delegate, id);
+  return new HdAkariInstancer(delegate, id);
 }
 
 void HdAkariRenderDelegate::DestroyInstancer(HdInstancer *instancer) { delete instancer; }
@@ -225,7 +240,12 @@ HdAkariRenderDelegate::CreateRprim(TfToken const &typeId, SdfPath const &rprimId
   static const std::unordered_map<TfToken, RprimFactoryFunc, TfToken::HashFunctor> factoryMap = {
     { TfToken("mesh"),   [](const SdfPath& id) -> HdRprim* { return new HdAkariMesh(id);   } },
     { TfToken("sphere"), [](const SdfPath& id) -> HdRprim* { return new HdAkariSphere(id); } },
-    { TfToken("cube"),   [](const SdfPath& id) -> HdRprim* { return new HdAkariCube(id);   } }
+    { TfToken("cube"),   [](const SdfPath& id) -> HdRprim* { return new HdAkariCube(id);   } },
+    { TfToken("cylinder"), [](const SdfPath& id) -> HdRprim* { return new HdAkariImplicit(id, HdPrimTypeTokens->cylinder); } },
+    { TfToken("cone"),   [](const SdfPath& id) -> HdRprim* { return new HdAkariImplicit(id, HdPrimTypeTokens->cone); } },
+    { TfToken("capsule"), [](const SdfPath& id) -> HdRprim* { return new HdAkariImplicit(id, HdPrimTypeTokens->capsule); } },
+    { TfToken("volume"), [](const SdfPath& id) -> HdRprim* { return new HdAkariVolume(id); } },
+    { TfToken("basisCurves"), [](const SdfPath& id) -> HdRprim* { return new HdAkariBasisCurves(id); } }
   };
   
   const TfToken lookupToken(className);
@@ -253,7 +273,10 @@ HdAkariRenderDelegate::CreateSprim(TfToken const &typeId, SdfPath const &sprimId
 
   if (className && (strcmp(className, "sphereLight") == 0 ||
                     strcmp(className, "cylinderLight") == 0 ||
-                    strcmp(className, "diskLight") == 0)) {
+                    strcmp(className, "diskLight") == 0 ||
+                    strcmp(className, "rectLight") == 0 ||
+                    strcmp(className, "domeLight") == 0 ||
+                    strcmp(className, "distantLight") == 0)) {
     return new HdAkariLight(sprimId, typeId);
   }
   if (className && strcmp(className, "camera") == 0) {
@@ -262,7 +285,10 @@ HdAkariRenderDelegate::CreateSprim(TfToken const &typeId, SdfPath const &sprimId
   if (className && strcmp(className, "extComputation") == 0) {
     return new HdExtComputation(sprimId);
   }
-  // materials are accepted (so binding works) but not yet consumed.
+  if (className && strcmp(className, "material") == 0) {
+    return new HdAkariMaterial(sprimId);
+  }
+  // anything else is accepted so binding works, but not consumed.
   return new HdCamera(sprimId);
 }
 
@@ -275,7 +301,10 @@ HdAkariRenderDelegate::CreateFallbackSprim(TfToken const &typeId)
 
   if (className && (strcmp(className, "sphereLight") == 0 ||
                     strcmp(className, "cylinderLight") == 0 ||
-                    strcmp(className, "diskLight") == 0)) {
+                    strcmp(className, "diskLight") == 0 ||
+                    strcmp(className, "rectLight") == 0 ||
+                    strcmp(className, "domeLight") == 0 ||
+                    strcmp(className, "distantLight") == 0)) {
     return new HdAkariLight(SdfPath::EmptyPath(), typeId);
   }
   if (className && strcmp(className, "camera") == 0) {
@@ -283,6 +312,9 @@ HdAkariRenderDelegate::CreateFallbackSprim(TfToken const &typeId)
   }
   if (className && strcmp(className, "extComputation") == 0) {
     return new HdExtComputation(SdfPath::EmptyPath());
+  }
+  if (className && strcmp(className, "material") == 0) {
+    return new HdAkariMaterial(SdfPath::EmptyPath());
   }
   return new HdCamera(SdfPath::EmptyPath());
 }
@@ -299,6 +331,9 @@ HdAkariRenderDelegate::CreateBprim(TfToken const &typeId, SdfPath const &bprimId
   if (className && strcmp(className, "renderBuffer") == 0) {
     return new HdAkariRenderBuffer(bprimId);
   }
+  if (className && strcmp(className, "openvdbAsset") == 0) {
+    return new HdAkariField(bprimId);
+  }
   return nullptr;
 }
 
@@ -312,6 +347,9 @@ HdAkariRenderDelegate::CreateFallbackBprim(TfToken const &typeId)
   if (className && strcmp(className, "renderBuffer") == 0) {
     return new HdAkariRenderBuffer(SdfPath::EmptyPath());
   }
+  if (className && strcmp(className, "openvdbAsset") == 0) {
+    return new HdAkariField(SdfPath::EmptyPath());
+  }
   return nullptr;
 }
 
@@ -320,7 +358,8 @@ void HdAkariRenderDelegate::DestroyBprim(HdBprim *bPrim) { delete bPrim; }
 void
 HdAkariRenderDelegate::CommitResources(HdChangeTracker * /*tracker*/)
 {
-  // resource upload is driven by the engine per frame, nothing to flush yet.
+  // resource upload is driven by the engine per frame, the bins only age.
+  HdAkariPruneArrayBins();
 }
 
 HdAovDescriptor

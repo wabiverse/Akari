@@ -39,6 +39,7 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
+import HdAkari
 import LabFX
 import LabGL
 
@@ -46,6 +47,13 @@ extension Akari.LabFXEngine
 {
   struct Volumetrics
   {
+    var stage: Pixar.HdAkariStageVolume?
+    /// The fog disturbers this frame, eight floats each (see `HdAkariFogDisturbersAt`).
+    var disturbers: [Float] = []
+    var disturberTexture: GLuint = 0
+    var emptySim: GLuint = 0
+    var simRequest: (() -> Void)?
+    var simPassActive = true
     var thisFrame = false
     var passesActive = true
     /// This frame's froxel grid, for the shadow pass volume usage tagging.
@@ -81,8 +89,16 @@ extension Akari.LabFXEngine
   /// - Parameters:
   ///   - camera: the (jittered) camera the resolve's `u_invProj` inverts.
   ///   - volume: density, phase anisotropy, reach and self shadowing of the fog.
-  public func setVolumetrics(camera: Akari.Camera, volume: VolumeSettings)
+  public func setVolumetrics(camera: Akari.Camera, volume settings: VolumeSettings)
   {
+    volumetrics.simRequest?()
+    var volume = settings
+    if let stage = usdVolume
+    {
+      if stage.hasDensity { volume.density = Float(stage.density) }
+      if stage.hasAnisotropy { volume.anisotropy = Float(stage.anisotropy) }
+      if stage.hasMaxDistance { volume.maxDistance = Float(stage.maxDistance) }
+    }
     guard camera.projection[2, 3] < -0.5 else { return }
     let a = camera.projection[2, 2]
     let b = camera.projection[3, 2]
@@ -97,8 +113,11 @@ extension Akari.LabFXEngine
     let grid = SIMD2<Float>(Float(max(halfWidth * 2 / tileDivisor, 1)),
                             Float(max(halfHeight * 2 / tileDivisor, 1)))
 
-    let density = max(volume.density, 0) / camera.world(meters: 1)
-    guard density > 0 else { return }
+    let unitsPerMeter = camera.world(meters: 1)
+    let density = max(volume.density, 0) / unitsPerMeter
+    let haze = Float(max(usdVolume?.hazeDensity ?? 0, 0)) / unitsPerMeter
+    guard density > 0 || haze > 0 else { return }
+    applyFogShape(unitsPerMeter: unitsPerMeter, haze: haze)
 
     let gridSize = SIMD2<Int>(Int(grid.x), Int(grid.y))
     let gbufferPosition = runtime.texture("gbuffer", named: "position")
@@ -132,6 +151,98 @@ extension Akari.LabFXEngine
                                                           inverseProjection: camera.projection.inverse(),
                                                           depthTexture: froxelVolume.depthTexture,
                                                           sunLevelBias: sunLevelBias)
+  }
+
+  /// The fog's noise, flow, ground layer and disturbers for the scatter pass, all in world units.
+  private func applyFogShape(unitsPerMeter: Float, haze: Float)
+  {
+    let stage = usdVolume
+    let amount = Float(min(max(stage?.noiseAmount ?? 0, 0), 1))
+    let scale = Float(max(stage?.noiseScale ?? 1.5, 0.01)) * unitsPerMeter
+    let octaves = Float(min(max(stage?.noiseOctaves ?? 4, 1), 6))
+    let swirl = Float(min(max(stage?.swirl ?? 0, 0), 1))
+    let wind = SIMD3(Float(stage?.windX ?? 0), Float(stage?.windY ?? 0), Float(stage?.windZ ?? 0)) * unitsPerMeter
+    let falloff = Float(max(stage?.heightFalloff ?? 0, 0)) * unitsPerMeter
+    let count = min(volumetrics.disturbers.count / 8, Self.maxFogDisturbers)
+    setVector("u_volumeNoise", SIMD4(amount, scale, octaves, swirl))
+    setVector("u_volumeFlow", SIMD4(wind, Float(stage?.seconds ?? 0)))
+    setVector("u_volumeLayer", SIMD4(Float(stage?.floorHeight ?? 0), falloff, haze, Float(count)))
+    setVector("u_volumeLook", SIMD4(Float(max(stage?.ambient ?? 1, 0)), Float(max(stage?.sunScatter ?? 1, 0)), 0, 0))
+    fogSim.computeVisibility(lights: Array(litPointLights.prefix(4)))
+
+    if volumetrics.disturberTexture == 0
+    {
+      gl.genTextures(count: 1, textures: &volumetrics.disturberTexture)
+      gl.bindTexture(target: GL_TEXTURE_2D, texture: volumetrics.disturberTexture)
+      gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_NEAREST))
+      gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GLint(GL_NEAREST))
+      gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA32F,
+                    width: 2, height: GLsizei(Self.maxFogDisturbers), border: 0,
+                    format: GL_RGBA, type: GL_FLOAT, pixels: nil)
+    }
+    if count > 0
+    {
+      var texels = Array(volumetrics.disturbers.prefix(count * 8))
+      // radii arrive in meters.
+      for i in 0 ..< count
+      {
+        texels[i * 8 + 3] *= unitsPerMeter
+      }
+      gl.bindTexture(target: GL_TEXTURE_2D, texture: volumetrics.disturberTexture)
+      gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: 0, width: 2, height: GLsizei(count),
+                       format: GL_RGBA, type: GL_FLOAT, pixels: texels)
+    }
+    setSampler("u_fogDisturbers", volumetrics.disturberTexture)
+
+    var simTexture = fogSim.isActive ? fogSim.texture : 0
+    if simTexture == 0
+    {
+      if volumetrics.emptySim == 0
+      {
+        gl.genTextures(count: 1, textures: &volumetrics.emptySim)
+        gl.bindTexture(target: GLenum(GL_TEXTURE_3D), texture: volumetrics.emptySim)
+        gl.texImage3D(target: GLenum(GL_TEXTURE_3D), level: 0, internalFormat: GLint(GL_R16F),
+                      width: 1, height: 1, depth: 1, border: 0, format: GLenum(GL_RED), type: GLenum(GL_HALF_FLOAT),
+                      pixels: [UInt16(0)])
+      }
+      simTexture = volumetrics.emptySim
+    }
+    runtime.setUniform("u_fogSim", type: GLenum(GL_SAMPLER_3D), data: &simTexture)
+    var simVelocity = fogSim.isActive && fogSim.velocityTexture != 0 ? fogSim.velocityTexture : volumetrics.emptySim
+    runtime.setUniform("u_fogSimVelocity", type: GLenum(GL_SAMPLER_3D), data: &simVelocity)
+    var simVisibility = fogSim.isActive && fogSim.visibilityTexture != 0 ? fogSim.visibilityTexture : volumetrics.emptySim
+    runtime.setUniform("u_fogSimVisibility", type: GLenum(GL_SAMPLER_3D), data: &simVisibility)
+    setVector("u_fogSimMin", SIMD4(fogSim.boundsMin, fogSim.isActive ? 1 : 0))
+    setVector("u_fogSimMax", SIMD4(fogSim.boundsMax, fogSim.densityCellSize))
+    if fogSim.isActive != volumetrics.simPassActive
+    {
+      runtime.setPassActive("fog sim march", active: fogSim.isActive)
+      runtime.setPassActive("fog sim composite", active: fogSim.isActive)
+      volumetrics.simPassActive = fogSim.isActive
+    }
+  }
+
+  static let maxFogDisturbers = 8
+
+  /// Brings the fog simulation to this frame, run inside the next render once the GPU is up.
+  public var fogSimRequest: (() -> Void)?
+  {
+    get { volumetrics.simRequest }
+    set { volumetrics.simRequest = newValue }
+  }
+
+  /// The fog disturbers the stage authors this frame, eight floats each.
+  public var usdFogDisturbers: [Float]
+  {
+    get { volumetrics.disturbers }
+    set { volumetrics.disturbers = newValue }
+  }
+
+  /// The fog the stage's `/World/RenderSettings` authors this frame, over the render settings own.
+  public var usdVolume: Pixar.HdAkariStageVolume?
+  {
+    get { volumetrics.stage }
+    set { volumetrics.stage = newValue }
   }
 
   func attachVolumetrics()

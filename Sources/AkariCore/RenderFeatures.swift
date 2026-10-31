@@ -73,13 +73,15 @@ public struct RenderFeatures: OptionSet, Sendable
   public static let fireflies = RenderFeatures(rawValue: 1 << 12)
   /// Moves the scene's render resolution with whatever the GPU hardware can support.
   public static let dynamicResolution = RenderFeatures(rawValue: 1 << 13)
+  /// Motion blur over the camera's `shutter:open` / `shutter:close`.
+  public static let motionBlur = RenderFeatures(rawValue: 1 << 14)
 
   /// The complete realtime fidelity stack (screen space, no hardware RT).
   public static let fullFidelity: RenderFeatures = [
     .imageBasedLighting, .lightProbes, .shadowMaps,
     .screenSpaceReflections, .screenSpaceGI,
     .temporalAA, .bloom, .depthOfField,
-    .dynamicResolution
+    .dynamicResolution, .motionBlur
   ]
 
   /// A leaner set tuned to high fps in an interactive viewport.

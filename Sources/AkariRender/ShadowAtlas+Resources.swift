@@ -302,7 +302,7 @@ extension Akari.ShadowAtlas
   {
     for count in 1 ... Self.maxAmplificationViews
     {
-      for flags in [0, LGL_SHADER_VARIANT_INDIRECT]
+      for flags in [0, LGL_SHADER_VARIANT_INDIRECT, LGL_SHADER_VARIANT_INSTANCED]
       {
         gl.precompileShaderVariant(depthShader,
                                    renderTarget: atlasTarget,
@@ -340,7 +340,7 @@ extension Akari.ShadowAtlas
     let usage = LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE | LGL_BUFFER_MAP_WRITE
     buffers.tiles = makeBuffer(usage, UInt32.self, count: Self.maxTiles)
     buffers.pagesFree = makeBuffer(usage, UInt32.self, count: Self.maxPage)
-    buffers.pagesInfo = makeBuffer(usage, Int32.self, count: 5)
+    buffers.pagesInfo = makeBuffer(usage, Int32.self, count: 8)
     buffers.pagesCached = makeBuffer(usage, UInt32.self, count: Self.maxPage * 2)
     guard
       buffers.tiles != 0,
@@ -369,6 +369,9 @@ extension Akari.ShadowAtlas
       ptr[2] = 0
       ptr[3] = 0
       ptr[4] = 0
+      ptr[5] = 0
+      ptr[6] = 0
+      ptr[7] = 0
     }
     withMappedBuffer(buffers.pagesCached, as: UInt32.self)
     {

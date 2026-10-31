@@ -1,0 +1,236 @@
+float volumeHG(float c, float g)
+{
+  float d = 1.0 + g * g - 2.0 * g * c;
+  return (1.0 - g * g) / (4.0 * 3.14159265 * d * sqrt(max(d, 1e-6)));
+}
+
+float volumePhase(float c, float g)
+{
+  return mix(volumeHG(c, -0.3 * g), volumeHG(c, g), 0.85);
+}
+
+/// Sigg and Hadwiger's tricubic B-spline lookup from eight trilinear taps, so a magnified grid
+/// reads as smooth shapes instead of the terraces trilinear leaves.
+float volumeCubic(texture3d<float> density, sampler smp, float3 uvw)
+{
+  float3 size = float3(density.get_width(), density.get_height(), density.get_depth());
+  float3 coord = uvw * size - 0.5;
+  float3 index = floor(coord);
+  float3 f = coord - index;
+  float3 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+  float3 w1 = 2.0 / 3.0 - 0.5 * f * f * (2.0 - f);
+  float3 w3 = f * f * f / 6.0;
+  float3 w2 = 1.0 - w0 - w1 - w3;
+  float3 g0 = w0 + w1, g1 = w2 + w3;
+  float3 h0 = (index - 0.5 + w1 / g0) / size;
+  float3 h1 = (index + 1.5 + w3 / g1) / size;
+  float a = density.sample(smp, float3(h0.x, h0.y, h0.z), level(0.0)).r;
+  float b = density.sample(smp, float3(h1.x, h0.y, h0.z), level(0.0)).r;
+  float c = density.sample(smp, float3(h0.x, h1.y, h0.z), level(0.0)).r;
+  float d = density.sample(smp, float3(h1.x, h1.y, h0.z), level(0.0)).r;
+  float e = density.sample(smp, float3(h0.x, h0.y, h1.z), level(0.0)).r;
+  float f2 = density.sample(smp, float3(h1.x, h0.y, h1.z), level(0.0)).r;
+  float g = density.sample(smp, float3(h0.x, h1.y, h1.z), level(0.0)).r;
+  float h = density.sample(smp, float3(h1.x, h1.y, h1.z), level(0.0)).r;
+  float z0 = g0.y * (g0.x * a + g1.x * b) + g1.y * (g0.x * c + g1.x * d);
+  float z1 = g0.y * (g0.x * e + g1.x * f2) + g1.y * (g0.x * g + g1.x * h);
+  return g0.z * z0 + g1.z * z1;
+}
+
+/// An integer hash of a lattice point to [0, 1), exact at any distance from the origin.
+float volumeHash(int3 c)
+{
+  uint3 v = uint3(c) * uint3(1597334673u, 3812015801u, 2798796415u);
+  uint h = (v.x ^ v.y ^ v.z) * 1597334673u;
+  h ^= h >> 16;
+  h *= 2246822519u;
+  h ^= h >> 13;
+  return float(h) * (1.0 / 4294967296.0);
+}
+
+float volumeValueNoise(float3 x)
+{
+  float3 i = floor(x), f = x - i;
+  f = f * f * (3.0 - 2.0 * f);
+  int3 c = int3(i);
+  float a = mix(volumeHash(c), volumeHash(c + int3(1, 0, 0)), f.x);
+  float b = mix(volumeHash(c + int3(0, 1, 0)), volumeHash(c + int3(1, 1, 0)), f.x);
+  float d = mix(volumeHash(c + int3(0, 0, 1)), volumeHash(c + int3(1, 0, 1)), f.x);
+  float e = mix(volumeHash(c + int3(0, 1, 1)), volumeHash(c + int3(1, 1, 1)), f.x);
+  return mix(mix(a, b, f.y), mix(d, e, f.y), f.z);
+}
+
+/// The cloud's density at `p` (texture space): the smooth grid, with its thin edges eroded by billowy
+/// noise a few times finer than a voxel, so a close up has structure the grid doesn't hold.
+float volumeSample(texture3d<float> density, sampler smp, float3 p, float voxels)
+{
+  float d = volumeCubic(density, smp, p);
+  if (d <= 1e-5) return 0.0;
+  float3 q = p * voxels;
+  float n = 0.5 * volumeValueNoise(q * 2.0) + 0.3 * volumeValueNoise(q * 5.0 + 17.0) + 0.2 * volumeValueNoise(q * 11.0 + 41.0);
+  n = 1.0 - abs(2.0 * n - 1.0);
+  float edge = 1.0 - smoothstep(0.0, 0.25, d);
+  return max(d - edge * n * 0.12, 0.0);
+}
+
+/// Where the ray `o + d t` (texture space) is inside the unit box, t0 > t1 when it misses.
+float2 volumeBox(float3 o, float3 d)
+{
+  float3 inv = 1.0 / select(d, float3(1e-9), abs(d) < 1e-9);
+  float3 a = -o * inv, b = (1.0 - o) * inv;
+  float3 lo = min(a, b), hi = max(a, b);
+  return float2(max(max(lo.x, lo.y), lo.z), min(min(hi.x, hi.y), hi.z));
+}
+
+/// The extinction integrated from `world` along `dir` to the edge of the volume.
+float volumeOpticalDepth(texture3d<float> density, sampler smp, float4x4 textureFromWorld, float3 world, float3 dir,
+                         float4 params, int steps)
+{
+  float3 o = (textureFromWorld * float4(world, 1.0)).xyz;
+  float3 d = (textureFromWorld * float4(dir, 0.0)).xyz;
+  float2 t = volumeBox(o, d);
+  float t1 = max(t.y, 0.0);
+  float dt = t1 / float(steps);
+  float depth = 0.0;
+  for (int i = 0; i < steps; ++i) {
+    float3 p = o + d * (dt * (float(i) + 0.5));
+    depth += density.sample(smp, p, level(0.0)).r;
+  }
+  return depth * dt * params.x;
+}
+
+/// Optical depth toward the sun (r) and up (g) at `uvw`, from the atlas of 16x8 slices of 128x128.
+float2 volumeShadowDepth(texture2d<float> atlas, sampler smp, float3 uvw)
+{
+  float z = clamp(uvw.z * 128.0 - 0.5, 0.0, 127.0);
+  int z0 = int(z);
+  int z1 = min(z0 + 1, 127);
+  float2 xy = clamp(saturate(uvw.xy) * 128.0, float2(0.5), float2(127.5));
+  float2 a = (float2(float(z0 % 16), float(z0 / 16)) * 128.0 + xy) / float2(2048.0, 1024.0);
+  float2 b = (float2(float(z1 % 16), float(z1 / 16)) * 128.0 + xy) / float2(2048.0, 1024.0);
+  return mix(atlas.sample(smp, a, level(0.0)).rg, atlas.sample(smp, b, level(0.0)).rg, z - float(z0));
+}
+
+/// The extinction from `p` toward `q` (texture space), `steps` taps, for a light inside the volume.
+float volumeDepthTo(texture3d<float> density, sampler smp, float3 p, float3 q, float worldLength, int steps)
+{
+  float sum = 0.0;
+  for (int i = 0; i < steps; ++i) {
+    float3 x = mix(p, q, (float(i) + 0.5) / float(steps));
+    if (all(x >= 0.0) && all(x <= 1.0)) sum += density.sample(smp, x, level(0.0)).r;
+  }
+  return sum * worldLength / float(steps);
+}
+
+/// Wrenninge's octaves of multiple scattering for a light through optical depth `tau`: each order
+/// sees half the extinction, half the energy and a phase half as peaked.
+float volumeOctaves(float tau, float c, float g)
+{
+  float sum = 0.0, b = 1.0, a = 1.0, gk = g;
+  for (int k = 0; k < 6; ++k) {
+    sum += b * volumePhase(c, gk) * exp(-tau * a);
+    b *= 0.5; a *= 0.5; gk *= 0.5;
+  }
+  // deep in a thick cloud light diffuses rather than decays, falling off as 1 / (1 + 3/4 (1 - g) tau).
+  return sum + 0.25 / (4.0 * 3.14159265) / (1.0 + 0.75 * (1.0 - g) * tau);
+}
+
+/// Ray marches the volume from `eye` along `dir` up to `tMax` (world units), lit by the sun toward
+/// `sunDir` with octaves of multiple scattering, by the sky's irradiance from above, and by up to four
+/// point lights from `lights` (posIntensity, colorRadius rows), each through its own shadowing march.
+/// Returns the in-scattered light and the transmittance, `tFirst` the transmittance weighted depth.
+float4 volumeMarch(texture3d<float> density, sampler densitySmp, texture2d<float> shadow, sampler shadowSmp,
+                   float4x4 textureFromWorld, float3 eye, float3 dir, float tMax, float noise,
+                   float4 params, float3 albedo, float3 sunDir, float3 sun, float3 sky,
+                   texture2d<float> lights, int lightCount, thread float& tFirst)
+{
+  float3 o = (textureFromWorld * float4(eye, 1.0)).xyz;
+  float3 d = (textureFromWorld * float4(dir, 0.0)).xyz;
+  float2 t = volumeBox(o, d);
+  float t0 = max(t.x, 0.0), t1 = min(t.y, tMax);
+  tFirst = t0;
+  if (t0 >= t1) return float4(0.0, 0.0, 0.0, 1.0);
+
+  float voxels = length(d) * (t1 - t0) * params.w;
+  int steps = int(clamp(voxels, 48.0, 384.0));
+  float dt = (t1 - t0) / float(steps);
+  float c = dot(dir, sunDir);
+  float3 sunT = (textureFromWorld * float4(sunDir, 0.0)).xyz;
+  float voxel = 1.0 / (max(length(sunT), 1e-9) * params.w);
+
+  // the four lights brightest where they come closest to the ray through the volume.
+  int lit[4] = { -1, -1, -1, -1 };
+  float litScore[4] = { 0.0, 0.0, 0.0, 0.0 };
+  float3 w0 = eye + dir * t0, w1 = eye + dir * t1;
+  for (int i = 0; i < min(lightCount, 64); ++i) {
+    float4 pi = lights.read(uint2(0, i));
+    float4 cr = lights.read(uint2(1, i));
+    float power = pi.w * max(cr.x, max(cr.y, cr.z)) * cr.w * cr.w;
+    if (power <= 0.0) continue;
+    float3 seg = w1 - w0;
+    float3 near = w0 + seg * saturate(dot(pi.xyz - w0, seg) / max(dot(seg, seg), 1e-9));
+    float score = power / max(distance_squared(near, pi.xyz), cr.w * cr.w);
+    if (score < 1e-4) continue;
+    for (int k = 0; k < 4; ++k) {
+      if (score > litScore[k]) {
+        for (int m = 3; m > k; --m) { lit[m] = lit[m - 1]; litScore[m] = litScore[m - 1]; }
+        lit[k] = i;
+        litScore[k] = score;
+        break;
+      }
+    }
+  }
+  int litCount = 0;
+  while (litCount < 4 && lit[litCount] >= 0) ++litCount;
+
+  float3 L = float3(0.0);
+  float T = 1.0;
+  float weight = 0.0, depthSum = 0.0;
+  for (int i = 0; i < steps; ++i) {
+    float tt = t0 + dt * (float(i) + noise);
+    float3 p = o + d * tt;
+    // empty space costs one plain tap, the filtered lookup and the lighting only run inside the cloud.
+    if (density.sample(densitySmp, p, level(0.0)).r * params.x <= 1e-5) continue;
+    float sigma = volumeSample(density, densitySmp, p, params.w) * params.x;
+    if (sigma <= 1e-6) continue;
+    float local = 0.0, reach = 0.0;
+    for (int j = 0; j < 4; ++j) {
+      float h = voxel * pow(2.4, float(j));
+      reach += h;
+      local += density.sample(densitySmp, p + sunT * (reach - 0.5 * h), level(0.0)).r * h;
+    }
+    float3 far = p + sunT * reach;
+    float2 tau = volumeShadowDepth(shadow, shadowSmp, p);
+    float tauSun = local * params.x + (all(far >= 0.0) && all(far <= 1.0) ? volumeShadowDepth(shadow, shadowSmp, far).x : 0.0);
+    // the atlas is coarse, the fine march near the sample sets the light's edge.
+    tauSun = mix(tauSun, tau.x, 0.25);
+    float3 Ls = sun * volumeOctaves(tauSun, c, params.y);
+    float skyVis = exp(-tau.y * 0.25);
+    float3 Lsky = sky / (4.0 * 3.14159265) * mix(0.1, 1.0, skyVis);
+
+    float3 Lp = float3(0.0);
+    float3 world = eye + dir * tt;
+    for (int k = 0; k < litCount; ++k) {
+      float4 pi = lights.read(uint2(0, lit[k]));
+      float4 cr = lights.read(uint2(1, lit[k]));
+      float3 toL = pi.xyz - world;
+      float dist = length(toL);
+      float E = 3.14159265 * pi.w * cr.w * cr.w / max(dist * dist, cr.w * cr.w);
+      float tauL = volumeDepthTo(density, densitySmp, p, (textureFromWorld * float4(pi.xyz, 1.0)).xyz, dist, 8) * params.x;
+      float shown = lights.read(uint2(5, lit[k])).x > 0.5 ? 1.0
+                  : smoothstep(2.0 * cr.w, 2.0 * cr.w + max(3.0 * cr.w, 0.6), dist);
+      Lp += shown * cr.rgb * E * volumeOctaves(tauL, dot(dir, toL / max(dist, 1e-6)), params.y) * 3.0;
+    }
+
+    float3 S = albedo * sigma * (Ls + Lsky + Lp);
+    float stepT = exp(-sigma * dt);
+    L += T * S * (1.0 - stepT) / sigma;
+    float w = T * (1.0 - stepT);
+    depthSum += tt * w;
+    weight += w;
+    T *= stepT;
+    if (T < 0.003) break;
+  }
+  tFirst = weight > 1e-5 ? depthSum / weight : t0;
+  return float4(L, T);
+}

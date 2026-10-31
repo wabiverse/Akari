@@ -41,7 +41,8 @@
 import AkariCore
 import Foundation
 import HdAkari
-import OpenUSDKit
+import HydraKit
+import LabGL
 
 public extension Akari
 {
@@ -81,16 +82,34 @@ public extension Akari
       set { settingsLock.withLock { _showsSelectionOutline = newValue } }
     }
 
+    /// The sample a final render is accumulating, safe to set from any thread.
+    /// While set, frames render as final with every sample on its own jitter,
+    /// at the render sample count, at a fixed resolution, with no viewport
+    /// overlays.
+    public var finalRenderSample: Int?
+    {
+      get { settingsLock.withLock { _finalRenderSample } }
+      set { settingsLock.withLock { _finalRenderSample = newValue } }
+    }
+
+    /// The size the viewport last drew at, read on the frame queue.
+    public private(set) var viewportSize = (width: 0, height: 0)
+
     private let settingsLock = NSLock()
     private var _settings: RenderSettings
+    private var _finalRenderSample: Int?
     private var _selection: Akari.Selection?
     private var _showsSelectionOutline = true
     private var settingsPendingRebuild = false
     private var pipeline: RenderPipeline
     private var graph: [any Akari.GPU.RenderPassNode]
+    /// The features `graph` was built for, the settings' own or the stage's say over volumetrics.
+    private var graphFeatures: RenderFeatures
     private var gpu: Akari.GPU.HydraContext?
     public let labfx = Akari.LabFXEngine()
     private var frameIndex: UInt64 = 0
+    /// Viewport frames rendered so far.
+    public private(set) var viewportFrames = 0
     private var lastStatsRevision: UInt64 = 0
     private var lastCamera: (view: [Float], projection: [Float])?
 
@@ -99,6 +118,7 @@ public extension Akari
       _settings = settings
       pipeline = RenderPipeline(settings: settings)
       graph = RenderEngine.buildGraph(for: settings)
+      graphFeatures = settings.features
     }
 
     /// The passes the latest settings run, in order.
@@ -110,16 +130,23 @@ public extension Akari
     /// Rebuilds the graph if the settings changed, returning the snapshot this frame runs with.
     private func applyPendingSettings() -> RenderSettings
     {
-      let (settings, pending) = settingsLock.withLock
+      let (stored, pending) = settingsLock.withLock
       {
         defer { settingsPendingRebuild = false }
         return (_settings, settingsPendingRebuild)
       }
 
-      if pending
+      var settings = stored
+      // the stage's `/World/RenderSettings` turns the fog on or off over the settings.
+      if let stage = labfx.usdVolume, stage.hasEnabled
+      {
+        if stage.enabled { settings.features.insert(.volumetrics) } else { settings.features.remove(.volumetrics) }
+      }
+      if pending || settings.features != graphFeatures
       {
         pipeline.settings = settings
         graph = RenderEngine.buildGraph(for: settings)
+        graphFeatures = settings.features
       }
 
       return settings
@@ -150,7 +177,14 @@ public extension Akari
                             height: Int,
                             isFinalRender: Bool = false)
     {
-      let settings = applyPendingSettings()
+      var settings = applyPendingSettings()
+      let finalSample = finalRenderSample
+      let isFinalRender = isFinalRender || finalSample != nil
+      if finalSample != nil
+      {
+        settings.features.remove(.dynamicResolution)
+        settings.samples = max(settings.renderSamples, 1)
+      }
 
       if gpu?.wraps(hgi) != true
       {
@@ -163,6 +197,8 @@ public extension Akari
         height > 0
       else { return }
 
+      if !isFinalRender, width > 1, height > 1 { viewportSize = (width, height) }
+      labfx.loadsInBackground = !isFinalRender
       logSceneStats(renderParam)
 
       // detect camera motion so the TAA resolve can skip accumulation
@@ -177,12 +213,14 @@ public extension Akari
       let unjitteredCamera = Akari.Camera(view: Matrix4(view), projection: Matrix4(projection),
                                           metersPerUnit: labfx.stageMetersPerUnit)
       var camera = unjitteredCamera
+      labfx.cameraShutter = SIMD2(Float(renderParam.GetShutterOpen()), Float(renderParam.GetShutterClose()))
       labfx.updateRenderScale(settings: settings)
-      labfx.configureUpscale(settings: settings)
+      labfx.configureUpscale(settings: settings, width: width, height: height)
       labfx.taaJitter = .zero
       if settings.features.contains(.temporalAA)
       {
-        let index = frameIndex % UInt64(min(max(settings.samples, 1), 16)) + 1
+        let index = finalSample.map { UInt64($0 % settings.samples) + 1 }
+          ?? frameIndex % UInt64(min(max(settings.samples, 1), 16)) + 1
         let jitter = SIMD2(Self.halton(index, 2), Self.halton(index, 3)) - 0.5
         let renderWidth = Float(max(Int(Float(width) * labfx.renderScale), 1))
         let renderHeight = Float(max(Int(Float(height) * labfx.renderScale), 1))
@@ -217,6 +255,7 @@ public extension Akari
       }
 
       frameIndex &+= 1
+      if !isFinalRender { viewportFrames += 1 }
     }
 
     private static func halton(_ index: UInt64, _ base: UInt64) -> Float

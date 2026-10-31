@@ -40,7 +40,7 @@
 
 import AkariCore
 import Foundation
-import OpenUSDKit
+import HydraKit
 import simd
 
 public extension Akari
@@ -65,12 +65,12 @@ public extension Akari
     {
       let ptCount = points.size()
       var pointsFlat = [Float](repeating: 0, count: ptCount * 3)
-      for i in 0 ..< ptCount
+      if ptCount > 0
       {
-        let p = points[i]
-        pointsFlat[i * 3 + 0] = p[0]
-        pointsFlat[i * 3 + 1] = p[1]
-        pointsFlat[i * 3 + 2] = p[2]
+        pointsFlat.withUnsafeMutableBufferPointer
+        {
+          Pixar.HdAkariCopyPointsFlat(points, $0.baseAddress!)
+        }
       }
       return pointsFlat
     }
@@ -78,35 +78,39 @@ public extension Akari
     /// Copies USD's point/triangle/uv arrays into plain Swift arrays.
     public static func flatten(points: Pixar.VtVec3fArray,
                                tris: Pixar.VtVec3iArray,
-                               uvs: Pixar.VtVec2fArray) -> (points: [Float], tris: [Int32], uvs: [Float])
+                               uvs: Pixar.VtVec2fArray,
+                               expandsConstantUv: Bool = true) -> (points: [Float], tris: [Int32], uvs: [Float])
     {
       let ptCount = points.size()
       var pointsFlat = [Float](repeating: 0, count: ptCount * 3)
-      for i in 0 ..< ptCount
+      if ptCount > 0
       {
-        let p = points[i]
-        pointsFlat[i * 3 + 0] = p[0]
-        pointsFlat[i * 3 + 1] = p[1]
-        pointsFlat[i * 3 + 2] = p[2]
+        pointsFlat.withUnsafeMutableBufferPointer
+        {
+          Pixar.HdAkariCopyPointsFlat(points, $0.baseAddress!)
+        }
       }
 
       let triCount = tris.size()
       var trisFlat = [Int32](repeating: -1, count: triCount * 3)
-      for idx in 0 ..< triCount
+      if triCount > 0
       {
-        trisFlat[idx * 3 + 0] = tris[idx][0]
-        trisFlat[idx * 3 + 1] = tris[idx][1]
-        trisFlat[idx * 3 + 2] = tris[idx][2]
+        trisFlat.withUnsafeMutableBufferPointer
+        {
+          Pixar.HdAkariCopyTriangles(tris, $0.baseAddress!)
+        }
       }
 
-      // uvs are per corner, two floats each.
-      let corners = triCount * 3
+      // uvs are per corner, two floats each. a constant uv arrives as a single value,
+      // which keeps denser generated geometry from storing a copy per corner.
+      let corners = !expandsConstantUv && uvs.size() == 1 ? 1 : triCount * 3
       var uvsFlat = [Float](repeating: 0, count: corners * 2)
-      for i in 0 ..< min(uvs.size(), corners)
+      if corners > 0
       {
-        let uv = uvs[i]
-        uvsFlat[i * 2 + 0] = uv[0]
-        uvsFlat[i * 2 + 1] = uv[1]
+        uvsFlat.withUnsafeMutableBufferPointer
+        {
+          Pixar.HdAkariCopyUVs(uvs, $0.baseAddress!, corners)
+        }
       }
 
       return (pointsFlat, trisFlat, uvsFlat)
@@ -123,13 +127,17 @@ public extension Akari
       /// The triangles around each point, `vertexFaces[vertexFaceStart[p] ..< vertexFaceStart[p + 1]]`.
       var vertexFaceStart: [Int32]
       var vertexFaces: [Int32]
+      /// The triangles the repair turned over, empty when it turned none.
+      var flipped: [Bool]
     }
 
     public static func topology(trisFlat: [Int32], uvsFlat: [Float], pointCount: Int) -> Topology
     {
       var triIndices = trisFlat
-      var triUvs = uvsFlat.count == trisFlat.count * 2 ? uvsFlat : [Float](repeating: 0, count: trisFlat.count * 2)
-      repairWinding(&triIndices, &triUvs)
+      // two floats per corner, or one constant pair.
+      var triUvs = uvsFlat.count == trisFlat.count * 2 || uvsFlat.count == 2 && !trisFlat.isEmpty
+        ? uvsFlat : [Float](repeating: 0, count: trisFlat.count * 2)
+      let flipped = repairWinding(&triIndices, &triUvs)
 
       let triCount = triIndices.count / 3
       func valid(_ t: Int) -> Bool
@@ -161,7 +169,7 @@ public extension Akari
         }
       }
 
-      return Topology(triIndices: triIndices, triUvs: triUvs, vertexFaceStart: start, vertexFaces: faces)
+      return Topology(triIndices: triIndices, triUvs: triUvs, vertexFaceStart: start, vertexFaces: faces, flipped: flipped)
     }
 
     /// Builds the indexed triangle stream with auto smooth normals by
@@ -173,16 +181,22 @@ public extension Akari
                                  indices: inout [Int32],
                                  flipWinding: Bool = false)
     {
+      var sources: [Int32] = []
       buildMesh(pointsFlat: pointsFlat,
                 topology: topology(trisFlat: trisFlat, uvsFlat: uvsFlat, pointCount: pointsFlat.count / 3),
-                verts: &verts, indices: &indices, flipWinding: flipWinding)
+                verts: &verts, indices: &indices, sources: &sources, flipWinding: flipWinding)
     }
 
+    /// `subdivided` shades a subdivision surface's cage without hard edges.
+    /// `sources` takes each drawn triangle's own in `topology`, the sign bit
+    /// set where its second and third corners swapped places.
     public static func buildMesh(pointsFlat: [Float],
                                  topology: Topology,
                                  verts: inout [Float],
                                  indices: inout [Int32],
-                                 flipWinding: Bool = false)
+                                 sources: inout [Int32],
+                                 flipWinding: Bool = false,
+                                 subdivided: Bool = false)
     {
       let hardEdgeCos: Float = 0.8660254 // cos(30°)
 
@@ -233,10 +247,20 @@ public extension Akari
       let faceStart = topology.vertexFaceStart
       let vertexFaces = topology.vertexFaces
       var vertexIsSmooth = [Bool](repeating: true, count: ptCount)
-      for v in 0 ..< ptCount
+      // a point is still smooth when every face is within half the crease of its normal.
+      let halfCreaseCos: Float = 0.9659258 // cos(15°)
+      for v in 0 ..< ptCount where !subdivided
       {
         let faces = Int(faceStart[v]) ..< Int(faceStart[v + 1])
         guard faces.count > 1 else { continue }
+        if faces.count > 32
+        {
+          vertexIsSmooth[v] = faces.allSatisfy
+          { a in
+            !faceValid[Int(vertexFaces[a])] || dot(faceNormals[Int(vertexFaces[a])], smooth[v]) > halfCreaseCos
+          }
+          continue
+        }
         outer: for a in faces where faceValid[Int(vertexFaces[a])]
         {
           for b in (a + 1) ..< faces.upperBound where faceValid[Int(vertexFaces[b])]
@@ -262,9 +286,10 @@ public extension Akari
       {
         let p = Int(triIndices[idx * 3 + c])
         let face = vertexIsSmooth[p] ? -1 : Int32(idx)
-        let uo = (idx * 3 + c) * 2
+        let uo = triUvs.count == 2 ? 0 : (idx * 3 + c) * 2
         let uv = SIMD2<Float>(triUvs[uo], triUvs[uo + 1])
-        var slot = head[p]
+        // a face owned corner is the only one of its face at this point.
+        var slot = face < 0 ? head[p] : -1
         while slot >= 0
         {
           let o = Int(slot + base) * 8
@@ -285,6 +310,7 @@ public extension Akari
       for idx in 0 ..< triCount
       {
         guard faceValid[idx] else { continue }
+        sources.append(Int32(idx) | (flipWinding != (!topology.flipped.isEmpty && topology.flipped[idx]) ? Int32.min : 0))
         if flipWinding
         {
           emitCorner(idx, 0); emitCorner(idx, 2); emitCorner(idx, 1)
@@ -297,10 +323,10 @@ public extension Akari
     }
 
     /// Repairs mesh face winding inconsistencies.
-    private static func repairWinding(_ indices: inout [Int32], _ uvs: inout [Float])
+    private static func repairWinding(_ indices: inout [Int32], _ uvs: inout [Float]) -> [Bool]
     {
       let triCount = indices.count / 3
-      guard triCount > 1 else { return }
+      guard triCount > 1, triCount <= 2_000_000 else { return [] }
 
       func edgeKey(_ a: Int32, _ b: Int32) -> UInt64
       {
@@ -308,27 +334,43 @@ public extension Akari
         return ua < ub ? (ua << 32) | ub : (ub << 32) | ua
       }
 
-      var adjacency = [[(Int, Bool)]](repeating: [], count: triCount)
+      // flat linked lists over the triangles.
+      var adjacencyHead = [Int32](repeating: -1, count: triCount)
+      var adjacencyTri: [Int32] = []
+      var adjacencyNext: [Int32] = []
+      var adjacencySame: [Bool] = []
+      adjacencyTri.reserveCapacity(triCount * 2)
+      adjacencyNext.reserveCapacity(triCount * 2)
+      adjacencySame.reserveCapacity(triCount * 2)
 
-      var edgeFirstOwner: [UInt64: (tri: Int, forward: Bool)] = [:]
+      func connect(_ from: Int, _ to: Int, sameDirection: Bool)
+      {
+        adjacencyNext.append(adjacencyHead[from])
+        adjacencyTri.append(Int32(to))
+        adjacencySame.append(sameDirection)
+        adjacencyHead[from] = Int32(adjacencyTri.count - 1)
+      }
+
+      // pack the owner triangle and its edge direction into one Int64,
+      // which keeps the dictionary small enough for a few million triangles.
+      var edgeFirstOwner: [UInt64: Int64] = [:]
       edgeFirstOwner.reserveCapacity(triCount * 3)
-      var pairedEdges: Set<UInt64> = []
 
       func processEdge(_ a: Int32, _ b: Int32, _ t: Int)
       {
         let key = edgeKey(a, b)
-        guard !pairedEdges.contains(key) else { return }
         let forward = a < b
-        if let first = edgeFirstOwner.removeValue(forKey: key)
+        if let packed = edgeFirstOwner.removeValue(forKey: key)
         {
-          let sameDirection = first.forward == forward
-          adjacency[first.tri].append((t, sameDirection))
-          adjacency[t].append((first.tri, sameDirection))
-          pairedEdges.insert(key)
+          let firstTri = Int(packed >> 1)
+          let firstForward = packed & 1 != 0
+          let sameDirection = firstForward == forward
+          connect(firstTri, t, sameDirection: sameDirection)
+          connect(t, firstTri, sameDirection: sameDirection)
         }
         else
         {
-          edgeFirstOwner[key] = (t, forward)
+          edgeFirstOwner[key] = Int64(t) << 1 | (forward ? 1 : 0)
         }
       }
 
@@ -351,12 +393,19 @@ public extension Akari
         var queue = [seed]
         while let t = queue.popLast()
         {
-          for (nbr, sameDirection) in adjacency[t] where !visited[nbr]
+          var edge = adjacencyHead[t]
+          while edge >= 0
           {
-            visited[nbr] = true
-            flip[nbr] = sameDirection ? !flip[t] : flip[t]
-            component.append(nbr)
-            queue.append(nbr)
+            let next = Int(adjacencyNext[Int(edge)])
+            let nbr = Int(adjacencyTri[Int(edge)])
+            if !visited[nbr]
+            {
+              visited[nbr] = true
+              flip[nbr] = adjacencySame[Int(edge)] ? !flip[t] : flip[t]
+              component.append(nbr)
+              queue.append(nbr)
+            }
+            edge = Int32(next)
           }
         }
 
@@ -373,10 +422,12 @@ public extension Akari
       for t in 0 ..< triCount where flip[t]
       {
         indices.swapAt(t * 3 + 1, t * 3 + 2)
+        guard uvs.count > 2 else { continue }
         let uo = t * 6
         uvs.swapAt(uo + 2, uo + 4)
         uvs.swapAt(uo + 3, uo + 5)
       }
+      return flip
     }
 
     private static func appendVertex(_ p: Int,

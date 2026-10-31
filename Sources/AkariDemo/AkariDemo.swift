@@ -44,7 +44,6 @@ import AkariRender
 import CxxStdlib
 import Foundation
 import HydraKit
-import OpenUSDKit
 import SwiftCrossUI
 
 #if os(Android)
@@ -59,8 +58,12 @@ import SwiftCrossUI
   import UIKitBackend
 #endif
 
-/// First light for the Akari render engine.
-@main
+// First light for the Akari render engine (evolving into Kraken, a realtime USD cinematic lookdev and game engine).
+#if !os(macOS)
+  // only macOS currently supports headless renders
+  // TODO: figure out platform differences...
+  @main
+#endif
 struct AkariDemo: App
 {
   typealias Backend = PlatformBackend
@@ -70,7 +73,10 @@ struct AkariDemo: App
 
   let driver: any Akari.HydraFrameDriver
   let settings: HUDState
-  
+  let renderJob: RenderJob
+  let timeline: Timeline
+  let isHeadlessRender: Bool
+
   @State var scene: Kraken.SceneFile
 
   init()
@@ -79,7 +85,14 @@ struct AkariDemo: App
 
     AppUtils.registerAkariPlugin()
 
-    engine = Akari.RenderEngine(settings: RenderSettings(quality: .high))
+    let render = AppUtils.renderArguments()
+    #if os(macOS)
+      isHeadlessRender = render.backgroundWorker
+    #else
+      isHeadlessRender = false
+    #endif
+
+    engine = Akari.RenderEngine(settings: RenderSettings(quality: render.quality ?? .high))
     registerAkariRenderer(engine: engine)
 
     let newScene: (stage: UsdStage, fileURL: URL) = AppUtils.openOrCreateStage()
@@ -87,25 +100,41 @@ struct AkariDemo: App
     engine.labfx.setStageUpAxis(isZUp: UsdGeom.getUpAxis(for: newScene.stage) == .z)
     engine.labfx.setStageMetersPerUnit(UsdGeom.getMetersPerUnit(for: newScene.stage))
 
-    // a point light on the front of ALab's characters, from the shot camera's side.
-    if newScene.stage.getPrim(at: "/root/stoat").isValid
-    {
-      newScene.stage.SetEditTarget(Pixar.UsdEditTarget(newScene.stage.GetSessionLayer(), Pixar.SdfLayerOffset(offset: 0, scale: 1)))
-
-      let light = UsdLux.SphereLight.define(newScene.stage, path: "/root/akari_key_light")
-      light.CreateRadiusAttr(Pixar.VtValue(Float(2)), false)
-      light.CreateIntensityAttr(Pixar.VtValue(Float(50)), false)
-      light.CreateColorAttr(Pixar.VtValue(Pixar.GfVec3f(1, 0.85, 0.7)), false)
-      light.addTranslateOp(precision: .double).set(Pixar.GfVec3d(52, 126, 77))
-
-      newScene.stage.SetEditTarget(Pixar.UsdEditTarget(newScene.stage.getRootLayer(), Pixar.SdfLayerOffset(offset: 0, scale: 1)))
-    }
+    let lattice = AppUtils.latticeMotionFile().flatMap { LatticeBulbDriver(motionFile: $0) }
 
     hydra = Hydra.RenderEngine(stage: newScene.stage,
                                selectionColor: Pixar.GfVec4f(1.0, Float(0xA0) / 255, Float(0x28) / 255, 1.0),
                                rendererPluginId: Tf.Token(Akari.rendererPluginId))
-    driver = Akari.FrameDriver(stage: newScene.stage, hydra: hydra, akari: engine)
-    settings = HUDState(engine: engine)
+    let frameDriver = Akari.FrameDriver(hydra: hydra, akari: engine)
+    driver = frameDriver
+
+    engine.adoptColorManagement(of: newScene.stage)
+
+    let cameraView = Akari.CameraView(hydra: hydra, akari: engine)
+    frameDriver.cameraView = cameraView
+
+    let playback = Akari.Playback(hydra: hydra, akari: engine)
+    frameDriver.playback = playback
+    if let lattice
+    {
+      lattice.inner = frameDriver
+      lattice.time = { (playback.frame - playback.range.lowerBound) / playback.frameRate }
+      hydra.frameDelegate = lattice
+    }
+    let newRenderJob = RenderJob(renderer: Akari.FinalRender(hydra: hydra, akari: engine),
+                                 cameraView: cameraView,
+                                 playback: playback,
+                                 defaultPath: RenderJob.defaultOutputPath(for: newScene.fileURL),
+                                 arguments: render)
+    renderJob = newRenderJob
+
+    timeline = Timeline(playback: playback)
+    if !isHeadlessRender
+    {
+      let probeTimes = Akari.Playback.probeBakeTimes(newScene.stage)
+      Task { @MainActor in await playback.prebakeProbes(at: probeTimes) }
+    }
+    settings = HUDState(engine: engine, hydra: hydra)
     scene = Kraken.SceneFile(fileURL: newScene.fileURL)
 
     print("[akari] first light - renderer = \(Akari.rendererPluginId)")
@@ -119,8 +148,11 @@ struct AkariDemo: App
                 hydra: hydra,
                 driver: driver,
                 settings: settings,
+                renderJob: renderJob,
+                timeline: timeline,
                 sceneName: scene.name)
         .environment(\.colorScheme, .dark)
     }
+    .defaultLaunchBehavior(isHeadlessRender ? .suppressed : .presented)
   }
 }

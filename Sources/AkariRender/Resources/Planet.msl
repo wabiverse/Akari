@@ -1,0 +1,407 @@
+struct Planet
+{
+  float enabled;
+  float seed;
+  float seaLevel;
+  float continentScale;
+  float mountainHeight;
+  float vegetation;
+  float desert;
+  float iceCaps;
+  float3 oceanColor;
+  float oceanRoughness;
+  float cloudCoverage;
+  float cloudAltitude;
+  float cloudRotation;
+  float cloudEvolution;
+  float cityIntensity;
+  float cityDensity;
+  float cloudOpacity;
+  float cloudScale;
+  float cloudThickness;
+  float cloudSwirl;
+  float detail;
+  float cloudSoftness;
+  float4x4 paletteA;
+  float4x4 paletteB;
+  // after McGuire's Tiny Planet: halo (color, strength), (radius, streaks, shadow, -), fill, rim.
+  float4x4 look;
+  float waves;
+  float waveTime;
+  float cloudShading;
+};
+
+Planet makePlanet(float4 planet, float4 terrain, float4 ocean, float4 clouds, float4 city, float4 cloudShape,
+                  float4x4 paletteA, float4x4 paletteB, float4x4 look, float4 style)
+{
+  Planet p;
+  p.enabled = planet.x;
+  p.seed = planet.y;
+  p.seaLevel = planet.z;
+  p.continentScale = planet.w;
+  p.mountainHeight = terrain.x;
+  p.vegetation = terrain.y;
+  p.desert = terrain.z;
+  p.iceCaps = terrain.w;
+  p.oceanColor = ocean.rgb;
+  p.oceanRoughness = ocean.w;
+  p.cloudCoverage = clouds.x;
+  p.cloudAltitude = clouds.y;
+  p.cloudRotation = clouds.z;
+  p.cloudEvolution = clouds.w;
+  p.cityIntensity = city.x;
+  p.cityDensity = city.y;
+  p.cloudOpacity = city.z;
+  p.cloudScale = city.w;
+  p.cloudThickness = cloudShape.x;
+  p.cloudSwirl = cloudShape.y;
+  p.detail = cloudShape.z;
+  p.cloudSoftness = cloudShape.w;
+  p.paletteA = paletteA;
+  p.paletteB = paletteB;
+  p.look = look;
+  p.waves = style.x;
+  p.waveTime = style.y;
+  p.cloudShading = style.z;
+  return p;
+}
+
+float3 planetHash3(int3 p)
+{
+  uint3 v = uint3(p) * uint3(1664525u) + uint3(1013904223u);
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  v ^= v >> 16u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  return float3(v & 0x00FFFFFFu) / 16777215.0;
+}
+
+/// Gradient noise in about [-1, 1] and its gradient.
+float4 planetNoise(float3 x)
+{
+  float3 fi = floor(x);
+  int3 i = int3(fi);
+  float3 f = x - fi;
+  float3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  float3 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  float3 ga = planetHash3(i) * 2.0 - 1.0;
+  float3 gb = planetHash3(i + int3(1, 0, 0)) * 2.0 - 1.0;
+  float3 gc = planetHash3(i + int3(0, 1, 0)) * 2.0 - 1.0;
+  float3 gd = planetHash3(i + int3(1, 1, 0)) * 2.0 - 1.0;
+  float3 ge = planetHash3(i + int3(0, 0, 1)) * 2.0 - 1.0;
+  float3 gf = planetHash3(i + int3(1, 0, 1)) * 2.0 - 1.0;
+  float3 gg = planetHash3(i + int3(0, 1, 1)) * 2.0 - 1.0;
+  float3 gh = planetHash3(i + int3(1, 1, 1)) * 2.0 - 1.0;
+  float va = dot(ga, f);
+  float vb = dot(gb, f - float3(1.0, 0.0, 0.0));
+  float vc = dot(gc, f - float3(0.0, 1.0, 0.0));
+  float vd = dot(gd, f - float3(1.0, 1.0, 0.0));
+  float ve = dot(ge, f - float3(0.0, 0.0, 1.0));
+  float vf = dot(gf, f - float3(1.0, 0.0, 1.0));
+  float vg = dot(gg, f - float3(0.0, 1.0, 1.0));
+  float vh = dot(gh, f - float3(1.0, 1.0, 1.0));
+  float v = va + u.x * (vb - va) + u.y * (vc - va) + u.z * (ve - va)
+          + u.x * u.y * (va - vb - vc + vd) + u.y * u.z * (va - vc - ve + vg) + u.z * u.x * (va - vb - ve + vf)
+          + u.x * u.y * u.z * (-va + vb + vc - vd + ve - vf - vg + vh);
+  float3 g = ga + u.x * (gb - ga) + u.y * (gc - ga) + u.z * (ge - ga)
+           + u.x * u.y * (ga - gb - gc + gd) + u.y * u.z * (ga - gc - ge + gg) + u.z * u.x * (ga - gb - ge + gf)
+           + u.x * u.y * u.z * (-ga + gb + gc - gd + ge - gf - gg + gh)
+           + du * (float3(vb - va, vc - va, ve - va)
+                   + u.yzx * float3(va - vb - vc + vd, va - vc - ve + vg, va - vb - ve + vf)
+                   + u.zxy * float3(va - vb - ve + vf, va - vb - vc + vd, va - vc - ve + vg)
+                   + u.yzx * u.zxy * (-va + vb + vc - vd + ve - vf - vg + vh));
+  return float4(v, g) * 1.6;
+}
+
+/// Turns `d` around a few storm centers, the spiral of a cyclone in each hemisphere's storm track.
+float3 planetCyclones(float3 d, float3 seed, float strength)
+{
+  float3 p = d * 3.0 + seed;
+  int3 base = int3(floor(p));
+  float3 result = d;
+  for (int k = 0; k < 27; ++k) {
+    int3 cell = base + int3(k % 3 - 1, (k / 3) % 3 - 1, k / 9 - 1);
+    float3 h = planetHash3(cell + int3(97, 41, 13));
+    if (h.x > 0.3) continue;
+    float3 center = normalize((float3(cell) + planetHash3(cell)) - seed);
+    float lat = abs(center.y);
+    float track = smoothstep(0.25, 0.45, lat) * smoothstep(0.85, 0.65, lat) + 0.5 * smoothstep(0.3, 0.1, abs(lat - 0.25));
+    float dist = acos(clamp(dot(result, center), -1.0, 1.0));
+    float radius = 0.06 + 0.08 * h.y;
+    // zero before the neighbourhood ends, or the tail of a swirl just out of reach cuts straight seams.
+    float window = 1.0 - smoothstep(0.18, 0.3, dist);
+    float angle = strength * track * (center.y > 0.0 ? 1.0 : -1.0) * (2.5 + 3.0 * h.z) * exp(-dist * dist / (radius * radius)) * window;
+    float ca = cos(angle), sa = sin(angle);
+    result = result * ca + cross(center, result) * sa + center * dot(center, result) * (1.0 - ca);
+  }
+  return result;
+}
+
+constant float3x3 PLANET_OCTAVE = float3x3(float3(0.00, 0.80, 0.60), float3(-0.80, 0.36, -0.48), float3(-0.60, -0.48, 0.64));
+
+/// fBm over `octaves`, the last one faded by `fade`, value and gradient.
+float4 planetFbm(float3 p, int octaves, float fade)
+{
+  float4 sum = float4(0.0);
+  float amplitude = 0.5;
+  float3x3 m = float3x3(1.0);
+  for (int i = 0; i < octaves; ++i) {
+    float k = i == octaves - 1 ? fade : 1.0;
+    float4 n = planetNoise(p);
+    sum += float4(n.x, transpose(m) * n.yzw) * amplitude * k;
+    amplitude *= 0.5;
+    p = PLANET_OCTAVE * p * 2.03;
+    m = PLANET_OCTAVE * m * 2.03;
+  }
+  return sum;
+}
+
+/// Erosion style fBm: each octave is damped by the slope the ones before it built.
+float4 planetErosion(float3 p, int octaves, float fade)
+{
+  float4 sum = float4(0.0);
+  float3 slope = float3(0.0);
+  float amplitude = 0.5;
+  float3x3 m = float3x3(1.0);
+  for (int i = 0; i < octaves; ++i) {
+    float k = i == octaves - 1 ? fade : 1.0;
+    float4 n = planetNoise(p);
+    float3 g = transpose(m) * n.yzw;
+    slope += g * amplitude;
+    float damp = 1.0 / (1.0 + dot(slope, slope) * 0.6);
+    sum += float4(n.x, g) * amplitude * damp * k;
+    amplitude *= 0.48;
+    p = PLANET_OCTAVE * p * 2.03;
+    m = PLANET_OCTAVE * m * 2.03;
+  }
+  return sum;
+}
+
+/// Octaves past the base frequency `f` (cycles per radian) worth evaluating at a footprint of
+/// `footprint` km on a planet of radius `radius` km, and how far into the last one to go.
+int planetOctaves(float f, float footprint, float radius, int maxOctaves, thread float& fade)
+{
+  float wanted = log2(max(radius / (max(footprint, 1e-4) * 2.0 * f), 1.0));
+  float o = clamp(wanted, 1.0, float(maxOctaves));
+  int n = int(ceil(o));
+  fade = 1.0 - (float(n) - o);
+  return n;
+}
+
+struct PlanetSample
+{
+  float height;
+  float3 normal;
+  float3 albedo;
+  float ocean;
+  float3 emission;
+};
+
+/// The procedural ground toward `d` (planet local, unit, +y the pole). Heights in km.
+PlanetSample planetSurface(Planet pl, float3 d, float radius, float footprint, float muSun)
+{
+  PlanetSample s;
+  // kept within ±50, a seed scaled by itself would leave the fine octaves no float precision (blocky coasts).
+  float3 seed = fract(float3(17.13, -31.7, 5.29) * (fract(pl.seed * 0.618034) + 0.37) * 9.73) * 100.0 - 50.0;
+  float fc = pl.continentScale;
+
+  float3 q = float3(planetFbm(d * fc * 0.7 + seed.zxy, 4, 1.0).x,
+                    planetFbm(d * fc * 0.7 + seed.yzx + 5.2, 4, 1.0).x,
+                    planetFbm(d * fc * 0.7 + seed.xzy - 3.1, 4, 1.0).x);
+  float3 dw = d + q * 0.18;
+  float fadeC;
+  int octC = planetOctaves(fc, footprint, radius, 9, fadeC);
+  float4 continent = planetFbm(dw * fc + seed, octC, fadeC);
+  float threshold = (pl.seaLevel - 0.5) * 0.75;
+  float c = continent.x - threshold;
+
+  float4 orogeny = planetFbm(dw * fc * 2.3 + seed.zyx, 4, 1.0);
+  float4 ridgeN = planetFbm(dw * fc * 5.0 + seed.yxz, 5, 1.0);
+  float ridge = 1.0 - abs(ridgeN.x);
+  ridge *= ridge;
+  float fm = fc * 14.0;
+  float fadeM;
+  int octM = planetOctaves(fm, footprint, radius, 11, fadeM);
+  float4 rough = planetErosion(dw * fm + seed.yzx, octM, fadeM);
+
+  float land = smoothstep(0.0, 0.05, c);
+  float inland = smoothstep(0.02, 0.3, c);
+  float ranges = smoothstep(-0.05, 0.35, orogeny.x) * inland;
+  float relief = 0.15 + 0.85 * ranges * ridge;
+  float detail = rough.x * 0.5 + 0.5;
+  s.height = c < 0.0 ? c * 18.0 : (c * 1.2 + relief * (0.55 + 0.45 * detail)) * pl.mountainHeight * 0.6;
+  float3 grad = continent.yzw * fc * (c < 0.0 ? 18.0 : 1.2 * pl.mountainHeight * 0.6)
+              + land * pl.mountainHeight * 0.6 * (ranges * (-2.0 * (1.0 - abs(ridgeN.x)) * sign(ridgeN.x) * ridgeN.yzw * fc * 5.0) * (0.55 + 0.45 * detail)
+                                                  + relief * 0.45 * 0.5 * rough.yzw * fm);
+  float3 tangent = grad - d * dot(grad, d);
+  float3 landNormal = normalize(d - tangent / radius);
+  s.ocean = 1.0 - smoothstep(-0.004, 0.004, c);
+  s.normal = normalize(mix(landNormal, d, s.ocean));
+
+  float lat = abs(d.y);
+  float4 m = planetFbm(dw * fc * 2.0 + seed * 1.7, 6, 1.0);
+  float coastWet = 1.0 - smoothstep(0.0, 0.25, c);
+  float hadley = smoothstep(0.12, 0.0, abs(lat - 0.36));
+  float moisture = saturate(0.55 + m.x * 0.9 + coastWet * 0.35 - hadley * pl.desert * 0.9 + (pl.vegetation - 0.5) * 0.6);
+  float elev = max(s.height, 0.0);
+  float temperature = 1.0 - pow(lat, 1.3) * 1.25 - elev / max(pl.mountainHeight, 0.1) * 0.45 + m.y * 0.02;
+  float iceLat = 1.0 - pl.iceCaps * 0.32;
+
+  float vary = planetFbm(dw * fc * 30.0 + seed.zxy, 4, 1.0).x;
+  float3 desertA = float3(0.46, 0.36, 0.23), desertB = float3(0.36, 0.2, 0.11);
+  float3 sand = mix(desertA, desertB, saturate(0.5 + vary * 1.2 + m.z * 0.02));
+  float3 savanna = float3(0.15, 0.13, 0.06);
+  float3 forest = mix(float3(0.03, 0.055, 0.022), float3(0.016, 0.034, 0.016), saturate(moisture * 1.4 - 0.4));
+  float3 boreal = float3(0.03, 0.045, 0.03);
+  float3 tundra = float3(0.17, 0.155, 0.12);
+  float3 rock = mix(float3(0.17, 0.15, 0.13), float3(0.11, 0.1, 0.095), saturate(0.5 + vary));
+  float3 snowColor = float3(0.82, 0.85, 0.88);
+
+  // an authored palette replaces the built in colors, keeping their variation.
+  float4 lowC = pl.paletteA[0], highC = pl.paletteA[1], forestC = pl.paletteA[2], desertC = pl.paletteA[3];
+  float4 rockC = pl.paletteB[1], snowC = pl.paletteB[2];
+  if (desertC.w > 0.5) sand = desertC.rgb * mix(1.15, 0.8, saturate(0.5 + vary * 1.2));
+  if (lowC.w > 0.5) savanna = lowC.rgb;
+  if (forestC.w > 0.5) forest = forestC.rgb * mix(1.0, 0.7, saturate(moisture * 1.4 - 0.4));
+  if (highC.w > 0.5) { boreal = mix(highC.rgb, forest, 0.4); tundra = highC.rgb; }
+  if (rockC.w > 0.5) rock = rockC.rgb * mix(1.1, 0.75, saturate(0.5 + vary));
+  if (snowC.w > 0.5) snowColor = snowC.rgb;
+
+  float3 ground = mix(sand, savanna, smoothstep(0.25, 0.45, moisture));
+  ground = mix(ground, forest, smoothstep(0.45, 0.7, moisture));
+  ground = mix(ground, boreal, smoothstep(0.45, 0.3, temperature) * smoothstep(0.35, 0.55, moisture));
+  ground = mix(ground, tundra, smoothstep(0.3, 0.15, temperature));
+  float slope = 1.0 - dot(landNormal, d);
+  ground = mix(ground, rock, saturate(smoothstep(0.002, 0.012, slope) * 0.8 + ranges * ridge * 0.5));
+  if (highC.w > 0.5) ground = mix(ground, highC.rgb, smoothstep(0.3, 0.7, elev / max(pl.mountainHeight, 0.1)) * 0.8);
+  float4 bloomC = pl.paletteB[3];
+  if (bloomC.w > 0.0) {
+    float patches = planetFbm(dw * fc * 9.0 + seed.yzx * 1.3, 4, 1.0).x;
+    float bloom = smoothstep(0.15, 0.35, patches + bloomC.w * 0.3 - 0.3) * smoothstep(0.35, 0.6, moisture) * smoothstep(0.2, 0.4, temperature);
+    ground = mix(ground, bloomC.rgb, saturate(bloom * min(bloomC.w, 1.0)));
+  }
+  ground *= 0.85 + 0.3 * saturate(0.5 + vary);
+  float speckle = pl.detail * saturate(log2(max(radius / (max(footprint, 1e-4) * 512.0), 1e-6)) + 1.0);
+  if (speckle > 0.0) ground *= mix(1.0, saturate(planetNoise(d * 256.0 + seed).x * 0.5 + 0.5), 0.6 * speckle);
+  float snow = saturate(smoothstep(0.12, 0.0, temperature) + smoothstep(iceLat - 0.03, iceLat + 0.02, lat));
+  ground = mix(ground, snowColor, snow);
+  ground = mix(ground, float3(0.4, 0.37, 0.3), (1.0 - smoothstep(0.0, 0.015, c)) * land * (1.0 - snow));
+
+  float depth = max(-c, 0.0);
+  float4 shallowC = pl.paletteB[0];
+  float3 shallows = shallowC.w > 0.5 ? shallowC.rgb : pl.oceanColor * 3.0 + float3(0.004, 0.03, 0.025);
+  float3 water = mix(shallows, pl.oceanColor, smoothstep(0.0, shallowC.w > 0.5 ? 0.15 : 0.08, depth));
+  float seaIce = smoothstep(iceLat - 0.02, iceLat + 0.04, lat + vary * 0.03);
+  // McGuire's tiny planet waves: shallow fronts refract round the coasts (their phase is the depth),
+  // deep ones run along the latitude circles, they only bend the normal, for the glints and the shading.
+  const float wl = 0.01;
+  float waves = pl.waves * s.ocean * saturate(wl * radius / (footprint * 3.0) - 0.5);
+  if (waves > 0.0) {
+    float rel = saturate(depth / 0.15);
+    float4 nz = planetNoise(d * 15.0);
+    float pS = (d.y - 1.5 * c) / wl + pl.waveTime * 1.5;
+    float pD = (atan2(d.z, d.x) + nz.x * 0.025) * (1.5 / wl) + pl.waveTime * 2.0;
+    float3 gS = (float3(0.0, 1.0, 0.0) - 1.5 * continent.yzw * fc) / wl;
+    float3 gD = (float3(-d.z, 0.0, d.x) / max(d.x * d.x + d.z * d.z, 1e-4) + nz.yzw * 15.0 * 0.025) * (1.5 / wl);
+    float3 gh = -(sin(pS) * sqrt(1.0 - rel) * gS + sin(pD) * 2.5 * (1.0 - abs(d.y)) * rel * rel * gD) * 0.0014 * waves;
+    s.normal = normalize(s.normal - (gh - d * dot(gh, d)));
+  }
+  s.albedo = mix(ground, water, s.ocean);
+  s.albedo = mix(s.albedo, snowC.w > 0.5 ? snowC.rgb * 0.9 : float3(0.72, 0.76, 0.8), seaIce * s.ocean);
+  s.ocean *= 1.0 - seaIce;
+
+  float night = 1.0 - smoothstep(-0.12, 0.0, muSun);
+  float3 emission = float3(0.0);
+  if (night > 0.0 && pl.cityIntensity > 0.0) {
+    float fadeL;
+    int octL = planetOctaves(fc * 60.0, footprint, radius, 6, fadeL);
+    float regions = planetFbm(dw * fc * 4.0 + seed.yxz, 4, 1.0).x;
+    float clusters = planetFbm(dw * fc * 18.0 + seed.xzy, 4, 1.0).x;
+    float habitable = land * (1.0 - snow) * smoothstep(0.2, 0.45, moisture) * smoothstep(0.15, 0.45, temperature)
+                    * (1.0 - ranges * ridge);
+    float density = saturate((regions * 1.5 + clusters + coastWet * 0.5 + pl.cityDensity - 0.9) * 1.5) * habitable;
+    float sparkle = planetFbm(dw * fc * 60.0 + seed, octL, fadeL).x;
+    sparkle = saturate(sparkle * 3.0 + density * 1.5 - 0.6);
+    emission = float3(1.0, 0.6, 0.25) * density * sparkle * sparkle * pl.cityIntensity * night;
+  }
+  s.emission = emission;
+  return s;
+}
+
+/// Cloud cover toward `d` (planet local, unit): opacity in [0, 1].
+float planetClouds(Planet pl, float3 d, float radius, float footprint)
+{
+  if (pl.cloudCoverage <= 0.0) return 0.0;
+  float lat = d.y;
+  float a = pl.cloudRotation + 0.5 * sin(lat * 5.0) * lat;
+  float3 r = float3(d.x * cos(a) - d.z * sin(a), d.y, d.x * sin(a) + d.z * cos(a));
+  float3 seed = float3(-7.3, 13.1, 2.9) * (pl.seed + 1.0) + float3(0.0, 0.0, pl.cloudEvolution);
+  r = planetCyclones(r, seed, 1.0);
+  float f = 7.0 * pl.cloudScale;
+  float3 w1 = planetFbm(r * f * 0.4 + seed.yzx, 4, 1.0).yzw;
+  float3 rw = r + float3(w1.x, w1.y * 0.3, w1.z) * 0.02;
+  // noise fed back into itself turns the weather into swirls.
+  if (pl.cloudSwirl > 0.0) {
+    float3 q = float3(planetFbm(r * f * 0.5 + seed.zxy, 3, 1.0).x, planetFbm(r * f * 0.5 + seed.yzx + 3.1, 3, 1.0).x,
+                      planetFbm(r * f * 0.5 + seed.xzy - 1.7, 3, 1.0).x);
+    rw += q * pl.cloudSwirl * (1.5 / f);
+  }
+  float3 stretch = float3(rw.x, rw.y * 2.2, rw.z);
+  float base = planetFbm(stretch * f * 1.5 + seed, 5, 1.0).x;
+  float fade;
+  int oct = planetOctaves(f * 24.0, footprint, radius, 8, fade);
+  float billow = 1.0 - abs(planetFbm(rw * f * 24.0 + seed.zyx, max(oct, 1), oct > 0 ? fade : 0.0).x);
+  float weather = planetFbm(r * 2.0 + seed.xzy, 3, 1.0).x;
+  float absLat = abs(lat);
+  float bands = 0.18 * smoothstep(0.15, 0.0, absLat) + 0.25 * smoothstep(0.22, 0.0, abs(absLat - 0.72))
+              - 0.25 * smoothstep(0.14, 0.0, abs(absLat - 0.36));
+  float cover = (pl.cloudCoverage - 0.5) * 0.8 + bands + weather * 0.45;
+  float n = base + cover;
+  float soft = pl.cloudSoftness;
+  float coverage = smoothstep(0.15 - 0.3 * (1.0 + 0.6 * soft), 0.15 + 0.3 * (1.0 + 0.6 * soft), n);
+  float erode = 0.55 * (1.0 - soft);
+  float density = saturate((coverage - (1.0 - billow) * erode * (1.0 - coverage * 0.5)) / max(1.0 - erode * (1.0 - billow), 0.05));
+  return saturate(mix(density * density * (3.0 - 2.0 * density), density, soft) * pl.cloudOpacity);
+}
+
+/// How far up the slab (0 to 1) the cloud column at `km` (planet local, km) under cover `cover` tops out.
+float planetCloudTop(Planet pl, float cover, float3 km)
+{
+  float3 seed = float3(pl.seed, -pl.seed, pl.cloudEvolution);
+  float towers = planetFbm(km * 0.04 + seed, 3, 1.0).x * 0.5 + 0.5;
+  return (0.2 + 0.8 * sqrt(cover)) * mix(0.45, 1.0, towers);
+}
+
+/// The cloud density at `km` (planet local, km) a fraction `h` up the slab, under a column of
+/// cover `cover`: flat bases, tops rounding off higher the thicker the cover, edges eroded by billows.
+float planetCloudDensity(Planet pl, float cover, float h, float3 km, float footprint)
+{
+  if (cover <= 0.0 || h < 0.0 || h > 1.0) return 0.0;
+  float3 seed = float3(pl.seed, -pl.seed, pl.cloudEvolution);
+  float top = planetCloudTop(pl, cover, km);
+  float profile = smoothstep(0.0, 0.06, h) * saturate(1.0 - pow(h / max(top, 0.05), 3.0));
+  float density = cover * sqrt(cover) * profile;
+  if (density <= 0.0) return 0.0;
+  float fade;
+  int oct = planetOctaves(800.0, footprint, 6360.0, 4, fade);
+  float billow = planetFbm(km * 0.125 + seed.zxy, oct, fade).x * 0.5 + 0.5;
+  return density * mix(1.0, saturate(0.3 + 1.4 * billow), 1.0 - cover);
+}
+
+/// The lat long texel a planet local unit direction lands on, +y the pole.
+float2 planetLatLong(float3 d)
+{
+  return float2(atan2(d.z, d.x) / (2.0 * 3.14159265) + 0.5, acos(clamp(d.y, -1.0, 1.0)) / 3.14159265);
+}
+
+float3 planetFromLatLong(float2 uv)
+{
+  float lon = (uv.x - 0.5) * 2.0 * 3.14159265, lat = uv.y * 3.14159265;
+  return float3(sin(lat) * cos(lon), cos(lat), sin(lat) * sin(lon));
+}
+
+/// The cloud cover toward `d` from the baked map of `planetClouds`.
+float planetCloudsMapped(texture2d<float> map, sampler smp, float3 d)
+{
+  return map.sample(smp, planetLatLong(d), level(0.0)).r;
+}
+

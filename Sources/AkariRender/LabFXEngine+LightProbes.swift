@@ -49,8 +49,9 @@ public extension Akari.LabFXEngine
   ///
   /// - Parameters:
   ///   - renderParam: hydra render param.
+  ///   - camera: the view an unauthored "landscape" volume is fitted around.
   ///   - settings: the frame's render settings.
-  func updateLightProbes(renderParam: Pixar.HdAkariRenderParam, settings: RenderSettings)
+  func updateLightProbes(renderParam: Pixar.HdAkariRenderParam, camera: Akari.Camera, settings: RenderSettings)
   {
     let captures = geometry.shadowCaptures
     guard
@@ -67,36 +68,87 @@ public extension Akari.LabFXEngine
       probeOverrides = overrides
       probeStructuralRevision = structural
     }
+    var overrides = probeOverrides
+    var structural = probeStructuralRevision
+    if overrides.isEmpty, let volume = landscapeProbeVolume(camera: camera, sceneBounds: sceneBounds)
+    {
+      overrides = [volume]
+      for bits in [volume.min, volume.max].flatMap({ [$0.x, $0.y, $0.z] }).map({ UInt64($0.bitPattern) })
+      {
+        structural = (structural ^ bits) &* 0x100_0000_01B3
+      }
+    }
+    // no authored probes in view, the sky lights it, and the last ones stay baked for when they're back.
+    lightProbes.inView = !overrides.isEmpty
+    guard lightProbes.inView else { return }
+    // playback keeps going while they bake, a quarter as many views a frame.
+    var probeSettings = settings.probes
+    if isPlaying { probeSettings.captureViewsPerFrame = max(probeSettings.captureViewsPerFrame / 4, 6) }
 
     let lighting = Akari.LightProbes.Lighting(
       sunDirection: worldSpaceSunDirection(settings.light),
       sunHeight: settings.light.sunHeight,
       zUp: stageIsZUp,
       iblEnabled: settings.features.contains(.imageBasedLighting),
-      lights: syncedPointLights.flatMap
+      sunColor: sunColor(iblEnabled: settings.features.contains(.imageBasedLighting)),
+      environment: environmentRevision,
+      // a light that moves every frame would relight every probe every frame,
+      // so intensity is kept to an eighth of a stop so flicker doesn't relight
+      // them either.
+      lights: syncedPointLights.filter(\.probes).flatMap
       {
-        [SIMD4($0.position, $0.intensity), SIMD4($0.color, $0.radius)]
+        [SIMD4($0.position, exp2((log2(max($0.intensity, 1e-6)) * 8).rounded() / 8)), SIMD4($0.color, $0.radius)]
       }
     )
 
     let ready = lightProbes.update(captures: captures,
                                    sceneBounds: sceneBounds,
-                                   overrides: probeOverrides,
-                                   overrideRevision: probeStructuralRevision,
+                                   overrides: overrides,
+                                   overrideRevision: structural,
                                    upAxis: stageIsZUp ? 2 : 1,
                                    materials: probeMaterials,
                                    environment: runtime.texture("envCube", named: "envCube"),
                                    lighting: lighting,
-                                   settings: settings.probes)
+                                   settings: probeSettings)
     guard ready else { return }
 
     let layout = lightProbes.layout
     setSampler("u_probe_volume", lightProbes.volumeSH)
     setSampler("u_probe_sphere", lightProbes.sphereAtlas)
     setSampler("u_probe_info", lightProbes.sphereInfo)
-    setVector("u_probeGridMin", SIMD4(layout.gridMin, 1))
+    setVector("u_probeGridMin", SIMD4(layout.gridMin, layout.volumeCount > 0 ? 1 : 0))
     setVector("u_probeGridMax", SIMD4(layout.gridMax, Float(layout.spheres.count)))
     setVector("u_probeGridSize", SIMD4(SIMD3<Float>(layout.dims), layout.normalBias))
+  }
+
+  /// A "landscape" (a kilometer or more across) with no probes of its own gets, in a final render, a volume around the view,
+  /// so geometry casts shadows on the meshes under it, anything beyond that geometry gets lit by the sky.
+  func landscapeProbeVolume(camera: Akari.Camera, sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>)) -> Akari.LightProbes.Override?
+  {
+    let extent = sceneBounds.max - sceneBounds.min
+    guard
+      !loadsInBackground,
+      ProcessInfo.processInfo.environment["AKARI_LANDSCAPE_PROBES"] != "0",
+      (extent * extent).sum().squareRoot() >= camera.world(meters: 1000)
+    else { return nil }
+    let up = stageIsZUp ? 2 : 1
+    let half = camera.world(meters: 80), snap = half / 2
+    let inverseView = camera.view.inverse()
+    let eye = inverseView.transform(.zero)
+    var ahead = inverseView.transform(SIMD3(0, 0, -1)) - eye
+    ahead[up] = 0
+    let length = (ahead * ahead).sum().squareRoot()
+    var center = length > 1e-4 ? eye + ahead / length * half * 0.8 : eye
+    center = (center / snap).rounded(.toNearestOrAwayFromZero) * snap
+    var lo = center - half, hi = center + half
+    lo[up] = ((eye[up] - camera.world(meters: 20)) / snap).rounded(.down) * snap
+    hi[up] = ((eye[up] + camera.world(meters: 60)) / snap).rounded(.up) * snap
+    lo = pointwiseMax(lo, sceneBounds.min)
+    hi = pointwiseMin(hi, sceneBounds.max)
+    guard all(hi - lo .> camera.world(meters: 1)) else { return nil }
+    var resolution = SIMD3<Int32>(repeating: 13)
+    resolution[up] = 6
+    return Akari.LightProbes.Override(min: lo, max: hi, isSphere: false, resolution: resolution)
   }
 
   /// The authored probes as world space boxes, with a revision for the
@@ -133,8 +185,8 @@ public extension Akari.LabFXEngine
                       corner & 2 == 0 ? lo.y : hi.y,
                       corner & 4 == 0 ? lo.z : hi.z)
         let w = world.transform(p)
-        boxMin = simd_min(boxMin, w)
-        boxMax = simd_max(boxMax, w)
+        boxMin = Akari.Math.min(boxMin, w)
+        boxMax = Akari.Math.max(boxMax, w)
       }
 
       return Akari.LightProbes.Override(min: boxMin,

@@ -50,6 +50,8 @@
 
 #include "HdAkari/api.h"
 
+#include <vector>
+
 PXR_NAMESPACE_OPEN_SCOPE
 
 /// @class HdAkariMesh
@@ -90,6 +92,10 @@ private:
   HdTopology::ID _topologyHash = 0;
   VtVec2fArray _topologyUvs;
   uint64_t _topologyRevision = 0;
+  // the UsdSkel computation skinned on the GPU, its per joint rest bounds (6 floats each).
+  SdfPath _skinComputation;
+  std::vector<float> _skinJointBounds;
+  uint64_t _skinRevision = 0;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

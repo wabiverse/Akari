@@ -40,6 +40,7 @@
 
 import AkariCore
 import AkariRender
+import HydraKit
 import SwiftCrossUI
 #if os(macOS)
   import AppKit

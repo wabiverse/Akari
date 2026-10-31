@@ -41,6 +41,7 @@
 # include <pxr/pxrns.h>
 # include <Hd/bufferSource.h>
 # include <Hd/changeTracker.h>
+# include <Hd/instancer.h>
 # include <Hd/meshTopology.h>
 # include <Hd/meshUtil.h>
 # include <Hd/mesh.h>
@@ -56,6 +57,7 @@
 #else
 # include <pxr/pxr.h>
 # include <pxr/imaging/hd/version.h>
+# include <pxr/imaging/hd/instancer.h>
 # include <pxr/imaging/hd/mesh.h>
 # include <pxr/imaging/hd/rprim.h>
 # include <pxr/imaging/hd/drawingCoord.h>
@@ -68,11 +70,13 @@
 #endif
 
 #include "HdAkari/cube.h"
+#include "HdAkari/instancer.h"
 #include "HdAkari/lightProbe.h"
 #include "HdAkari/materialBinding.h"
 #include "HdAkari/renderParam.h"
 #include "HdAkari/textureAtlas.h"
 #include "HdAkari/scene.h"
+#include "HdAkari/style.h"
 
 #include <algorithm>
 
@@ -104,7 +108,8 @@ HdAkariCube::GetInitialDirtyBitsMask() const
     | HdChangeTracker::DirtyVisibility
     | HdChangeTracker::DirtyPrimvar
     | HdChangeTracker::DirtyDisplayStyle
-    | HdChangeTracker::DirtyMaterialId;
+    | HdChangeTracker::DirtyMaterialId
+    | HdChangeTracker::DirtyInstancer;
   
   return mask;
 }
@@ -143,6 +148,14 @@ HdAkariCube::Sync(HdSceneDelegate *sceneDelegate,
   HdAkariMeshData data;
   data.id = id;
   data.primId = GetPrimId();
+  HdAkariSyncStyle(sceneDelegate, id, data.primId, scene);
+
+  // a point instancer's prototype publishes one matrix per instance, the
+  // renderer draws the cube with GPU instancing instead of copying it.
+  _UpdateInstancer(sceneDelegate, dirtyBits);
+  const SdfPath instancerId = GetInstancerId();
+  const bool instanced = !instancerId.IsEmpty();
+  if (instanced) HdInstancer::_SyncInstancerAndParents(sceneDelegate->GetRenderIndex(), instancerId);
 
   // fetch parameters.
   VtValue sizeVal = sceneDelegate->Get(id, HdCubeSchemaTokens->size);
@@ -186,9 +199,22 @@ HdAkariCube::Sync(HdSceneDelegate *sceneDelegate,
   HdAkariTextureAtlas *atlas = param->GetTextureAtlas();
   if (atlas) atlas->EnsureGridSized(sceneDelegate);
   HdAkariSyncMaterial(sceneDelegate, id, atlas, meshUtil, data);
+  data.contentKey = HdAkariMeshContentKey(data);
 
   // bump revision so the GPU buffer cache knows to rebuild.
   data.dataRevision = ++_dataGeneration;
+
+  if (instanced) {
+    HdAkariInstanceSet set = HdAkariInstances(sceneDelegate->GetRenderIndex(), instancerId, id);
+    data.instances = std::move(set.transforms);
+    data.instancesKey = set.key;
+    // nothing to draw without instances.
+    if (data.instances.empty()) {
+      scene->RemoveMesh(id);
+      *dirtyBits = HdChangeTracker::Clean;
+      return;
+    }
+  }
   
   scene->UpdateMesh(std::move(data));
   
@@ -201,6 +227,7 @@ HdAkariCube::Finalize(HdRenderParam *renderParam)
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
     if (auto scene = param->GetScene()) {
       scene->RemoveMesh(GetId());
+      scene->RemoveStyle(GetPrimId());
       scene->RemoveProbe(GetId());
     }
   }

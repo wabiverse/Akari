@@ -49,10 +49,10 @@ extension Akari.LabFXEngine
   /// next step up fits it again.
   struct DynamicResolution
   {
-    /// Largest first, from `ceiling` down to `floor`, at most half the target.
+    /// Largest first, from `ceiling` down to `floor`.
     static func scales(upTo ceiling: Float, downTo floor: Float) -> [Float]
     {
-      (RenderSettings.supersamplingSteps.filter { $0 > 1 && $0 <= ceiling }.reversed() + [1, 0.85, 0.75, 0.67, 0.6, 0.5])
+      (RenderSettings.supersamplingSteps.filter { $0 > 1 && $0 <= ceiling }.reversed() + [1, 0.85, 0.75, 0.67, 0.6, 0.5, 0.42, 0.34])
         .filter { $0 >= floor - 1e-3 }
     }
 
@@ -86,15 +86,18 @@ extension Akari.LabFXEngine
 
     supersampleScale = chained ? step : 1
     let ceiling = chained ? 1 : step
-    guard settings.features.contains(.dynamicResolution) else
+    guard settings.features.contains(.dynamicResolution)
+    else
     {
       res = DynamicResolution(lastUpdate: now)
       renderScale = ceiling
       return
     }
 
-    // metalfx upscales by 3x at most.
-    let scales = DynamicResolution.scales(upTo: ceiling, downTo: max(supersampleScale / 3, 0.5))
+    // metalfx upscales by 3x at most, the rest no further than from half the target.
+    let temporal = settings.upscaler == .metalFX && settings.features.contains(.temporalAA) &&
+      !upscaleFailed && labgl.upscaleSupported() != 0 && Date() >= neuralUpscaleHeldUntil
+    let scales = DynamicResolution.scales(upTo: ceiling, downTo: temporal ? supersampleScale / 3 : max(supersampleScale / 3, 0.5))
     if scales != res.scales
     {
       res.step = scales.indices.min { abs(scales[$0] - renderScale) < abs(scales[$1] - renderScale) } ?? 0
