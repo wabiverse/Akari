@@ -21,6 +21,9 @@
 <br/>
 
 [![Watch Akari Demo Reel](https://shields.io/static/v1?label=Vimeo&message=Watch%20Akari%20Demo%20Reel&color=00adef&style=for-the-badge&logo=vimeo)](https://vimeo.com/1241690263?fl=pl&fe=sh)
+> 
+
+<samp>shot on a base M5 16GB MacBook Air, where Akari renders the Moana Island Scene at <code>~25fps</code>.</samp>
 
 </div>
 
