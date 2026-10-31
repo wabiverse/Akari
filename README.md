@@ -17,9 +17,6 @@
 
 ###### <samp>♫ [<b>∆</b>](https://youtu.be/1XwU8H6e8Ts?si=-eokO_nbdRnAtCp9).</samp>
 
-<br/>
-<br/>
-
 [![Watch Akari Demo Reel](https://shields.io/static/v1?label=Vimeo&message=Watch%20Akari%20Demo%20Reel&color=00adef&style=for-the-badge&logo=vimeo)](https://vimeo.com/1241690263?fl=pl&fe=sh)
 > 
 
@@ -27,9 +24,25 @@
 
 </div>
 
+<br/>
+
+## Quickstart: Real-Time USD Rendering
+
+Akari can render any (`.usd`, `.usda`, `.usdc`, or `.usdz`) scene passed to the `USD_SCENE=` argument below, this repo also provides several scenes you can render immediately out of the box.
+ 
+```pwsh
+git clone https://github.com/wabiverse/Akari.git
+cd Akari
+
+make run USD_SCENE=Scenes/LensShowcase.usda
+```
+> Running this command launches the UI app which leverages the Akari PBR engine to provide interactive realtime rendering of your selected asset.
+
+<br/>
+
 ## Overview
 
-Akari is a realtime render engine for [**Hydra**](https://openusd.org/release/api/_page__hydra__getting__started__guide.html),
+Akari is a realtime [**OpenUSD**](https://openusd.org/release/index.html) render engine for [**Hydra**](https://openusd.org/release/api/_page__hydra__getting__started__guide.html),
 focused on speed and visual fidelity at game frame rates while rendering PBR materials. Akari can be used on every platform Swift
 reaches: macOS, iOS, visionOS, Linux, Windows, and Android.
 
