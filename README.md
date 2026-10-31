@@ -17,6 +17,11 @@
 
 ###### <samp>♫ [<b>∆</b>](https://youtu.be/1XwU8H6e8Ts?si=-eokO_nbdRnAtCp9).</samp>
 
+<br/>
+<br/>
+
+[![Watch Akari Demo Reel](https://shields.io/static/v1?label=Vimeo&message=Watch%20Akari%20Demo%20Reel&color=00adef&style=for-the-badge&logo=vimeo)](https://vimeo.com/1241690263?fl=pl&fe=sh)
+
 </div>
 
 ## Overview
