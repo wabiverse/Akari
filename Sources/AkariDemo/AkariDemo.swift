@@ -81,6 +81,8 @@ struct AkariDemo: App
 
   init()
   {
+    AppUtils.raiseOpenFileLimit()
+
     Pixar.Bundler.shared.setup(.resources)
 
     AppUtils.registerAkariPlugin()

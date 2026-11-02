@@ -62,6 +62,11 @@ public extension Akari
     /// sampling them.
     private var placeholders = Set<GLuint>()
 
+    /// Pack materials horizontally into a single texture line to keep the total height
+    /// well below Metal's lowest 2D texture height limit (16,384), no matter how many
+    /// materials exist.
+    static let constantsRowsPerLine = 128
+
     /// Mips sampled, as `GL_TEXTURE_MAX_LEVEL` 3 had them.
     private static let levels = 4
 
@@ -108,6 +113,8 @@ public extension Akari
     public func uploadConstants(_ atlas: Pixar.HdAkariTextureAtlas) -> GLuint
     {
       let texels = Int(Pixar.HdAkariConstantTexels())
+      let perLine = Self.constantsRowsPerLine
+      let lineTexels = texels * perLine
       let count = Int(atlas.ConstantCount())
       var range = atlas.DrainDirtyConstants()
       guard count > 0 else { return constantsTexture }
@@ -115,7 +122,7 @@ public extension Akari
       if count > constantsRows
       {
         if constantsTexture != 0 { gl.deleteTextures(count: 1, textures: &constantsTexture) }
-        constantsRows = max(constantsRows, 64)
+        constantsRows = max(constantsRows, perLine)
         while constantsRows < count
         {
           constantsRows *= 2
@@ -125,18 +132,28 @@ public extension Akari
         gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_NEAREST))
         gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GLint(GL_NEAREST))
         gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA32F,
-                      width: GLsizei(texels), height: GLsizei(constantsRows), border: 0,
+                      width: GLsizei(lineTexels), height: GLsizei(constantsRows / perLine), border: 0,
                       format: GL_RGBA, type: GL_FLOAT, pixels: nil)
         range.first = 0
         range.count = Int32(count)
       }
       guard range.count > 0 else { return constantsTexture }
 
-      var rows = [Float](repeating: 0, count: Int(range.count) * texels * 4)
-      rows.withUnsafeMutableBufferPointer { atlas.CopyConstants(range.first, range.count, $0.baseAddress!) }
+      // upload full rows if any part changed, pad any extra space with zeros.
+      let first = Int(range.first)
+      let firstLine = first / perLine
+      let lastLine = (first + Int(range.count) - 1) / perLine
+      let lineCount = lastLine - firstLine + 1
+      let lineFirst = firstLine * perLine
+      let lineRows = min((lastLine + 1) * perLine, count) - lineFirst
+      var rows = [Float](repeating: 0, count: lineCount * lineTexels * 4)
+      rows.withUnsafeMutableBufferPointer
+      {
+        atlas.CopyConstants(Int32(lineFirst), Int32(lineRows), $0.baseAddress!)
+      }
       gl.bindTexture(target: GL_TEXTURE_2D, texture: constantsTexture)
-      gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: range.first,
-                       width: GLsizei(texels), height: range.count,
+      gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: GLint(firstLine),
+                       width: GLsizei(lineTexels), height: GLsizei(lineCount),
                        format: GL_RGBA, type: GL_FLOAT, pixels: rows)
       return constantsTexture
     }

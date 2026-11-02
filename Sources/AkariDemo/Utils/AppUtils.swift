@@ -44,6 +44,10 @@ import Foundation
 import HdAkari
 import HydraKit
 
+#if canImport(Darwin)
+  import Darwin
+#endif
+
 #if os(Android)
   import AndroidBackend
 
@@ -68,6 +72,22 @@ import HydraKit
 
 public enum AppUtils
 {
+  /// Increase the open file limit (up to 8192),
+  /// othwerwise macOS defaults to a much lower
+  /// limit (up to 256) when launched from launchd.
+  public static func raiseOpenFileLimit()
+  {
+    #if canImport(Darwin)
+      var limit = rlimit()
+      guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else { return }
+      let cap: rlim_t = 8192
+      let target = limit.rlim_max == rlim_t(bitPattern: -1) ? cap : min(limit.rlim_max, cap)
+      guard target > limit.rlim_cur else { return }
+      limit.rlim_cur = target
+      _ = setrlimit(RLIMIT_NOFILE, &limit)
+    #endif
+  }
+
   public static func registerAkariPlugin()
   {
     guard let url = Bundle.hdAkari.url(forResource: "plugInfo", withExtension: "json")

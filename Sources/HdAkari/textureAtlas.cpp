@@ -307,6 +307,9 @@ HdAkariTextureAtlas::EnsureGridSized(HdSceneDelegate *sceneDelegate)
   size_t withHeadroom = texturedCount + texturedCount / 4 + 1;
   int grid = 1;
   while (size_t(grid) * size_t(grid) < withHeadroom) ++grid;
+  // if a stage exceeds the maximum texture size, extra materials will share
+  // existing slots instead of creating an oversized texture that crashes.
+  grid = std::min(grid, kMaxGridSize);
   int cellPixels = kCellPixels;
   if (texturedCount == 0) {
     grid = std::max(grid, kDefaultGridSize);

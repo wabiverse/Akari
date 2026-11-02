@@ -59,6 +59,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <sys/resource.h>
 #include <thread>
 #include <unistd.h>
 #include <unordered_map>
@@ -74,12 +75,33 @@ float Linear(float c)
   return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
 }
 
+/// Max texture files the cache can hold open. Capped at 256 (or 25% of the system limit)
+/// to leave room for background threads and prevent "too many open files" crashes.
+int PtexOpenFiles()
+{
+  struct rlimit limit{};
+  if (getrlimit(RLIMIT_NOFILE, &limit) != 0 || limit.rlim_cur == RLIM_INFINITY)
+  {
+    return 256;
+  }
+  const long long soft = static_cast<long long>(limit.rlim_cur);
+  return int(std::clamp<long long>(soft / 4, 16, 256));
+}
+
 /// The face averages and the streamed tiles share it, the files open at
 /// once and their decoded data, a small share of the machine's memory.
 PtexCache *Cache()
 {
-  static PtexCache *cache = PtexCache::create(
-      256, size_t(std::max<long long>((long long)sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGE_SIZE) / 64, 128ll << 20)));
+  static PtexCache *cache = [] {
+    const int files = PtexOpenFiles();
+    if (files < 256)
+    {
+      std::fprintf(stderr, "HdAkari: ptex keeps %d files open, the process's file limit is low\n", files);
+    }
+    return PtexCache::create(
+        files,
+        size_t(std::max<long long>((long long)sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGE_SIZE) / 64, 128ll << 20)));
+  }();
   return cache;
 }
 
@@ -90,9 +112,27 @@ struct Map
   int id = -1;
 };
 
+/// Releases a Ptex texture when the scope ends, however it ends.
+struct TextureHold
+{
+  PtexTexture *texture;
+  explicit TextureHold(PtexTexture *texture) : texture(texture) {}
+  ~TextureHold()
+  {
+    if (texture) texture->release();
+  }
+  TextureHold(TextureHold const &) = delete;
+  TextureHold &operator=(TextureHold const &) = delete;
+};
+
 std::mutex mapMutex;
 std::unordered_map<std::string, Map> maps;
 std::vector<std::string> mapPaths;
+
+/// Lock the cache lookup so threads check one at a time to prevent
+/// duplicate file counts that break the cache's tracking and cause
+/// file limit crashes.
+std::mutex cacheMutex;
 
 Map const &LoadMap(std::string const &path)
 {
@@ -105,7 +145,11 @@ Map const &LoadMap(std::string const &path)
   Map map;
   bool streams = false;
   Ptex::String error;
-  if (PtexTexture *texture = Cache()->get(path.c_str(), error)) {
+  // use a standalone reader to load and immediately close metadata files,
+  // which avoids clogging the streaming cache with thousands of open file
+  // handles.
+  if (PtexTexture *texture = PtexTexture::open(path.c_str(), error)) {
+    TextureHold hold(texture);
     const int channels = std::min(texture->numChannels(), 3);
     const int faces = std::max(texture->numFaces(), 0);
     map.res = VtIntArray(size_t(faces));
@@ -125,7 +169,6 @@ Map const &LoadMap(std::string const &path)
     if (sampled > 0) map.average = sum / float(sampled);
     streams = channels > 0 && texture->numChannels() <= 4 && texture->meshType() == Ptex::mt_quad &&
               texture->numFaces() <= (1 << HdAkariPtexFaceBits);
-    texture->release();
   } else {
     std::fprintf(stderr, "HdAkari: can't read Ptex %s: %s\n", path.c_str(), error.c_str());
   }
@@ -193,14 +236,14 @@ void Decode(Tile &tile)
     path = mapPaths[size_t(map)];
   }
   Ptex::String error;
-  PtexTexture *texture = Cache()->get(path.c_str(), error);
+  PtexTexture *texture = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    texture = Cache()->get(path.c_str(), error);
+  }
   if (!texture) return;
   // released after the faces' data it hands out.
-  struct Hold
-  {
-    PtexTexture *texture;
-    ~Hold() { texture->release(); }
-  } hold{texture};
+  TextureHold hold(texture);
   if (face >= texture->numFaces()) return;
   Ptex::FaceInfo const &info = texture->getFaceInfo(face);
   const Ptex::Res res(std::max(info.res.ulog2 - level, 0), std::max(info.res.vlog2 - level, 0));

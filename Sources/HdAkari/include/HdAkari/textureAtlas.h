@@ -112,6 +112,10 @@ public:
   static constexpr int kMaxCellPixels = 2048;  // cells grow up to this when few materials.
   static constexpr int kMaxAtlasPixels = 4096; // largest atlas grown cells may fill.
   static constexpr int kDefaultGridSize = 4;   // fallback if never sized.
+  // the atlas is a fixed 16384x16384 square (supported by all Metal devices),
+  // if we run out of slots, extra materials will share cells via round-robin.
+  static constexpr int kMaxTexturePixels = 16384;
+  static constexpr int kMaxGridSize = kMaxTexturePixels / kCellPixels;
 
   // Border reserved inside each cell so mip
   // levels only sample individual cells.

@@ -51,6 +51,8 @@
   {
     static func main()
     {
+      AppUtils.raiseOpenFileLimit()
+
       let render = AppUtils.renderArguments()
       if render.backgroundWorker
       {

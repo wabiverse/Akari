@@ -1115,9 +1115,12 @@ shader: mesh
       vec4 c0 = vec4(0.0), c2 = vec4(0.0);
       if (row >= 0)
       {
-        c0 = texelFetch(u_materialConstants, ivec2(0, row), 0);
-        vec4 c1 = texelFetch(u_materialConstants, ivec2(1, row), 0);
-        c2 = texelFetch(u_materialConstants, ivec2(2, row), 0);
+        // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+        int line = row >> 7;
+        int base = (row & 127) * 3;
+        c0 = texelFetch(u_materialConstants, ivec2(base, line), 0);
+        vec4 c1 = texelFetch(u_materialConstants, ivec2(base + 1, line), 0);
+        c2 = texelFetch(u_materialConstants, ivec2(base + 2, line), 0);
         mat = vec4(c1.r, c1.g, c0.a, c1.b);
       }
       // a threshold cuts out, without one opacity dithers and the temporal resolve blends it.
@@ -1209,9 +1212,12 @@ shader: mesh
       float4 c0 = float4(0.0), c2 = float4(0.0);
       if (row >= 0)
       {
-        c0 = u_materialConstants.read(uint2(0, row));
-        float4 c1 = u_materialConstants.read(uint2(1, row));
-        c2 = u_materialConstants.read(uint2(2, row));
+        // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+        uint line = uint(row) >> 7u;
+        uint base = uint(row & 127) * 3u;
+        c0 = u_materialConstants.read(uint2(base, line));
+        float4 c1 = u_materialConstants.read(uint2(base + 1u, line));
+        c2 = u_materialConstants.read(uint2(base + 2u, line));
         mat = float4(c1.r, c1.g, c0.a, c1.b);
       }
       // a threshold cuts out, without one opacity dithers and the temporal resolve blends it.
@@ -1387,9 +1393,12 @@ shader: mesh-static
       vec4 c0 = vec4(0.0), c2 = vec4(0.0);
       if (row >= 0)
       {
-        c0 = texelFetch(u_materialConstants, ivec2(0, row), 0);
-        vec4 c1 = texelFetch(u_materialConstants, ivec2(1, row), 0);
-        c2 = texelFetch(u_materialConstants, ivec2(2, row), 0);
+        // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+        int line = row >> 7;
+        int base = (row & 127) * 3;
+        c0 = texelFetch(u_materialConstants, ivec2(base, line), 0);
+        vec4 c1 = texelFetch(u_materialConstants, ivec2(base + 1, line), 0);
+        c2 = texelFetch(u_materialConstants, ivec2(base + 2, line), 0);
         mat = vec4(c1.r, c1.g, c0.a, c1.b);
       }
       // a threshold cuts out, without one opacity dithers and the temporal resolve blends it.
@@ -1483,9 +1492,12 @@ shader: mesh-static
       float4 c0 = float4(0.0), c2 = float4(0.0);
       if (row >= 0)
       {
-        c0 = u_materialConstants.read(uint2(0, row));
-        float4 c1 = u_materialConstants.read(uint2(1, row));
-        c2 = u_materialConstants.read(uint2(2, row));
+        // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+        uint line = uint(row) >> 7u;
+        uint base = uint(row & 127) * 3u;
+        c0 = u_materialConstants.read(uint2(base, line));
+        float4 c1 = u_materialConstants.read(uint2(base + 1u, line));
+        c2 = u_materialConstants.read(uint2(base + 2u, line));
         mat = float4(c1.r, c1.g, c0.a, c1.b);
       }
       // a threshold cuts out, without one opacity dithers and the temporal resolve blends it.
@@ -4198,9 +4210,12 @@ shader: mesh-transparent
       float3 albedo = texture(u_color_atlas, var.uv).rgb;
       float3 emission = float3(0.0);
       if (row >= 0) {
-        float4 c0 = u_materialConstants.read(uint2(0, row));
-        float4 c1 = u_materialConstants.read(uint2(1, row));
-        emission = u_materialConstants.read(uint2(2, row)).rgb;
+        // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+        uint line = uint(row) >> 7u;
+        uint base = uint(row & 127) * 3u;
+        float4 c0 = u_materialConstants.read(uint2(base, line));
+        float4 c1 = u_materialConstants.read(uint2(base + 1u, line));
+        emission = u_materialConstants.read(uint2(base + 2u, line)).rgb;
         mat = float4(c1.r, c1.g, c0.a, c1.b);
         albedo = c0.rgb;
       }
@@ -8584,8 +8599,14 @@ shader: outline-mask
     {
       vec4 mat = texture(u_material_atlas, var.uv);
       int row = int(-var.uv.x + 0.5) - 1;
-      if (row >= 0) mat = vec4(0.0, 0.0, texelFetch(u_materialConstants, ivec2(0, row), 0).a,
-                               texelFetch(u_materialConstants, ivec2(1, row), 0).b);
+      if (row >= 0)
+      {
+        // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+        int line = row >> 7;
+        int base = (row & 127) * 3;
+        mat = vec4(0.0, 0.0, texelFetch(u_materialConstants, ivec2(base, line), 0).a,
+                   texelFetch(u_materialConstants, ivec2(base + 1, line), 0).b);
+      }
       if (mat.b < (mat.a > 0.0 ? mat.a : 0.5)) discard;
       int width = int(u_outline.y);
       int id = int(round(var.primId));
@@ -8608,8 +8629,14 @@ shader: outline-mask
     ```msl
     float4 mat = texture(u_material_atlas, var.uv);
     int row = int(-var.uv.x + 0.5) - 1;
-    if (row >= 0) mat = float4(0.0, 0.0, u_materialConstants.read(uint2(0, row)).a,
-                               u_materialConstants.read(uint2(1, row)).b);
+    if (row >= 0)
+    {
+      // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+      uint line = uint(row) >> 7u;
+      uint base = uint(row & 127) * 3u;
+      mat = float4(0.0, 0.0, u_materialConstants.read(uint2(base, line)).a,
+                   u_materialConstants.read(uint2(base + 1u, line)).b);
+    }
     if (mat.b < (mat.a > 0.0 ? mat.a : 0.5)) discard_fragment();
     int width = int(u_outline.y);
     int id = int(round(var.primId));
