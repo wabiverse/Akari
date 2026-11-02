@@ -41,7 +41,7 @@
 public enum Akari
 {
   /// Semantic version of Akari.
-  public static let version = "0.0.3"
+  public static let version = "0.0.4"
 
   /// For renderer registration display names.
   public static let tagline = "A real-time PBR render engine for Hydra."
