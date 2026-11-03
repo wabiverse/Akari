@@ -3,7 +3,7 @@ format_version = 2
 [apps.AkariDemo]
 identifier = 'foundation.wabi.AkariDemo'
 product = 'AkariDemo'
-version = '0.0.4'
+version = '0.0.5'
 category = 'public.app-category.graphics-design'
 icon = 'Branding/Akari.icon'
 

@@ -171,9 +171,12 @@ extension Akari.LightProbes
       float4 c0 = float4(0.0), c2 = float4(0.0);
       if (row >= 0)
       {
-        c0 = constants.t.read(uint2(0, row));
-        float4 c1 = constants.t.read(uint2(1, row));
-        c2 = constants.t.read(uint2(2, row));
+        // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+        uint line = uint(row) >> 7u;
+        uint base = uint(row & 127) * 3u;
+        c0 = constants.t.read(uint2(base, line));
+        float4 c1 = constants.t.read(uint2(base + 1u, line));
+        c2 = constants.t.read(uint2(base + 2u, line));
         mat = float4(c1.r, c1.g, c0.a, c1.b);
       }
       if (mat.b < (mat.a > 0.0 ? mat.a : 0.5)) discard_fragment();

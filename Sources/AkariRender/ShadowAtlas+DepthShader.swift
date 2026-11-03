@@ -261,7 +261,14 @@ extension Akari.ShadowAtlas
         float4 mat = materials.atlas.sample(linear, in.uv);
         // an untextured material's uv is -(row + 1), its constants instead of the atlas.
         int row = int(-in.uv.x + 0.5) - 1;
-        if (row >= 0) mat = float4(0.0, 0.0, constants.atlas.read(uint2(0, row)).a, constants.atlas.read(uint2(1, row)).b);
+        if (row >= 0)
+        {
+          // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+          uint line = uint(row) >> 7u;
+          uint base = uint(row & 127) * 3u;
+          mat = float4(0.0, 0.0, constants.atlas.read(uint2(base, line)).a,
+                       constants.atlas.read(uint2(base + 1u, line)).b);
+        }
         if (mat.b < (mat.a > 0.0 ? mat.a : 0.5)) return;
       }
       int2 texel = int2(in.position.xy);
