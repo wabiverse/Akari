@@ -28,7 +28,7 @@
 
 ## Quickstart: Real-Time USD Rendering
 
-Akari can render any (`.usd`, `.usda`, `.usdc`, or `.usdz`) scene passed to the `USD_SCENE=` argument below, this repo also provides several scenes you can render immediately out of the box.
+Akari can render any (`.usd`, `.usda`, `.usdc`, or `.usdz`) scene passed to the `--usd` argument below, this repo also provides several scenes you can render immediately out of the box.
 
 ### Method 1: Download the Prebuilt macOS Release
 1. **Download the Installer:** Get the latest release via the [akari_macos_arm64_installer.dmg](https://github.com/wabiverse/Akari/releases/download/v0.0.5/akari_macos_arm64_installer.dmg).
