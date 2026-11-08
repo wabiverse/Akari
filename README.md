@@ -35,10 +35,7 @@ Akari can render any (`.usd`, `.usda`, `.usdc`, or `.usdz`) scene passed to the 
 2. **Mount and Install:** Double-click the downloaded `.dmg` and drag the **AkariDemo** app bundle into your `/Applications` folder.
 3. **Bypass macOS Security Warning:** Because this release is self-signed outside the Mac App Store, macOS may block it or falsely state that it is "damaged". To clear the warning, open your your Mac's **System Settings** > **Privacy & Security**, scroll down to the **Security** section, you will see a note saying *"akari was blocked..."* - click **Open Anyway**.
    > You may have to repeat this step when launching the **AkariDemo** app bundle for the first time.
-5. **Run the Renderer:** Execute the compiled binary directly or from your terminal, pointing it to your chosen file path:
-   ```bash
-   /Applications/AkariDemo.app/Contents/MacOS/AkariDemo --usd path/to/some/scene.usda
-   ```
+5. **Run the App:** Double click the app from your `/Applications` directory, build a scene using the 3D modeler and layout engine, or open your own USD scene with `File` > `Open...`.
 
 ---
 
