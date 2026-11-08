@@ -60,6 +60,8 @@ struct HdAkariStageInfo
 {
   /// Every camera prim's path, in traversal order.
   std::vector<std::string> cameras;
+  /// The camera the stage's render settings render through, empty without one.
+  std::string renderCamera;
   double startTimeCode = 0;
   double endTimeCode = 0;
   double timeCodesPerSecond = 24;

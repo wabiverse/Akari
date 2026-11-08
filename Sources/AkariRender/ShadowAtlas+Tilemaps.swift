@@ -114,7 +114,7 @@ extension Akari.ShadowAtlas
   /// Each directional level's light space, for tagging which tile to update.
   func uploadLevelParams(directional: [Cascade], directionalSlots: [Int], inverseView: Akari.Matrix4)
   {
-    guard let p = gl.mapBuffer(frame.levelParams) else { return }
+    guard let p = gl.mapBuffer(frame[.levelParams]) else { return }
     let out = p.assumingMemoryBound(to: Float.self)
     out.update(repeating: 0, count: Self.maxDirectionalTilemaps * Self.levelParamsStride)
 
@@ -137,9 +137,10 @@ extension Akari.ShadowAtlas
       o[14] = level.zBias
       o[15] = 1
     }
-    gl.unmapBuffer(frame.levelParams)
 
-    withMappedBuffer(frame.slotOfView, as: Int32.self)
+    gl.unmapBuffer(frame[.levelParams])
+
+    withMappedBuffer(frame[.slotOfView], as: Int32.self)
     { slots in
       slots.update(repeating: -1, count: Self.maxDirectionalTilemaps)
       for (i, offset) in directionalSlots.enumerated() where i < Self.maxDirectionalTilemaps
@@ -151,7 +152,7 @@ extension Akari.ShadowAtlas
 
   func dispatchTilemapShift(forceFullShift: Bool)
   {
-    withMappedBuffer(frame.gridShift, as: Int32.self)
+    withMappedBuffer(frame[.gridShift], as: Int32.self)
     { ptr in
       for offset in 0 ..< Self.maxDirectionalTilemaps
       {
@@ -163,49 +164,60 @@ extension Akari.ShadowAtlas
       }
     }
 
-    gl.setComputeShaderBuffer(kernels.tilemapShift, binding: 0, buffer: buffers.tiles)
-    gl.setComputeShaderBuffer(kernels.tilemapShift, binding: 1, buffer: buffers.pagesCached)
-    gl.setComputeShaderBuffer(kernels.tilemapShift, binding: 2, buffer: frame.gridShift)
-    gl.dispatchCompute(kernels.tilemapShift,
-                       groupsX: GLuint(Self.maxDirectionalTilemaps),
-                       groupsY: 1,
-                       groupsZ: 1)
+    kernels[.tilemapShift].bind(buffers[.tiles], buffers[.pagesCached], frame[.gridShift])
+    kernels[.tilemapShift].dispatch(Self.maxDirectionalTilemaps)
   }
 
   /// What a scene change left stale, uploading the moved casters boxes to this frame.
-  func findCasterRedraw(casterBounds: [Float], casterKeys: [UInt64]) -> CasterRedraw
+  func findCasterRedraw(_ casters: [Casters]) -> CasterRedraw
   {
     guard
-      frame.movedBoxes != 0,
-      let moved = casterMotion.movedBoxes(bounds: casterBounds, keys: casterKeys, limit: Self.maxMovedCasters)
+      frame[.movedBoxes] != 0,
+      let moved = casterMotion.movedBoxes(casters, limit: Self.maxMovedCasters)
     else { return .all }
     guard !moved.isEmpty else { return .boxes(0) }
 
-    withMappedBuffer(frame.movedBoxes, as: Float.self)
+    withMappedBuffer(frame[.movedBoxes], as: Float.self)
     { ptr in
       moved.withUnsafeBufferPointer { ptr.update(from: $0.baseAddress!, count: $0.count) }
     }
+
     return .boxes(moved.count / 6)
   }
 
-  func dispatchTileMapMaintenance(casterBounds: [Float], slotCount: Int,
+  /// The moved static caster boxes, uploaded to this frame, nil when every static page has to redraw.
+  func findStaticRedraw(_ casters: [Casters]) -> Int?
+  {
+    guard
+      frame[.movedStaticBoxes] != 0,
+      let moved = staticMotion.movedBoxes(casters, limit: Self.maxMovedCasters)
+    else { return nil }
+    guard !moved.isEmpty else { return 0 }
+
+    withMappedBuffer(frame[.movedStaticBoxes], as: Float.self)
+    { ptr in
+      moved.withUnsafeBufferPointer { ptr.update(from: $0.baseAddress!, count: $0.count) }
+    }
+
+    return moved.count / 6
+  }
+
+  func dispatchTileMapMaintenance(casters parts: [Casters], slotCount: Int,
                                   lightZ: SIMD3<Float>,
                                   cameraWorld: SIMD3<Float>,
                                   castersMoved: Bool,
-                                  redraw: CasterRedraw)
+                                  redraw: CasterRedraw,
+                                  staticRedraw: Int)
   {
     guard
-      kernels.clipmapClear != 0,
-      buffers.tilemapsClip != 0
+      kernels[.clipmapClear].isBuilt,
+      buffers[.tilemapsClip] != 0
     else { return }
 
-    gl.setComputeShaderBuffer(kernels.clipmapClear, binding: 0, buffer: buffers.tilemapsClip)
-    gl.dispatchCompute(kernels.clipmapClear,
-                       groupsX: GLuint((Self.maxTilemaps + 63) / 64),
-                       groupsY: 1,
-                       groupsZ: 1)
+    kernels[.clipmapClear].bind(buffers[.tilemapsClip])
+    kernels[.clipmapClear].dispatch((Self.maxTilemaps + 63) / 64)
 
-    let casterCount = casterBounds.count / 6
+    let casterCount = parts.reduce(0) { $0 + $1.bounds.count / 6 }
     guard casterCount > 0, slotCount > 0 else { return }
 
     var upload = castersMoved
@@ -217,124 +229,103 @@ extension Akari.ShadowAtlas
                                   count: casters.capacity * 6)
       upload = true
     }
+
     guard casters.buffer != 0 else { return }
     if upload, let p = gl.mapBuffer(casters.buffer)
     {
-      casterBounds.withUnsafeBytes { p.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
+      var offset = 0
+      for part in parts
+      {
+        part.bounds.withUnsafeBytes
+        {
+          guard let base = $0.baseAddress else { return }
+          (p + offset).copyMemory(from: base, byteCount: $0.count)
+          offset += $0.count
+        }
+      }
+
       gl.unmapBuffer(casters.buffer)
     }
 
-    if kernels.tilemapBounds != 0
+    if kernels[.tilemapBounds].isBuilt
     {
-      let kernel = kernels.tilemapBounds
-      setUniform(kernel, "u_casterCount", GL_INT, Int32(casterCount))
-      setUniform(kernel, "u_slotCount", GL_INT, Int32(slotCount))
-      setUniform(kernel, "u_lightZ", GLenum(GL_FLOAT_VEC3), lightZ)
-      gl.setComputeShaderBuffer(kernel, binding: 0, buffer: casters.buffer)
-      gl.setComputeShaderBuffer(kernel, binding: 1, buffer: buffers.tilemapsClip)
-      gl.dispatchCompute(kernel,
-                         groupsX: GLuint((casterCount + 63) / 64),
-                         groupsY: 1,
-                         groupsZ: 1)
+      let kernel = kernels[.tilemapBounds]
+      kernel.set(.casterCount, Int32(casterCount))
+      kernel.set(.slotCount, Int32(slotCount))
+      kernel.set(.lightZ, lightZ)
+      kernel.bind(casters.buffer, buffers[.tilemapsClip])
+      kernel.dispatch((casterCount + 63) / 64)
     }
 
     // a full redraw already shifted every tile stale.
-    if kernels.tagUpdate != 0, case let .boxes(movedCount) = redraw, movedCount > 0
+    if case let .boxes(movedCount) = redraw
     {
-      let kernel = kernels.tagUpdate
-      let r = sun.rotation
-      setUniform(kernel, "u_casterCount", GL_INT, Int32(movedCount))
-      setUniform(kernel, "u_slotCount", GL_INT, Int32(slotCount))
-      setUniform(kernel, "u_lightX", GLenum(GL_FLOAT_VEC3), SIMD3<Float>(r[0, 0], r[1, 0], r[2, 0]))
-      setUniform(kernel, "u_lightY", GLenum(GL_FLOAT_VEC3), SIMD3<Float>(r[0, 1], r[1, 1], r[2, 1]))
-      setUniform(kernel, "u_cameraWorld", GLenum(GL_FLOAT_VEC3), cameraWorld)
-      gl.setComputeShaderBuffer(kernel, binding: 0, buffer: frame.movedBoxes)
-      gl.setComputeShaderBuffer(kernel, binding: 1, buffer: frame.levelParams)
-      gl.setComputeShaderBuffer(kernel, binding: 2, buffer: buffers.tiles)
-      gl.dispatchCompute(kernel,
-                         groupsX: GLuint((movedCount * slotCount + 63) / 64),
-                         groupsY: 1,
-                         groupsZ: 1)
+      tagUpdate(kernels[.tagUpdate], boxes: frame[.movedBoxes], count: movedCount, slotCount: slotCount, cameraWorld: cameraWorld)
+      tagUpdate(kernels[.tagUpdateStatic], boxes: frame[.movedStaticBoxes], count: staticRedraw, slotCount: slotCount,
+                cameraWorld: cameraWorld)
     }
 
-    if kernels.tagPropagate != 0
+    if kernels[.tagPropagate].isBuilt
     {
-      gl.setComputeShaderBuffer(kernels.tagPropagate, binding: 0, buffer: buffers.tiles)
-      gl.setComputeShaderBuffer(kernels.tagPropagate, binding: 1, buffer: buffers.tiles)
-      gl.dispatchCompute(kernels.tagPropagate,
-                         groupsX: 1,
-                         groupsY: 1,
-                         groupsZ: GLuint(Self.maxTilemaps))
+      kernels[.tagPropagate].bind(buffers[.tiles], buffers[.tiles])
+      kernels[.tagPropagate].dispatch(1, 1, Self.maxTilemaps)
     }
   }
 
-  /// Picks this frame's dirty views from live tile state.
-  func dispatchSelectViews()
+  /// Tags the directional tiles under `count` of `boxes`, with whichever update `kernel` sets.
+  private func tagUpdate(_ kernel: Akari.ComputeKernel, boxes: GLuint, count movedCount: Int, slotCount: Int, cameraWorld: SIMD3<Float>)
   {
-    let kernel = kernels.buildRenderViews
-    let readback = buffers.renderViewReadback
+    if kernel.isBuilt, movedCount > 0, slotCount > 0
+    {
+      let r = sun.rotation
+      kernel.set(.casterCount, Int32(movedCount))
+      kernel.set(.slotCount, Int32(slotCount))
+      kernel.set(.lightX, SIMD3<Float>(r[0, 0], r[1, 0], r[2, 0]))
+      kernel.set(.lightY, SIMD3<Float>(r[0, 1], r[1, 1], r[2, 1]))
+      kernel.set(.cameraWorld, cameraWorld)
+      kernel.bind(boxes, frame[.levelParams], buffers[.tiles])
+      kernel.dispatch((movedCount * slotCount + 63) / 64)
+    }
+  }
+
+  /// Picks this frame's dirty views from live tile state, `budget` static tiles of them at most.
+  func dispatchSelectViews(budget: Int)
+  {
+    let kernel = kernels[.buildRenderViews]
+    let readback = renderViewReadback
 
     guard
-      kernel != 0,
-      kernels.countDirty != 0,
-      kernels.allotBudget != 0,
+      kernel.isBuilt,
+      kernels[.countDirty].isBuilt,
+      kernels[.allotBudget].isBuilt,
       readback != 0
     else { return }
 
-    gl.setComputeShaderBuffer(kernels.countDirty, binding: 0, buffer: buffers.tiles)
-    gl.setComputeShaderBuffer(kernels.countDirty, binding: 1, buffer: frame.slotOfView)
-    gl.setComputeShaderBuffer(kernels.countDirty, binding: 2, buffer: buffers.dirtyCount)
-    gl.dispatchCompute(kernels.countDirty,
-                       groupsX: GLuint((Self.maxViews + 63) / 64),
-                       groupsY: 1,
-                       groupsZ: 1)
+    kernels[.countDirty].bind(buffers[.tiles], frame[.slotOfView], buffers[.dirtyCount])
+    kernels[.countDirty].dispatch((Self.maxViews + 63) / 64)
 
-    gl.setComputeShaderBuffer(kernels.allotBudget, binding: 0, buffer: frame.slotOfView)
-    gl.setComputeShaderBuffer(kernels.allotBudget, binding: 1, buffer: buffers.dirtyCount)
-    gl.setComputeShaderBuffer(kernels.allotBudget, binding: 2, buffer: buffers.allowance)
-    gl.dispatchCompute(kernels.allotBudget, groupsX: 1, groupsY: 1, groupsZ: 1)
+    kernels[.allotBudget].set(.budget, Int32(budget))
+    kernels[.allotBudget].bind(frame[.slotOfView], buffers[.dirtyCount], buffers[.allowance])
+    kernels[.allotBudget].dispatch(1)
 
-    gl.setComputeShaderBuffer(kernel, binding: 0, buffer: buffers.tiles)
-    gl.setComputeShaderBuffer(kernel, binding: 1, buffer: frame.slotOfView)
-    gl.setComputeShaderBuffer(kernel, binding: 2, buffer: gl.computeReadbackCurrentBuffer(readback))
-    gl.setComputeShaderReadback(kernel, bindingIndex: 2, readback: readback)
-    gl.setComputeShaderBuffer(kernel, binding: 3, buffer: buffers.clearArgs)
-    gl.setComputeShaderBuffer(kernel, binding: 4, buffer: buffers.renderRect)
-    gl.setComputeShaderBuffer(kernel, binding: 5, buffer: buffers.renderRectStatic)
-    gl.setComputeShaderBuffer(kernel, binding: 6, buffer: buffers.clearArgsStatic)
-    gl.setComputeShaderBuffer(kernel, binding: 7, buffer: buffers.dirtyCount)
-    gl.setComputeShaderBuffer(kernel, binding: 8, buffer: buffers.allowance)
-    gl.dispatchCompute(kernel,
-                       groupsX: GLuint((Self.maxViews + 63) / 64),
-                       groupsY: 1,
-                       groupsZ: 1)
+    kernel.bind(buffers[.tiles], frame[.slotOfView], gl.computeReadbackCurrentBuffer(readback))
+    kernel.readback(readback, at: 2)
+    kernel.bind(buffers[.clearArgs], buffers[.renderRect], buffers[.renderRectStatic], buffers[.clearArgsStatic], buffers[.dirtyCount], buffers[.allowance], at: 3)
+    kernel.dispatch((Self.maxViews + 63) / 64)
   }
 
   func dispatchPageTable()
   {
-    guard kernels.pageTable != 0, pageTable != 0 else { return }
-    for map in [buffers.renderMap, buffers.renderMapStatic]
+    guard kernels[.pageTable].isBuilt, pageTable != 0 else { return }
+    for map in [buffers[.renderMap], buffers[.renderMapStatic]]
     {
-      gl.setComputeShaderBuffer(kernels.renderMapClear, binding: 0, buffer: map)
-      gl.dispatchCompute(kernels.renderMapClear,
-                         groupsX: GLuint((Self.maxViews * Self.tilemapRes * Self.tilemapRes + 63) / 64),
-                         groupsY: 1,
-                         groupsZ: 1)
+      kernels[.renderMapClear].bind(map)
+      kernels[.renderMapClear].dispatch((Self.maxViews * Self.tilemapRes * Self.tilemapRes + 63) / 64)
     }
-    gl.setComputeShaderBuffer(kernels.pageTable, binding: 0, buffer: buffers.tiles)
-    gl.setComputeShaderBuffer(kernels.pageTable, binding: 2, buffer: buffers.renderMap)
-    gl.setComputeShaderBuffer(kernels.pageTable, binding: 3, buffer: frame.slotOfView)
-    gl.setComputeShaderBuffer(kernels.pageTable, binding: 4, buffer: buffers.renderMapStatic)
-    gl.setComputeShaderBuffer(kernels.pageTable, binding: 5, buffer: buffers.renderRect)
-    gl.setComputeShaderBuffer(kernels.pageTable, binding: 6, buffer: buffers.renderRectStatic)
-    gl.setComputeShaderImage(kernels.pageTable,
-                             index: 0,
-                             texture: pageTable,
-                             format: GLenum(GL_RGBA16F),
-                             level: 0)
-    gl.dispatchCompute(kernels.pageTable,
-                       groupsX: GLuint((Self.maxTiles + 63) / 64),
-                       groupsY: 1,
-                       groupsZ: 1)
+
+    kernels[.pageTable].bind(buffers[.tiles])
+    kernels[.pageTable].bind(buffers[.renderMap], frame[.slotOfView], buffers[.renderMapStatic], buffers[.renderRect], buffers[.renderRectStatic], at: 2)
+    kernels[.pageTable].image(pageTable, at: 0, format: GLenum(GL_RGBA16F))
+    kernels[.pageTable].dispatch((Self.maxTiles + 63) / 64)
   }
 }

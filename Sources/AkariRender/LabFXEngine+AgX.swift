@@ -56,12 +56,13 @@ extension Akari.LabFXEngine
     guard let look, let lut = agxLut(look)
     else
     {
-      setFloat("u_agx_lut_size", 0)
+      setFloat(.agxLutSize, 0)
       return
     }
-    setSampler("u_agx_lut", lut)
-    setFloat("u_agx_lut_size", Float(Self.agxLutSize))
-    setVector("u_agx_lut_shaper", Self.agxLutShaper)
+
+    setSampler(.agxLut, lut)
+    setFloat(.agxLutSize, Float(Self.agxLutSize))
+    setVector(.agxLutShaper, Self.agxLutShaper)
   }
 
   private func agxLut(_ look: Akari.Color.Look) -> GLuint?
@@ -83,6 +84,7 @@ extension Akari.LabFXEngine
                     width: GLsizei(n), height: GLsizei(n), depth: GLsizei(n), border: 0,
                     format: GL_RGBA, type: GLenum(GL_HALF_FLOAT), pixels: bytes.baseAddress)
     }
+
     agxLooks[look] = lut
     return lut
   }
@@ -97,14 +99,11 @@ public extension Akari.RenderEngine
     let info = Pixar.HdAkariInspectStage(stage)
     guard info.hasColorManagement else { return }
     var settings = settings
-    switch String(info.viewTransform)
+    if let transform = Akari.Color.ViewTransform(transformName: String(info.viewTransform))
     {
-      case "AgX": settings.color.viewTransform = .agx
-      case "Standard": settings.color.viewTransform = .clamping
-      case "Filmic": settings.color.viewTransform = .filmic
-      case "Khronos PBR Neutral": settings.color.viewTransform = .khronosPBRNeutral
-      default: break
+      settings.color.viewTransform = transform
     }
+
     settings.color.look = Akari.Color.Look(lookName: String(info.look)) ?? .punchy
     settings.color.exposure = Float(info.exposure)
     settings.color.gamma = Float(info.gamma)

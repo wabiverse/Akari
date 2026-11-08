@@ -242,6 +242,7 @@ extension Akari.ShadowAtlas
                               gridOffsetX: Self.gridCoordinate(levelOffsetX),
                               gridOffsetY: Self.gridCoordinate(levelOffsetY)))
     }
+
     return DirectionalFit(cascades: cascades,
                           rotation: rotation,
                           eyeToLightRotation: rotation * inverseView,
@@ -268,30 +269,14 @@ extension Akari.ShadowAtlas
     let up = abs(travel.y) > 0.99 ? SIMD3<Float>(0, 0, 1) : SIMD3<Float>(0, 1, 0)
     let rotation = Akari.Matrix4.lookAt(eye: .zero, target: travel, up: up)
     guard
-      !sceneCorners.isEmpty
+      !sceneCorners.isEmpty,
+      let depthRange = lightDepthRange(sceneCorners, rotation: rotation)
     else
     {
       return DirectionalFit(cascades: [], rotation: rotation, isClipmap: true)
     }
 
-    var sceneNear = Float.greatestFiniteMagnitude
-    var sceneFar = -Float.greatestFiniteMagnitude
-    for p in sceneCorners
-    {
-      let lp = rotation.transform(p)
-      sceneNear = min(sceneNear, lp.z)
-      sceneFar = max(sceneFar, lp.z)
-    }
-    guard
-      sceneFar > sceneNear
-    else
-    {
-      return DirectionalFit(cascades: [], rotation: rotation, isClipmap: true)
-    }
-
-    let depthStep = exp2(ceil(log2(max(sceneFar - sceneNear, 1)))) / 8
-    sceneNear = (sceneNear / depthStep).rounded(.down) * depthStep
-    sceneFar = (sceneFar / depthStep).rounded(.up) * depthStep
+    let (sceneNear, sceneFar) = depthRange
 
     let margin = max((sceneFar - sceneNear) * 0.01, 1)
     let eyeDepth = sceneFar + margin
@@ -305,48 +290,15 @@ extension Akari.ShadowAtlas
       boundsMin = pointwiseMin(boundsMin, p)
       boundsMax = pointwiseMax(boundsMax, p)
     }
+
     let clip = camera.clipRange(within: (boundsMin, boundsMax))
     let nearClip = camera.isPerspective ? clip.near : 1e-3
     let farClip = camera.isPerspective ? clip.far : 100
 
-    let px = camera.projection[0, 0]
-    let py = camera.projection[1, 1]
-    let halfWidthNear = abs(px) > 1e-6 ? nearClip / px : nearClip
-    let halfHeightNear = abs(py) > 1e-6 ? nearClip / py : nearClip
-    let farScale = nearClip > 1e-6 ? farClip / nearClip : 1
-    let corners = [
-      SIMD3<Float>(-halfWidthNear, -halfHeightNear, -nearClip),
-      SIMD3<Float>(halfWidthNear, -halfHeightNear, -nearClip),
-      SIMD3<Float>(halfWidthNear, halfHeightNear, -nearClip),
-      SIMD3<Float>(-halfWidthNear, halfHeightNear, -nearClip),
-      SIMD3<Float>(-halfWidthNear * farScale, -halfHeightNear * farScale, -farClip),
-      SIMD3<Float>(halfWidthNear * farScale, -halfHeightNear * farScale, -farClip),
-      SIMD3<Float>(halfWidthNear * farScale, halfHeightNear * farScale, -farClip),
-      SIMD3<Float>(-halfWidthNear * farScale, halfHeightNear * farScale, -farClip),
-    ]
-    var frustumCenter = SIMD3<Float>(repeating: 0)
-    for c in corners
-    {
-      frustumCenter += c
-    }
-    frustumCenter /= 8
-    var frustumRadius: Float = 0
-    for c in corners
-    {
-      frustumRadius = max(frustumRadius, sqrt(Akari.Matrix.dot(c - frustumCenter, c - frustumCenter)))
-    }
-    let frustumCenterWorld = inverseView.transform(frustumCenter)
-
-    let v = camera.view.simd
-    let c0 = SIMD3(v.columns.0.x, v.columns.0.y, v.columns.0.z)
-    let c1 = SIMD3(v.columns.1.x, v.columns.1.y, v.columns.1.z)
-    let c2 = SIMD3(v.columns.2.x, v.columns.2.y, v.columns.2.z)
-    let t = SIMD3(v.columns.3.x, v.columns.3.y, v.columns.3.z)
-    let cameraWorldPos = SIMD3(
-      -(Akari.Matrix.dot(c0, t)),
-      -(Akari.Matrix.dot(c1, t)),
-      -(Akari.Matrix.dot(c2, t))
-    )
+    let frustum = viewFrustumSphere(camera, nearClip: nearClip, farClip: farClip)
+    let frustumCenterWorld = inverseView.transform(frustum.center)
+    let frustumRadius = frustum.radius
+    let cameraWorldPos = cameraPosition(camera)
     let toFrustumCenter = frustumCenterWorld - cameraWorldPos
     let distanceToFrustumCenter = sqrt(Akari.Matrix.dot(toFrustumCenter, toFrustumCenter))
 
@@ -370,41 +322,120 @@ extension Akari.ShadowAtlas
 
     for level in usedMinLevel ... maxLevel
     {
-      let radius = exp2(Float(level)) / 2
-
-      let tileSize = 2 * radius / Float(Self.tilemapRes)
-      var center = windowCenterLightPos
-      let gridX = (center.x / tileSize).rounded()
-      let gridY = (center.y / tileSize).rounded()
-      center.x = gridX * tileSize
-      center.y = gridY * tileSize
-
-      let tileOffset = SIMD2<Float>(windowCenterLightPos.x - center.x,
-                                    windowCenterLightPos.y - center.y)
-
-      let view = Akari.Matrix4.translation(SIMD3(-center.x, -center.y, -eyeDepth)) * rotation
-      let projectionMatrix = Akari.Matrix4.ortho(left: -radius, right: radius,
-                                                 bottom: -radius, top: radius,
-                                                 near: margin, far: depthFar)
-      let viewProjection = projectionMatrix * view
-
-      levels.append(Cascade(view: view,
-                            projection: projectionMatrix,
-                            viewProjection: viewProjection,
-                            splitFar: radius,
-                            key: Self.fingerprint(viewProjection),
-                            absoluteLevel: Int32(level),
-                            gridOffsetX: Self.gridCoordinate(gridX),
-                            gridOffsetY: Self.gridCoordinate(gridY),
-                            tileOffset: tileOffset,
-                            depthOffset: depthOffset,
-                            zScale: zScale,
-                            zBias: zBias))
+      levels.append(clipmapLevel(level, around: windowCenterLightPos, rotation: rotation, eyeDepth: eyeDepth,
+                                 margin: margin, depthFar: depthFar, depthOffset: depthOffset, zScale: zScale, zBias: zBias))
     }
 
     return DirectionalFit(cascades: levels, rotation: rotation,
                           eyeToLightRotation: rotation * inverseView,
                           refOffset: .zero, isClipmap: true)
+  }
+
+  /// The scene's depth along the light, snapped to an eighth of its power of two extent so it holds still.
+  private static func lightDepthRange(_ sceneCorners: [SIMD3<Float>], rotation: Akari.Matrix4) -> (Float, Float)?
+  {
+    var sceneNear = Float.greatestFiniteMagnitude
+    var sceneFar = -Float.greatestFiniteMagnitude
+    for p in sceneCorners
+    {
+      let lp = rotation.transform(p)
+      sceneNear = min(sceneNear, lp.z)
+      sceneFar = max(sceneFar, lp.z)
+    }
+
+    guard sceneFar > sceneNear else { return nil }
+
+    let depthStep = exp2(ceil(log2(max(sceneFar - sceneNear, 1)))) / 8
+    sceneNear = (sceneNear / depthStep).rounded(.down) * depthStep
+    sceneFar = (sceneFar / depthStep).rounded(.up) * depthStep
+
+    return (sceneNear, sceneFar)
+  }
+
+  /// The bounding sphere of the camera's frustum, in eye space.
+  private static func viewFrustumSphere(_ camera: Akari.Camera, nearClip: Float, farClip: Float)
+    -> (center: SIMD3<Float>, radius: Float)
+  {
+    let px = camera.projection[0, 0]
+    let py = camera.projection[1, 1]
+    let halfWidthNear = abs(px) > 1e-6 ? nearClip / px : nearClip
+    let halfHeightNear = abs(py) > 1e-6 ? nearClip / py : nearClip
+    let farScale = nearClip > 1e-6 ? farClip / nearClip : 1
+    let corners = [
+      SIMD3<Float>(-halfWidthNear, -halfHeightNear, -nearClip),
+      SIMD3<Float>(halfWidthNear, -halfHeightNear, -nearClip),
+      SIMD3<Float>(halfWidthNear, halfHeightNear, -nearClip),
+      SIMD3<Float>(-halfWidthNear, halfHeightNear, -nearClip),
+      SIMD3<Float>(-halfWidthNear * farScale, -halfHeightNear * farScale, -farClip),
+      SIMD3<Float>(halfWidthNear * farScale, -halfHeightNear * farScale, -farClip),
+      SIMD3<Float>(halfWidthNear * farScale, halfHeightNear * farScale, -farClip),
+      SIMD3<Float>(-halfWidthNear * farScale, halfHeightNear * farScale, -farClip),
+    ]
+    var frustumCenter = SIMD3<Float>(repeating: 0)
+    for c in corners
+    {
+      frustumCenter += c
+    }
+
+    frustumCenter /= 8
+    var frustumRadius: Float = 0
+    for c in corners
+    {
+      frustumRadius = max(frustumRadius, sqrt(Akari.Matrix.dot(c - frustumCenter, c - frustumCenter)))
+    }
+
+    return (frustumCenter, frustumRadius)
+  }
+
+  private static func cameraPosition(_ camera: Akari.Camera) -> SIMD3<Float>
+  {
+    let v = camera.view.simd
+    let c0 = SIMD3(v.columns.0.x, v.columns.0.y, v.columns.0.z)
+    let c1 = SIMD3(v.columns.1.x, v.columns.1.y, v.columns.1.z)
+    let c2 = SIMD3(v.columns.2.x, v.columns.2.y, v.columns.2.z)
+    let t = SIMD3(v.columns.3.x, v.columns.3.y, v.columns.3.z)
+    return SIMD3(
+      -(Akari.Matrix.dot(c0, t)),
+      -(Akari.Matrix.dot(c1, t)),
+      -(Akari.Matrix.dot(c2, t))
+    )
+  }
+
+  /// One clipmap level, a light view 2^level across snapped to its own tiles.
+  private static func clipmapLevel(_ level: Int, around windowCenterLightPos: SIMD3<Float>, rotation: Akari.Matrix4,
+                                   eyeDepth: Float, margin: Float, depthFar: Float, depthOffset: Float,
+                                   zScale: Float, zBias: Float) -> Cascade
+  {
+    let radius = exp2(Float(level)) / 2
+
+    let tileSize = 2 * radius / Float(Self.tilemapRes)
+    var center = windowCenterLightPos
+    let gridX = (center.x / tileSize).rounded()
+    let gridY = (center.y / tileSize).rounded()
+    center.x = gridX * tileSize
+    center.y = gridY * tileSize
+
+    let tileOffset = SIMD2<Float>(windowCenterLightPos.x - center.x,
+                                  windowCenterLightPos.y - center.y)
+
+    let view = Akari.Matrix4.translation(SIMD3(-center.x, -center.y, -eyeDepth)) * rotation
+    let projectionMatrix = Akari.Matrix4.ortho(left: -radius, right: radius,
+                                               bottom: -radius, top: radius,
+                                               near: margin, far: depthFar)
+    let viewProjection = projectionMatrix * view
+
+    return Cascade(view: view,
+                   projection: projectionMatrix,
+                   viewProjection: viewProjection,
+                   splitFar: radius,
+                   key: Self.fingerprint(viewProjection),
+                   absoluteLevel: Int32(level),
+                   gridOffsetX: Self.gridCoordinate(gridX),
+                   gridOffsetY: Self.gridCoordinate(gridY),
+                   tileOffset: tileOffset,
+                   depthOffset: depthOffset,
+                   zScale: zScale,
+                   zBias: zBias)
   }
 
   static func sceneCorners(_ bounds: (min: SIMD3<Float>, max: SIMD3<Float>)) -> [SIMD3<Float>]

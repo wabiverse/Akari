@@ -75,7 +75,7 @@ public extension Akari.Geom
       /// The matrices taking `worldMatrix`'s output to world space, 16 floats
       /// each, shared by every mesh under the same prototype. Empty when the
       /// mesh is drawn once at `worldMatrix`.
-      public var instances: [Float] = []
+      public var instances: Akari.Geom.Matrices = []
       /// Hashes `instances`, equal sets share it.
       public var instancesKey: UInt64 = 0
       /// Set when ``Akari/LiveInstances`` draws this prototype's instances.
@@ -129,11 +129,15 @@ public extension Akari.Geom
     public struct InstanceDraw
     {
       public var key: UInt64
-      public var transforms: [Float]
+      public var transforms: Akari.Geom.Matrices
       public var count: Int
       public var livePrototype: String?
+      /// The level of detail band the prototype draws in, in pixels per unit of each instance's size.
+      public var lod = SIMD2<Float>(0, .infinity)
+      /// The bounds its level of detail and culling take, before each instance's transform, when not its own.
+      public var bounds: [Float]?
 
-      public init(key: UInt64, transforms: [Float], count: Int, livePrototype: String? = nil)
+      public init(key: UInt64, transforms: Akari.Geom.Matrices, count: Int, livePrototype: String? = nil)
       {
         self.key = key
         self.transforms = transforms
@@ -225,7 +229,8 @@ public extension Akari.Geom
 
     /// The most triangles one record keeps built for the next in memory,
     /// past which a scene's vertices would be held twice, here and on the
-    /// GPU. Builds mapped from the geometry cache are kept regardless.
+    /// GPU. Builds mapped from the geometry cache are kept regardless, the
+    /// ones it had no room for are not.
     private static let cacheTriangles = 8_000_000
     /// How much one chunk builds before its handed on.
     private static let chunkTriangles = 2_000_000
@@ -237,8 +242,7 @@ public extension Akari.Geom
     /// vertices are alive at once unless the meshes are few enough to cache.
     public func record(_ meshes: [RawMesh], reusing others: [Recorder] = [], body: ([Item]) -> Void)
     {
-      let caches = Akari.Geom.GeometryCache.shared.isEnabled
-        || meshes.reduce(0) { $0 + $1.tris.size() } <= Self.cacheTriangles
+      let small = meshes.reduce(0) { $0 + $1.tris.size() } <= Self.cacheTriangles
       var newCache: [String: CachedMesh] = [:]
       var start = 0
       while start < meshes.count
@@ -285,21 +289,24 @@ public extension Akari.Geom
         items.reserveCapacity(readyItems.count + builtItems.count)
         for item in readyItems + builtItems
         {
-          if caches
+          if small || item.cached.built.isMapped
           {
             var cached = item.cached
             if !keepsTopology { cached.topology = nil }
             newCache[item.id] = cached
           }
+
           if item.cached.built.isEmpty { continue }
           items.append(Item(primId: item.primId, dataRevision: item.cached.dataRevision,
                             built: item.cached.built,
                             worldMatrix: item.worldMatrix, normalMatrix: item.normalMatrix,
                             instanceDraws: item.instanceDraws))
         }
+
         if !items.isEmpty { body(items) }
         start = end
       }
+
       cache = newCache
     }
 
@@ -330,6 +337,7 @@ public extension Akari.Geom
           box.buffer[i] = build(box.inputs[i], keepsTopology: keepsTopology)
         }
       }
+
       for i in inputs.indices where inputs[i].tris.size() > largeTriangles
       {
         results[i] = build(inputs[i], keepsTopology: keepsTopology)
@@ -348,6 +356,7 @@ public extension Akari.Geom
                          worldMatrix: input.worldMatrix, normalMatrix: input.normalMatrix,
                          instanceDraws: input.instanceDraws)
       }
+
       let topology: Akari.Geom.Topology
       let pointsFlat: [Float]
       if let cached = input.topology
@@ -361,6 +370,7 @@ public extension Akari.Geom
         topology = Akari.Geom.topology(trisFlat: flat.tris, uvsFlat: flat.uvs, pointCount: flat.points.count / 3)
         pointsFlat = flat.points
       }
+
       var verts: [Float] = []
       var indices: [Int32] = []
       var sources: [Int32] = []
@@ -378,6 +388,7 @@ public extension Akari.Geom
           }
         }
       }
+
       let cached = CachedMesh(dataRevision: input.dataRevision, topologyRevision: input.topologyRevision,
                               flipWinding: input.flipWinding, topology: keepsTopology ? topology : nil,
                               built: Akari.Geom.GeometryCache.shared.store(input.cacheKey, verts: verts, indices: indices,

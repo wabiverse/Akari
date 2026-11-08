@@ -90,7 +90,7 @@ extension Akari.LabFXEngine
     var bakedShadow: [Float] = []
   }
 
-  static let volumePasses = ["volume shadow", "volume march"]
+  static let volumePasses: [Pass] = [.volumeShadow, .volumeMarch]
 
   /// Picks up the first visible volume and loads its density field once per file.
   func syncVolumes(_ scene: Pixar.HdAkariScene)
@@ -105,6 +105,7 @@ extension Akari.LabFXEngine
       volumes.hero = nil
       return
     }
+
     let file = String(data.densityFile), name = String(data.densityName)
     let resolution = max(Int(data.maxResolution), 8)
     let key = "\(file)|\(name)|\(resolution)"
@@ -124,6 +125,7 @@ extension Akari.LabFXEngine
           loaded.lock.withLock { loaded.voxels[key] = .some(voxels) }
         }
       }
+
       if let voxels = loaded.lock.withLock({ loaded.voxels.removeValue(forKey: key) })
       {
         volumes.loading.remove(key)
@@ -134,12 +136,14 @@ extension Akari.LabFXEngine
         volumes.revision = .max
       }
     }
+
     guard let grid = volumes.grids[key]
     else
     {
       volumes.hero = nil
       return
     }
+
     let world = simd_double4x4(rows: (0 ..< 4).map { r in SIMD4((0 ..< 4).map { p[r * 4 + $0] }) })
     volumes.hero = Volumes.Hero(key: key,
                                 worldFromTexture: world.transpose * grid.localFromTexture.transpose,
@@ -159,23 +163,24 @@ extension Akari.LabFXEngine
       volumes.shadowThisFrame = active
       volumes.bakedShadow = []
     }
+
     guard let hero = volumes.hero, let grid = volumes.grids[hero.key]
     else
     {
-      setVector("u_volumeParams", .zero)
+      setVector(.volumeParams, .zero)
       return
     }
 
     let m = hero.worldFromTexture
     let toWorld = simd_float4x4(columns: (SIMD4<Float>(m.columns.0), SIMD4<Float>(m.columns.1), SIMD4<Float>(m.columns.2), SIMD4<Float>(m.columns.3)))
-    setMatrix("u_volumeWorldFromTexture", Akari.Matrix4(toWorld))
-    setMatrix("u_volumeTextureFromWorld", Akari.Matrix4(toWorld.inverse))
+    setMatrix(.volumeWorldFromTexture, Akari.Matrix4(toWorld))
+    setMatrix(.volumeTextureFromWorld, Akari.Matrix4(toWorld.inverse))
     var texture = grid.texture
-    runtime.setUniform("u_volumeDensity", type: GLenum(GL_SAMPLER_3D), data: &texture)
-    setVector("u_volumeParams", SIMD4(hero.densityScale, hero.anisotropy, 1, Float(max(grid.dims.x, max(grid.dims.y, grid.dims.z)))))
-    setVector("u_volumeAlbedo", SIMD4(hero.albedo, 0))
+    runtime.setUniform(.volumeDensity, type: GLenum(GL_SAMPLER_3D), data: &texture)
+    setVector(.volumeParams, SIMD4(hero.densityScale, hero.anisotropy, 1, Float(max(grid.dims.x, max(grid.dims.y, grid.dims.z)))))
+    setVector(.volumeAlbedo, SIMD4(hero.albedo, 0))
     let direction = Akari.Math.normalize(sun)
-    setVector("u_volumeSun", SIMD4(direction, 0))
+    setVector(.volumeSun, SIMD4(direction, 0))
 
     // the shadow is baked in the volume's own space, moving it changes nothing, turning or scaling it does.
     let key = [direction.x, direction.y, direction.z, hero.densityScale]
@@ -184,7 +189,7 @@ extension Akari.LabFXEngine
     volumes.bakedShadow = key
     if bake != volumes.shadowThisFrame
     {
-      runtime.setPassActive("volume shadow", active: bake)
+      runtime.setPassActive(.volumeShadow, active: bake)
       volumes.shadowThisFrame = bake
     }
   }
@@ -197,6 +202,7 @@ extension Akari.LabFXEngine
       print("[akari] volume: could not read '\(name)' from \(file)")
       return nil
     }
+
     defer { Pixar.HdAkariFreeVolumeGrid(grid) }
     let dims = SIMD3(Int(Pixar.HdAkariVolumeGridWidth(grid)), Int(Pixar.HdAkariVolumeGridHeight(grid)), Int(Pixar.HdAkariVolumeGridDepth(grid)))
     let count = dims.x * dims.y * dims.z
@@ -219,6 +225,7 @@ extension Akari.LabFXEngine
     {
       gl.texParameter(target: GLenum(GL_TEXTURE_3D), pname: GLenum(pname), param: GLint(param))
     }
+
     gl.texImage3D(target: GLenum(GL_TEXTURE_3D), level: 0, internalFormat: GLint(GL_R16F),
                   width: GLsizei(voxels.dims.x), height: GLsizei(voxels.dims.y), depth: GLsizei(voxels.dims.z), border: 0,
                   format: GLenum(GL_RED), type: GLenum(GL_HALF_FLOAT), pixels: voxels.half)

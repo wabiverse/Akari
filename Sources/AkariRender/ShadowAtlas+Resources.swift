@@ -43,32 +43,47 @@ import LabGL
 
 extension Akari.ShadowAtlas
 {
-  struct Buffers
+  enum Buffer: Akari.GPUBufferName
   {
-    var tiles: GLuint = 0
-    var pagesFree: GLuint = 0
-    var pagesInfo: GLuint = 0
-    var pagesCached: GLuint = 0
-    var renderMap: GLuint = 0
-    var clearArgs: GLuint = 0
+    case tiles, pagesFree, pagesInfo, pagesCached
+    case renderMap, clearArgs, renderRect
     /// The tiles to render whose static depth is stale too, and their dirty rect per view.
-    var renderMapStatic: GLuint = 0
-    var clearArgsStatic: GLuint = 0
-    var renderRectStatic: GLuint = 0
+    case renderMapStatic, clearArgsStatic, renderRectStatic
     /// Per tilemap depth range, as ordered ints so it can be atomically min/maxed.
-    var tilemapsClip: GLuint = 0
-    /// This frame's dirty tile rect per view, packed as buildRenderViews writes it.
-    var renderRect: GLuint = 0
-    /// Per directional view, its tilemap slot when it has tiles to render.
-    var renderViewReadback: GLuint = 0
+    case tilemapsClip
     /// Per view, its stale tiles and how many of them fit this frame's budget.
-    var dirtyCount: GLuint = 0
-    var allowance: GLuint = 0
+    case dirtyCount, allowance
 
-    var all: [GLuint]
+    var usage: GLuint
     {
-      [tiles, pagesFree, pagesInfo, pagesCached, renderMap, clearArgs, tilemapsClip, renderRect,
-       renderMapStatic, clearArgsStatic, renderRectStatic, dirtyCount, allowance]
+      switch self
+      {
+        case .tiles, .pagesFree, .pagesInfo, .pagesCached:
+          LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE | LGL_BUFFER_MAP_WRITE
+        default:
+          LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE
+      }
+    }
+
+    /// Every element is four bytes.
+    var bytes: Int
+    {
+      4 * count
+    }
+
+    private var count: Int
+    {
+      switch self
+      {
+        case .tiles: maxTiles
+        case .pagesFree: maxPage
+        case .pagesInfo: 8
+        case .pagesCached: maxPage * 2
+        case .renderMap, .renderMapStatic: maxViews * tilemapRes * tilemapRes
+        case .clearArgs, .clearArgsStatic: 3
+        case .tilemapsClip: maxTilemaps * 2
+        case .renderRect, .renderRectStatic, .dirtyCount, .allowance: maxViews
+      }
     }
   }
 
@@ -76,25 +91,56 @@ extension Akari.ShadowAtlas
   struct Frame
   {
     var data: GLuint = 0
-    var gridShift: GLuint = 0
-    var levelParams: GLuint = 0
-    /// Fit order view index -> tilemap slot, for the page table kernel.
-    var slotOfView: GLuint = 0
-    /// Per view, nonzero when this frame's draw rendered it.
-    var drawnView: GLuint = 0
-    var clearList: GLuint = 0
-    var clearListStatic: GLuint = 0
-    var runViews: GLuint = 0
-    var runXf: GLuint = 0
-    var punctualViews: GLuint = 0
-    var viewXf: GLuint = 0
-    /// Old and new boxes of the casters that moved, six floats each.
-    var movedBoxes: GLuint = 0
+    var buffers = Akari.GPUBuffers<FrameBuffer>()
 
-    var buffers: [GLuint]
+    subscript(buffer: FrameBuffer) -> GLuint
     {
-      [gridShift, levelParams, slotOfView, drawnView, clearList, clearListStatic, runViews, runXf, punctualViews,
-       viewXf, movedBoxes]
+      buffers[buffer]
+    }
+  }
+
+  enum FrameBuffer: Akari.GPUBufferName
+  {
+    case gridShift, levelParams
+    /// Fit order view index -> tilemap slot, for the page table kernel.
+    case slotOfView
+    /// Per view, nonzero when this frame's draw rendered it.
+    case drawnView
+    case clearList, clearListStatic, runViews, runXf, punctualViews, viewXf
+    /// Old and new boxes of the casters that moved, six floats each, and the same for the static captures.
+    case movedBoxes, movedStaticBoxes
+
+    var usage: GLuint
+    {
+      switch self
+      {
+        case .clearList, .clearListStatic: LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE
+        case .gridShift: LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE | LGL_BUFFER_MAP_WRITE
+        default: LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_MAP_WRITE
+      }
+    }
+
+    /// Every element is four bytes.
+    var bytes: Int
+    {
+      4 * count
+    }
+
+    private var count: Int
+    {
+      switch self
+      {
+        case .gridShift: maxDirectionalTilemaps * 2
+        case .levelParams: maxDirectionalTilemaps * levelParamsStride
+        case .slotOfView: maxDirectionalTilemaps
+        case .drawnView: maxViews
+        case .clearList, .clearListStatic: maxPage
+        case .runViews: maxRuns * maxAmplificationViews
+        case .runXf: maxRuns * maxAmplificationViews * 16
+        case .punctualViews: maxPunctualViews
+        case .viewXf: maxViews * 16
+        case .movedBoxes, .movedStaticBoxes: maxMovedCasters * 6
+      }
     }
   }
 
@@ -140,7 +186,7 @@ extension Akari.ShadowAtlas
   {
     guard depthShader == 0 else { return }
 
-    kernels = Self.precompileKernels()
+    kernels = .precompile()
     depthShader = gl.precompileShader(name: "akari-shadow-depth",
                                       vertexGLSL: Self.depthVertexGLSL,
                                       fragmentGLSL: Self.depthFragmentGLSL,
@@ -153,24 +199,22 @@ extension Akari.ShadowAtlas
     if resourcesReady { return true }
 
     precompileShaders()
+    let failed = kernels.wait()
     guard
-      kernels.waitForRequired(),
+      Kernel.required.isDisjoint(with: failed),
       gl.waitShader(depthShader) != 0
     else { return fail("shader compilation failed") }
-    if kernels.tagUsageVolume != 0, gl.waitComputeShader(kernels.tagUsageVolume) == 0
+    if failed.contains(.tagUsageVolume)
     {
       print("[akari/shadow] volume usage tagging failed to compile, fog shadows fall back to surface pages")
-      gl.deleteComputeShader(kernels.tagUsageVolume)
-      kernels.tagUsageVolume = 0
-    }
-    if kernels.tagUpdatePunctual != 0, gl.waitComputeShader(kernels.tagUpdatePunctual) == 0
-    {
-      print("[akari/shadow] point light update tagging failed to compile, moving casters redraw every face")
-      gl.deleteComputeShader(kernels.tagUpdatePunctual)
-      kernels.tagUpdatePunctual = 0
     }
 
-    guard makePagePool() else { return fail("SSBO allocation failed") }
+    if failed.contains(.tagUpdatePunctual)
+    {
+      print("[akari/shadow] point light update tagging failed to compile, moving casters redraw every face")
+    }
+
+    guard makeBuffers() else { return fail("SSBO allocation failed") }
 
     amplification.views = gl.genInstanceTransforms(count: GLsizei(Self.maxAmplificationViews))
     amplification.viewports = gl.genInstanceViewports(count: GLsizei(Self.maxAmplificationViews))
@@ -204,43 +248,20 @@ extension Akari.ShadowAtlas
     atlasTarget = rt
     precompileDepthVariants()
 
-    frames = (0 ..< Self.bufferRing).map { _ in makeFrame() }
-    data = frames[0].data
+    frames = (0 ..< Self.bufferRing).compactMap { _ in makeFrame() }
     pageTable = makeTexture(width: Self.tilesPerTilemap,
                             height: Self.maxTilemaps,
                             internalFormat: GL_RGBA16F,
                             format: GL_RGBA)
     guard
-      !frames.contains(where: { $0.data == 0 }),
+      frames.count == Self.bufferRing,
       pageTable != 0
-    else { return fail("data/page-table texture allocation failed") }
+    else { return fail("frame buffer or page table allocation failed") }
+    data = frames[0].data
 
-    let readWrite = LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE
-    buffers.renderMap = makeBuffer(readWrite, UInt32.self, count: Self.maxViews * Self.tilemapRes * Self.tilemapRes)
-    buffers.clearArgs = makeBuffer(readWrite, UInt32.self, count: 3)
-    buffers.tilemapsClip = makeBuffer(readWrite, Int32.self, count: Self.maxTilemaps * 2)
-    buffers.renderRect = makeBuffer(readWrite, UInt32.self, count: Self.maxViews)
-    buffers.renderMapStatic = makeBuffer(readWrite, UInt32.self, count: Self.maxViews * Self.tilemapRes * Self.tilemapRes)
-    buffers.clearArgsStatic = makeBuffer(readWrite, UInt32.self, count: 3)
-    buffers.renderRectStatic = makeBuffer(readWrite, UInt32.self, count: Self.maxViews)
-    buffers.dirtyCount = makeBuffer(readWrite, UInt32.self, count: Self.maxViews)
-    buffers.allowance = makeBuffer(readWrite, UInt32.self, count: Self.maxViews)
-    buffers.renderViewReadback = gl.createComputeReadback(sizeBytes: GLsizei(Self.maxViews * MemoryLayout<UInt32>.size),
-                                                          ringSize: 3)
-    guard
-      buffers.renderMap != 0,
-      buffers.clearArgs != 0,
-      buffers.renderRect != 0,
-      buffers.renderMapStatic != 0,
-      buffers.clearArgsStatic != 0,
-      buffers.renderRectStatic != 0,
-      buffers.dirtyCount != 0,
-      buffers.allowance != 0,
-      buffers.renderViewReadback != 0,
-      !frames.contains(where: { $0.clearList == 0 || $0.clearListStatic == 0 || $0.slotOfView == 0 || $0.drawnView == 0 })
-    else { return fail("render-map/clear-list/slot-map buffer allocation failed") }
-    guard !frames.contains(where: { $0.levelParams == 0 }) else { return fail("level-params buffer allocation failed") }
-    guard !frames.contains(where: { $0.gridShift == 0 }) else { return fail("grid-shift SSBO allocation failed") }
+    renderViewReadback = gl.createComputeReadback(sizeBytes: GLsizei(Self.maxViews * MemoryLayout<UInt32>.size),
+                                                  ringSize: 3)
+    guard renderViewReadback != 0 else { return fail("render view readback allocation failed") }
 
     resourcesReady = true
 
@@ -255,21 +276,27 @@ extension Akari.ShadowAtlas
     {
       gl.deleteTextures(count: 1, textures: &tex)
     }
-    for buf in buffers.all + frames.flatMap(\.buffers) + culling.flatMap(\.buffers) + [casters.buffer] where buf != 0
+
+    buffers.release()
+    for var frame in frames
+    {
+      frame.buffers.release()
+    }
+
+    for buf in culling.flatMap(\.buffers) + [casters.buffer] where buf != 0
     {
       gl.deleteBuffer(buf)
     }
-    if buffers.renderViewReadback != 0 { gl.deleteComputeReadback(buffers.renderViewReadback) }
-    for shader in kernels.all where shader != 0
-    {
-      gl.deleteComputeShader(shader)
-    }
+
+    if renderViewReadback != 0 { gl.deleteComputeReadback(renderViewReadback) }
+    kernels.release()
     if depthShader != 0 { gl.deleteShader(depthShader) }
     if amplification.views != 0
     {
       var handle = amplification.views
       gl.deleteInstanceTransforms(count: 1, handles: &handle)
     }
+
     if amplification.viewports != 0
     {
       var handle = amplification.viewports
@@ -277,11 +304,9 @@ extension Akari.ShadowAtlas
     }
 
     atlasTarget = 0; atlas = 0; staticAtlas = 0; atlasDepth = 0; data = 0; pageTable = 0
-    frames = []; ringCursor = 0
-    buffers = Buffers()
+    frames = []; ringCursor = 0; renderViewReadback = 0
     culling = []
     casters = CasterBounds()
-    kernels = Kernels()
     depthShader = 0
     amplification = Amplification()
 
@@ -289,8 +314,8 @@ extension Akari.ShadowAtlas
     lastSceneRevision = .max
     frameFit = FrameFit()
     casterMotion = CasterMotion()
+    staticMotion = CasterMotion()
     casterRedraw = .none
-    lastStaticGeneration = .max
     punctualHistory = PunctualHistory()
     directionalHistory = DirectionalHistory()
     sunMotion = SunMotion()
@@ -335,25 +360,17 @@ extension Akari.ShadowAtlas
     return false
   }
 
-  private func makePagePool() -> Bool
+  private func makeBuffers() -> Bool
   {
-    let usage = LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE | LGL_BUFFER_MAP_WRITE
-    buffers.tiles = makeBuffer(usage, UInt32.self, count: Self.maxTiles)
-    buffers.pagesFree = makeBuffer(usage, UInt32.self, count: Self.maxPage)
-    buffers.pagesInfo = makeBuffer(usage, Int32.self, count: 8)
-    buffers.pagesCached = makeBuffer(usage, UInt32.self, count: Self.maxPage * 2)
-    guard
-      buffers.tiles != 0,
-      buffers.pagesFree != 0,
-      buffers.pagesInfo != 0,
-      buffers.pagesCached != 0
-    else { return false }
+    guard let made = Akari.GPUBuffers<Buffer>.make() else { return false }
+    buffers = made
 
-    withMappedBuffer(buffers.tiles, as: UInt32.self)
+    withMappedBuffer(buffers[.tiles], as: UInt32.self)
     {
       $0.initialize(repeating: 0, count: Self.maxTiles)
     }
-    withMappedBuffer(buffers.pagesFree, as: UInt32.self)
+
+    withMappedBuffer(buffers[.pagesFree], as: UInt32.self)
     { ptr in
       for slot in 0 ..< Self.maxPage
       {
@@ -362,7 +379,8 @@ extension Akari.ShadowAtlas
         ptr[slot] = (col & 7) | ((col >> 3) << 3) | (z << 6)
       }
     }
-    withMappedBuffer(buffers.pagesInfo, as: Int32.self)
+
+    withMappedBuffer(buffers[.pagesInfo], as: Int32.self)
     { ptr in
       ptr[0] = Int32(Self.maxPage)
       ptr[1] = 0
@@ -373,7 +391,8 @@ extension Akari.ShadowAtlas
       ptr[6] = 0
       ptr[7] = 0
     }
-    withMappedBuffer(buffers.pagesCached, as: UInt32.self)
+
+    withMappedBuffer(buffers[.pagesCached], as: UInt32.self)
     {
       $0.initialize(repeating: 0xFFFF_FFFF, count: Self.maxPage * 2)
     }
@@ -381,25 +400,19 @@ extension Akari.ShadowAtlas
     return true
   }
 
-  private func makeFrame() -> Frame
+  private func makeFrame() -> Frame?
   {
-    let read = LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_MAP_WRITE
-    return Frame(data: makeTexture(width: Self.dataTextureWidth,
-                                   height: Self.maxTilemaps,
-                                   internalFormat: GL_RGBA32F,
-                                   format: GL_RGBA),
-                 gridShift: makeBuffer(read | LGL_BUFFER_COMPUTE_WRITE, Int32.self, count: Self.maxDirectionalTilemaps * 2),
-                 levelParams: makeBuffer(read, Float.self, count: Self.maxDirectionalTilemaps * Self.levelParamsStride),
-                 slotOfView: makeBuffer(read, Int32.self, count: Self.maxDirectionalTilemaps),
-                 drawnView: makeBuffer(read, Int32.self, count: Self.maxViews),
-                 clearList: makeBuffer(LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE, UInt32.self, count: Self.maxPage),
-                 clearListStatic: makeBuffer(LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE, UInt32.self,
-                                             count: Self.maxPage),
-                 runViews: makeBuffer(read, Int32.self, count: Self.maxRuns * Self.maxAmplificationViews),
-                 runXf: makeBuffer(read, Float.self, count: Self.maxRuns * Self.maxAmplificationViews * 16),
-                 punctualViews: makeBuffer(read, Int32.self, count: Self.maxPunctualViews),
-                 viewXf: makeBuffer(read, Float.self, count: Self.maxViews * 16),
-                 movedBoxes: makeBuffer(read, Float.self, count: Self.maxMovedCasters * 6))
+    let data = makeTexture(width: Self.dataTextureWidth, height: Self.maxTilemaps, internalFormat: GL_RGBA32F, format: GL_RGBA)
+    guard data != 0 else { return nil }
+    guard let buffers = Akari.GPUBuffers<FrameBuffer>.make()
+    else
+    {
+      var data = data
+      gl.deleteTextures(count: 1, textures: &data)
+      return nil
+    }
+
+    return Frame(data: data, buffers: buffers)
   }
 
   private func makeTexture(width: Int, height: Int, internalFormat: GLint, format: GLenum) -> GLuint

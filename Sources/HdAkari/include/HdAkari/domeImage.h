@@ -65,11 +65,15 @@ struct HdAkariDomeImage
   int smallWidth = 0;
   int smallHeight = 0;
   std::vector<uint16_t> small;
+  /// The same copy with its sun left in, for a scene whose own distant light shades as the sun.
+  std::vector<uint16_t> smallFull;
   /// Sun extraction as radiance over the threshold, toward its energy
   /// weighted direction (dome space) with its summed irradiance.
   bool hasSun = false;
   float sunX = 0.0f, sunY = 1.0f, sunZ = 0.0f;
   float sunR = 0.0f, sunG = 0.0f, sunB = 0.0f;
+  /// Angular diameter of the disk its energy spreads over, in radians.
+  float sunAngle = 0.0f;
 };
 
 /// Reads `path`, nullptr when it can't, free it with HdAkariFreeDomeImage.
@@ -94,10 +98,11 @@ inline uint16_t const *HdAkariDomeImagePixels(HdAkariDomeImage const *image) { r
 inline int HdAkariDomeImageSmallWidth(HdAkariDomeImage const *image) { return image->smallWidth; }
 inline int HdAkariDomeImageSmallHeight(HdAkariDomeImage const *image) { return image->smallHeight; }
 inline uint16_t const *HdAkariDomeImageSmall(HdAkariDomeImage const *image) { return image->small.data(); }
+inline uint16_t const *HdAkariDomeImageSmallFull(HdAkariDomeImage const *image) { return image->smallFull.data(); }
 inline bool HdAkariDomeImageHasSun(HdAkariDomeImage const *image) { return image->hasSun; }
 inline float HdAkariDomeImageSun(HdAkariDomeImage const *image, int i)
 {
-  float const v[6] = { image->sunX, image->sunY, image->sunZ, image->sunR, image->sunG, image->sunB };
+  float const v[7] = { image->sunX, image->sunY, image->sunZ, image->sunR, image->sunG, image->sunB, image->sunAngle };
   return v[i];
 }
 

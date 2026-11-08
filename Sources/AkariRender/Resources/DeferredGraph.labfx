@@ -783,7 +783,7 @@ pass: depth of field
   depth test: never
   write depth: no
   use shader: dof-gather
-  inputs: [taa.final, dofDepth.dofDepth, dofNeighbors.dofNeighborMax, dofHalf.dofHalfColor]
+  inputs: [taa.final, dofDepth.dofDepth, dofNeighbors.dofNeighborMax, dofHalf.dofHalfColor, dofHalfSource.dofHalfSource]
   outputs: dof [ dofColor ]
 
 pass: depth of field apply
@@ -2641,7 +2641,7 @@ shader: volume-march
       ivec2 px = ivec2(gl_FragCoord.xy);
       float tMax = texelFetch(u_normal_texture, px, 0).a >= 0.5 ? length(texelFetch(u_position_texture, px, 0).xyz) : 1e30;
       float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy + 5.588238 * float(frameIndex % 64), vec2(0.06711056, 0.00583715))));
-      vec3 sun = u_sunOverride.w > 0.5 ? u_sunOverride.rgb : vec3(3.0);
+      vec3 sun = mix(vec3(3.0), u_sunOverride.rgb, u_sunOverride.w);
       vec3 up = mix(vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), u_zUp);
       vec3 sky = texture(u_irradiance_texture, mix(up, vec3(up.x, up.z, -up.y), u_zUp)).rgb * u_iblEnabled;
       vec4 r = volumeMarch(u_volumeDensity, u_volumeShadow_texture, u_volumeTextureFromWorld, eye, dir, tMax, noise,
@@ -2668,7 +2668,7 @@ shader: volume-march
       uint2 px = uint2(gl_FragCoord.xy);
       float tMax = u_normal_texture.read(px).a >= 0.5 ? length(u_position_texture.read(px).xyz) : 1e30;
       float noise = fract(volumeHash(int3(int2(gl_FragCoord.xy), 0)) + 0.6180339887 * float(frameIndex % 1024));
-      float3 sun = u_sunOverride.w > 0.5 ? u_sunOverride.rgb : float3(3.0);
+      float3 sun = mix(float3(3.0), u_sunOverride.rgb, u_sunOverride.w);
       float3 up = mix(float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0), u_zUp);
       float3 sky = texture(u_irradiance_texture, mix(up, float3(up.x, up.z, -up.y), u_zUp)).rgb * u_iblEnabled;
       float tFirst;
@@ -3072,11 +3072,11 @@ shader: dof-tile-coc
     {
       int2 size = int2(u_dofDepth_texture.get_width(), u_dofDepth_texture.get_height());
       int2 lo = int2(floor(gl_FragCoord.xy)) * 8;
-      int2 hi = min(lo + 8, size);
       float3 range = float3(0.0, 1e4, 0.0);
-      for (int y = lo.y; y < hi.y; ++y) {
-        for (int x = lo.x; x < hi.x; ++x) {
-          float z = u_dofDepth_texture.read(uint2(x, y)).r;
+      // fixed bounds so the reads go out together, a tile past the edge reads its own last texels again.
+      for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+          float z = u_dofDepth_texture.read(uint2(min(lo + int2(x, y), size - 1))).r;
           float c = postCoc(z, u_dof);
           range = float3(z > u_dof.y ? max(range.x, c) : range.x, min(range.y, c), z > u_dof.y ? range.z : max(range.z, c));
         }
@@ -3294,6 +3294,7 @@ shader: dof-gather
               u_dofDepth_texture: sampler2d,
               u_dofNeighborMax_texture: sampler2d,
               u_dofHalfColor_texture: sampler2d,
+              u_dofHalfSource_texture: sampler2d,
               u_dof: vec4 ]
   varying:  [ texCoord: vec2 ]
 
@@ -3339,7 +3340,7 @@ shader: dof-gather
       float w = smoothstep(4.0, 8.0, postCoc(z, u_dof));
       float3 c = float3(0.0);
       if (w < 1.0) {
-        c = postBokeh(u_final_texture, u_final_texture_smp, u_dofDepth_texture, pixel + 0.5, u_dof, near, 1.0, 1.5);
+        c = postBokehSplit(u_final_texture, u_final_texture_smp, u_dofDepth_texture, u_dofHalfSource_texture, pixel + 0.5, u_dof, near, 1.5, 8.0);
       }
       if (w > 0.0) {
         c = mix(c, postUpsampleDepthAware(u_dofHalfColor_texture, u_dofDepth_texture, pixel, z), w);
@@ -4242,7 +4243,7 @@ shader: mesh-transparent
       float f0 = pow((u_transparency.y - 1.0) / (u_transparency.y + 1.0), 2.0);
       float F = f0 + (1.0 - f0) * pow(1.0 - NoV, 5.0);
 
-      float3 sun = u_sunOverride.w > 0.5 ? u_sunOverride.rgb : float3(3.0);
+      float3 sun = mix(float3(3.0), u_sunOverride.rgb, u_sunOverride.w);
       float3 R = reflect(-V, N);
       float3 sky = mix(R, float3(R.x, R.z, -R.y), u_zUp);
       float3 reflection = u_prefiltered_texture.sample(u_prefiltered_texture_smp, sky, level(mat.r * 5.0)).rgb * u_iblEnabled * F;
@@ -4440,7 +4441,7 @@ shader: transparent-composite
 
         // the sun's glint off the waves.
         float3 L = normalize(u_sunDirection.xyz);
-        float3 sun = u_sunOverride.w > 0.5 ? u_sunOverride.rgb : float3(3.0);
+        float3 sun = mix(float3(3.0), u_sunOverride.rgb, u_sunOverride.w);
         float3 H = normalize(V + L);
         float a2 = pow(max(rough * rough, 0.002), 2.0);
         float NoH = saturate(dot(N, H)), NoL = saturate(dot(N, L));
@@ -4527,6 +4528,8 @@ shader: deferred-shade
               u_domeColor: vec4,
               u_domeSun: vec4,
               u_sunOverride: vec4,
+              u_viewShading: vec4,
+              u_viewGrid: vec4,
               u_invProj: mat4,
               sunHeight: float,
               u_zUp: float,
@@ -4753,7 +4756,7 @@ shader: deferred-shade
       float tileWorld = levelSize / 32.0;
       float tanHalf = tan(u_sunDirection.w);
       float depthPerWorld = abs(0.5 * levelDepth.y);
-      float reach = tileWorld / max(tanHalf, 1e-3);
+      float reach = 2.0 * tileWorld / max(tanHalf, 1e-3);
       float aa = tileTexelStep * tileWorld;
       vec3 normalLight = (u_eyeToLightRotation * vec4(normalEye, 0.0)).xyz;
       float nz = normalLight.z < 0.0 ? min(normalLight.z, -0.05) : max(normalLight.z, 0.05);
@@ -4761,18 +4764,18 @@ shader: deferred-shade
       float lit = 0.0;
       ivec2 cacheTile = tile;
       vec4 cachePage = pageInfo;
-      for (int r = 0; r < 2; ++r) {
+      for (int r = 0; r < 6; ++r) {
         float phi = 6.2831853 * fract(noise.x + 0.618034 * float(r));
         vec2 disk = vec2(cos(phi), sin(phi)) * sqrt(fract(noise.y + 0.754877 * float(r)));
         float jitter = fract(noise.x + noise.y + 0.5698403 * float(r));
         float plane = dot(planeSlope, disk) * aa;
         float visible = 1.0;
         bool covered = false;
-        for (int k = 0; k < 6; ++k) {
-          float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 5.0;
+        for (int k = 0; k < 8; ++k) {
+          float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 7.0;
           float t = reach * f * f;
-          float fNext = (float(k) + jitter) / 5.0;
-          float span = k == 5 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
+          float fNext = (float(k) + jitter) / 7.0;
+          float span = k == 7 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
           vec2 offset = disk * (aa + tanHalf * t);
           float occluder = directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage);
           float behind = compareDepth + plane - t * depthPerWorld - occluder;
@@ -4786,7 +4789,7 @@ shader: deferred-shade
         }
         lit += visible;
       }
-      return lit * 0.5;
+      return lit / 6.0;
     }
 
     vec4 pointLightPosIntensity(int i)
@@ -4967,15 +4970,25 @@ shader: deferred-shade
       mat3 invView = mat3(invViewFull);
       vec3 worldPos = (invViewFull * vec4(posEye, 1.0)).xyz;
 
+      if (u_viewShading.x > 1.5) {
+        vec3 n = normalize(normalEye);
+        float studio = 0.25 + 0.6 * clamp(dot(n, normalize(vec3(-0.35, 0.55, 0.75))), 0.0, 1.0)
+                     + 0.25 * clamp(dot(n, normalize(vec3(0.6, -0.15, 0.5))), 0.0, 1.0);
+        vec3 shade = u_viewShading.x > 2.5 ? vec3(u_viewShading.z) : vec3(0.8 * studio);
+        o_final_texture = vec4(normalSample.a < 0.5 ? vec3(u_viewShading.y) : shade, 1.0);
+        return;
+      }
+
       if (normalSample.a < 0.5) {
         if (u_iblEnabled > 0.5) {
           vec4 e = u_invProj * vec4(var.texCoord * 2.0 - 1.0, -1.0, 1.0);
           vec3 worldDir = normalize(invView * (e.xyz / e.w));
           vec3 sky = texture(u_envCube_texture, toSkySpace(worldDir)).rgb;
-          if (u_domeEnabled > 0.5) {
+          if (u_viewShading.x > 0.5) sky = textureLod(u_prefiltered_texture, toSkySpace(worldDir), 3.0).rgb;
+          else if (u_domeEnabled > 0.0) {
             vec3 d = normalize(mat3(u_domeFromWorld) * worldDir);
             vec2 uv = vec2((atan(d.z, d.x) + 0.5 * PI) / (2.0 * PI), acos(clamp(d.y, -1.0, 1.0)) / PI);
-            sky = textureLod(u_domeMap, vec2(fract(uv.x), uv.y), 0.0).rgb * u_domeColor.rgb;
+            sky = mix(sky, textureLod(u_domeMap, vec2(fract(uv.x), uv.y), 0.0).rgb * u_domeColor.rgb, u_domeEnabled);
           }
           vec4 fog = volumeFog(gl_FragCoord.xy, u_volumeRange.y);
           o_final_texture = vec4(sky * fog.a + fog.rgb, 1.0);
@@ -5037,7 +5050,7 @@ shader: deferred-shade
 
         float shadow = directionalShadow(posEye, normalEye, NoL, vec2(noise, noiseB));
 
-        color += (Fd + Fr) * (u_sunOverride.w > 0.5 ? u_sunOverride.rgb : mix(dynamicSky, u_domeSun.rgb, u_domeEnabled) * u_iblEnabled) * shadow;
+        color += (Fd + Fr) * mix(mix(dynamicSky, u_domeSun.rgb, u_domeEnabled) * u_iblEnabled, u_sunOverride.rgb, u_sunOverride.w) * shadow;
       }
 
       color += pointLightRadiance(worldPos, N, V, NoV, roughness, f0, diffuseColor,
@@ -5221,7 +5234,7 @@ shader: deferred-shade
       float tileWorld = levelSize / 32.0;
       float tanHalf = tan(u.u_sunDirection.w);
       float depthPerWorld = abs(0.5 * levelDepth.y);
-      float reach = tileWorld / max(tanHalf, 1e-3);
+      float reach = 2.0 * tileWorld / max(tanHalf, 1e-3);
       float aa = tileTexelStep * tileWorld;
       float3 normalLight = (u.u_eyeToLightRotation * float4(normalEye, 0.0)).xyz;
       float nz = normalLight.z < 0.0 ? min(normalLight.z, -0.05) : max(normalLight.z, 0.05);
@@ -5229,18 +5242,18 @@ shader: deferred-shade
       float lit = 0.0;
       int2 cacheTile = tile;
       float4 cachePage = pageInfo;
-      for (int r = 0; r < 2; ++r) {
+      for (int r = 0; r < 6; ++r) {
         float phi = 6.2831853 * fract(noise.x + 0.618034 * float(r));
         float2 disk = float2(cos(phi), sin(phi)) * sqrt(fract(noise.y + 0.754877 * float(r)));
         float jitter = fract(noise.x + noise.y + 0.5698403 * float(r));
         float plane = dot(planeSlope, disk) * aa;
         float visible = 1.0;
         bool covered = false;
-        for (int k = 0; k < 6; ++k) {
-          float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 5.0;
+        for (int k = 0; k < 8; ++k) {
+          float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 7.0;
           float t = reach * f * f;
-          float fNext = (float(k) + jitter) / 5.0;
-          float span = k == 5 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
+          float fNext = (float(k) + jitter) / 7.0;
+          float span = k == 7 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
           float2 offset = disk * (aa + tanHalf * t);
           float occluder = directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage,
                                           atlasTex, pageTableTex);
@@ -5255,7 +5268,7 @@ shader: deferred-shade
         }
         lit += visible;
       }
-      return lit * 0.5;
+      return lit / 6.0;
     }
 
     float4 pointLightPosIntensity(int i, constant Uniforms& u)
@@ -5597,11 +5610,12 @@ shader: deferred-shade
           float4 e = u_invProj * float4(var.texCoord * 2.0 - 1.0, -1.0, 1.0);
           float3 worldDir = normalize(invView * (e.xyz / e.w));
           float3 sky = texture(u_envCube_texture, toSkySpace(worldDir, u_zUp)).rgb;
-          if (u_domeEnabled > 0.5) {
+          if (u_viewShading.x > 0.5) sky = textureLod(u_prefiltered_texture, toSkySpace(worldDir, u_zUp), 3.0).rgb;
+          else if (u_domeEnabled > 0.0) {
             float3x3 rot = float3x3(u_domeFromWorld[0].xyz, u_domeFromWorld[1].xyz, u_domeFromWorld[2].xyz);
             float3 d = normalize(rot * worldDir);
             float2 uv = float2((atan2(d.z, d.x) + 0.5 * PI) / (2.0 * PI), acos(clamp(d.y, -1.0, 1.0)) / PI);
-            sky = textureLod(u_domeMap, float2(fract(uv.x), uv.y), 0.0).rgb * u_domeColor.rgb;
+            sky = mix(sky, textureLod(u_domeMap, float2(fract(uv.x), uv.y), 0.0).rgb * u_domeColor.rgb, u_domeEnabled);
           }
           float4 fog = volumeFog(gl_FragCoord.xy, u_volumeRange.y,
                                  u_volumeIntegrated_texture, u_volumeIntegrated_texture_smp, _u);
@@ -5666,7 +5680,7 @@ shader: deferred-shade
                                            u_shadow_atlas, u_shadow_atlas_smp,
                                            u_shadow_data, u_shadow_pagetable, _u);
 
-          float3 sunColor = u_sunOverride.w > 0.5 ? u_sunOverride.rgb : mix(dynamicSky, u_domeSun.rgb, u_domeEnabled) * u_iblEnabled;
+          float3 sunColor = mix(mix(dynamicSky, u_domeSun.rgb, u_domeEnabled) * u_iblEnabled, u_sunOverride.rgb, u_sunOverride.w);
           if (u_atmosphere.x > 0.5) {
             Atmosphere atm = makeAtmosphere(u_atmosphere, u_atmosRayleigh, u_atmosMie, u_atmosMieExtra, u_atmosOzone, u_atmosGround);
             float3 p = u_atmosCamera.xyz + invView * posEye * u_atmosFrame.x;
@@ -5765,6 +5779,39 @@ shader: deferred-shade
         color = color * fog.a + fog.rgb;
 
         o_final_texture = float4(finiteColor(color), 1.0);
+      }
+      if (u_viewShading.x > 1.5) {
+        float3 n = normalize(normalEye);
+        float studio = 0.25 + 0.6 * saturate(dot(n, normalize(float3(-0.35, 0.55, 0.75))))
+                     + 0.25 * saturate(dot(n, normalize(float3(0.6, -0.15, 0.5))));
+        float3 shade = u_viewShading.x > 2.5 ? float3(u_viewShading.z) : float3(0.8 * studio);
+        o_final_texture = float4(normalSample.a < 0.5 ? float3(u_viewShading.y) : shade, 1.0);
+      }
+      if (u_viewGrid.x > 0.5) {
+        float4 e = u_invProj * float4(var.texCoord * 2.0 - 1.0, -1.0, 1.0);
+        float3 dir = normalize(invView * (e.xyz / e.w));
+        float3 eye = invView * -float3(u_view[3][0], u_view[3][1], u_view[3][2]);
+        float3 upAxis = u_zUp > 0.5 ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
+        float facing = dot(dir, upAxis);
+        float t = abs(facing) > 1e-6 ? -dot(eye, upAxis) / facing : -1.0;
+        float scene = normalSample.a < 0.5 ? 1e30 : length(posEye);
+        if (t > 0.0 && t < scene) {
+          float3 p = eye + dir * t;
+          float2 g = (u_zUp > 0.5 ? p.xy : float2(p.x, -p.z)) / u_viewGrid.y;
+          float2 w = max(fwidth(g), float2(1e-6));
+          float2 minorLine = abs(fract(g - 0.5) - 0.5) / w;
+          float2 majorLine = abs(fract(g / 10.0 - 0.5) - 0.5) / (w / 10.0);
+          float minor = (1.0 - min(min(minorLine.x, minorLine.y), 1.0)) * (1.0 - smoothstep(0.08, 0.3, max(w.x, w.y)));
+          float major = (1.0 - min(min(majorLine.x, majorLine.y), 1.0)) * (1.0 - smoothstep(0.8, 3.0, max(w.x, w.y)));
+          float xAxis = 1.0 - min(abs(g.y) / w.y * 0.6, 1.0);
+          float yAxis = 1.0 - min(abs(g.x) / w.x * 0.6, 1.0);
+          float fade = exp(-t / (u_viewGrid.y * 400.0)) * smoothstep(0.0, 0.08, abs(facing));
+          float3 c = o_final_texture.rgb;
+          c = mix(c, float3(0.22), max(minor * 0.35, major * 0.6) * fade);
+          c = mix(c, float3(0.8, 0.06, 0.09), xAxis * fade);
+          c = mix(c, float3(0.22, 0.55, 0.02), yAxis * fade);
+          o_final_texture = float4(c, 1.0);
+        }
       }
     }
     ```
@@ -7824,7 +7871,7 @@ shader: volume-scatter
       vec3 skyL = texture(u_envCube_texture, toSkySpace(L)).rgb;
       vec3 dayColor = mix(skyL, vec3(1.0), clamp(sunHeight, 0.0, 1.0));
       vec3 nightColor = mix(skyL, vec3(0.95, 0.95, 1.00), clamp(-sunHeight, 0.0, 1.0));
-      vec3 sun = u_sunOverride.w > 0.5 ? u_sunOverride.rgb : mix(mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade), u_domeSun.rgb, u_domeEnabled) * u_iblEnabled;
+      vec3 sun = mix(mix(mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade), u_domeSun.rgb, u_domeEnabled) * u_iblEnabled, u_sunOverride.rgb, u_sunOverride.w);
       vec3 light = sun * phaseHG(dot(L, rayDir), u_volume.y) * volumeSunShadow(posEye)
                  * volumeTransmittance(frustumExitDistance(posEye, mat3(u_view) * L))
                  + volumeWorldLight(rayDir);
@@ -8016,7 +8063,7 @@ shader: volume-scatter
         float3 skyL = texture(u_envCube_texture, skyDir).rgb;
         float3 dayColor = mix(skyL, float3(1.0), saturate(sunHeight));
         float3 nightColor = mix(skyL, float3(0.95, 0.95, 1.00), saturate(-sunHeight));
-        float3 sun = u_sunOverride.w > 0.5 ? u_sunOverride.rgb : mix(mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade), u_domeSun.rgb, u_domeEnabled) * u_iblEnabled;
+        float3 sun = mix(mix(mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade), u_domeSun.rgb, u_domeEnabled) * u_iblEnabled, u_sunOverride.rgb, u_sunOverride.w);
         float3x3 viewRot = float3x3(u_view[0].xyz, u_view[1].xyz, u_view[2].xyz);
         float3 light = sun * u_volumeLook.y * phaseHG(dot(L, rayDir), u_volume.y)
                      * volumeSunShadow(posEye, u_shadow_atlas, u_shadow_data, u_shadow_pagetable, _u)

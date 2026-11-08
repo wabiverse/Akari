@@ -65,6 +65,7 @@
         AkariDemo.main()
         return
       }
+
       guard render.job != nil
       else
       {
@@ -116,6 +117,7 @@
           print("[akari] could not start background render: \(error?.localizedDescription ?? "unknown error")")
           finish(output: output, status: status, code: 1)
         }
+
         signal(SIGINT, SIG_IGN)
         interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
         interrupt?.setEventHandler { @Sendable in kill(app.processIdentifier, SIGTERM) }
@@ -135,8 +137,10 @@
             try? FileHandle.standardOutput.write(contentsOf: data)
           }
         }
+
         finish(output: output, status: status, code: 0)
       }
+
       _ = (observation, interrupt)
       RunLoop.main.run()
       exit(0)
@@ -245,6 +249,7 @@
         guard !data.isEmpty else { return }
         DispatchQueue.main.async { self?.relay(data) }
       }
+
       worker.terminationHandler =
       { [weak self] worker in
         DispatchQueue.main.async { self?.finish(worker.terminationStatus) }
@@ -355,12 +360,14 @@
           line = line[..<marker.lowerBound]
           if line.isEmpty { continue }
         }
+
         forwarded += line + "\n"
         if ["Fra:", "[akari] render", "[akari] finished"].contains(where: { line.hasPrefix($0) })
         {
           setStatus(String(line))
         }
       }
+
       try? FileHandle.standardOutput.write(contentsOf: Data(forwarded.utf8))
     }
 
@@ -373,6 +380,7 @@
         progressIndicator.minValue = 0
         progressIndicator.maxValue = 1
       }
+
       progressIndicator.doubleValue = fraction
       statusItem.button?.title = "\(Int(fraction * 100))%"
     }
@@ -433,6 +441,7 @@
       {
         try? String(cancelRequested ? 130 : status).write(toFile: path, atomically: true, encoding: .utf8)
       }
+
       setStatus(cancelRequested ? "Render cancelled" : status == 0 ? "Render complete" : "Render failed")
       cancelMenuItem.isEnabled = false
       cancelButton.isEnabled = false

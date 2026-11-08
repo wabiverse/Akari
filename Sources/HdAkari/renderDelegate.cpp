@@ -39,6 +39,7 @@
  * ----------------------------------------------------------------- */
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
+# include <Tf/staticTokens.h>
 # include <Hd/camera.h>
 # include <Hd/driver.h>
 # include <Hd/extComputation.h>
@@ -50,6 +51,7 @@
 # include <Tf/diagnostic.h>
 #else
 # include <pxr/pxr.h>
+# include <pxr/base/tf/staticTokens.h>
 # include <pxr/imaging/hd/camera.h>
 # include <pxr/imaging/hd/driver.h>
 # include <pxr/imaging/hd/extComputation.h>
@@ -85,6 +87,12 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
+TF_DEFINE_PRIVATE_TOKENS(_tokens,
+  (glslfx)
+  (openvdbAsset)
+  (ri)
+);
+
 const TfTokenVector HdAkariRenderDelegate::SUPPORTED_RPRIM_TYPES = {
   HdPrimTypeTokens->mesh,
   HdPrimTypeTokens->sphere,
@@ -104,7 +112,7 @@ const TfTokenVector HdAkariRenderDelegate::SUPPORTED_SPRIM_TYPES = {
 
 const TfTokenVector HdAkariRenderDelegate::SUPPORTED_BPRIM_TYPES = {
   HdPrimTypeTokens->renderBuffer,
-  TfToken("openvdbAsset"),
+  _tokens->openvdbAsset,
 };
 
 namespace {
@@ -182,6 +190,7 @@ HdAkariRenderDelegate::GetSupportedRprimTypes() const
     FillTokens(_supportedRprimTypes, _swiftDelegate, AKRenderDelegateSupportedRprimTypes);
     return _supportedRprimTypes;
   }
+
   return SUPPORTED_RPRIM_TYPES;
 }
 
@@ -192,6 +201,7 @@ HdAkariRenderDelegate::GetSupportedSprimTypes() const
     FillTokens(_supportedSprimTypes, _swiftDelegate, AKRenderDelegateSupportedSprimTypes);
     return _supportedSprimTypes;
   }
+
   return SUPPORTED_SPRIM_TYPES;
 }
 
@@ -202,6 +212,7 @@ HdAkariRenderDelegate::GetSupportedBprimTypes() const
     FillTokens(_supportedBprimTypes, _swiftDelegate, AKRenderDelegateSupportedBprimTypes);
     return _supportedBprimTypes;
   }
+
   return SUPPORTED_BPRIM_TYPES;
 }
 
@@ -209,8 +220,10 @@ HdResourceRegistrySharedPtr HdAkariRenderDelegate::GetResourceRegistry() const {
 
 TfTokenVector HdAkariRenderDelegate::GetMaterialRenderContexts() const
 {
-  return {TfToken(""), TfToken("glslfx")};
+  // RenderMan's own materials first, so a look shades as RenderMan renders it.
+  return {_tokens->ri, TfToken(), _tokens->glslfx};
 }
+
 HdRenderParam *HdAkariRenderDelegate::GetRenderParam() const { return _renderParam.get(); }
 
 HdRenderPassSharedPtr
@@ -238,14 +251,14 @@ HdAkariRenderDelegate::CreateRprim(TfToken const &typeId, SdfPath const &rprimId
   
   using RprimFactoryFunc = HdRprim*(*)(const SdfPath&);
   static const std::unordered_map<TfToken, RprimFactoryFunc, TfToken::HashFunctor> factoryMap = {
-    { TfToken("mesh"),   [](const SdfPath& id) -> HdRprim* { return new HdAkariMesh(id);   } },
-    { TfToken("sphere"), [](const SdfPath& id) -> HdRprim* { return new HdAkariSphere(id); } },
-    { TfToken("cube"),   [](const SdfPath& id) -> HdRprim* { return new HdAkariCube(id);   } },
-    { TfToken("cylinder"), [](const SdfPath& id) -> HdRprim* { return new HdAkariImplicit(id, HdPrimTypeTokens->cylinder); } },
-    { TfToken("cone"),   [](const SdfPath& id) -> HdRprim* { return new HdAkariImplicit(id, HdPrimTypeTokens->cone); } },
-    { TfToken("capsule"), [](const SdfPath& id) -> HdRprim* { return new HdAkariImplicit(id, HdPrimTypeTokens->capsule); } },
-    { TfToken("volume"), [](const SdfPath& id) -> HdRprim* { return new HdAkariVolume(id); } },
-    { TfToken("basisCurves"), [](const SdfPath& id) -> HdRprim* { return new HdAkariBasisCurves(id); } }
+    { HdPrimTypeTokens->mesh,   [](const SdfPath& id) -> HdRprim* { return new HdAkariMesh(id);   } },
+    { HdPrimTypeTokens->sphere, [](const SdfPath& id) -> HdRprim* { return new HdAkariSphere(id); } },
+    { HdPrimTypeTokens->cube,   [](const SdfPath& id) -> HdRprim* { return new HdAkariCube(id);   } },
+    { HdPrimTypeTokens->cylinder, [](const SdfPath& id) -> HdRprim* { return new HdAkariImplicit(id, HdPrimTypeTokens->cylinder); } },
+    { HdPrimTypeTokens->cone,   [](const SdfPath& id) -> HdRprim* { return new HdAkariImplicit(id, HdPrimTypeTokens->cone); } },
+    { HdPrimTypeTokens->capsule, [](const SdfPath& id) -> HdRprim* { return new HdAkariImplicit(id, HdPrimTypeTokens->capsule); } },
+    { HdPrimTypeTokens->volume, [](const SdfPath& id) -> HdRprim* { return new HdAkariVolume(id); } },
+    { HdPrimTypeTokens->basisCurves, [](const SdfPath& id) -> HdRprim* { return new HdAkariBasisCurves(id); } }
   };
   
   const TfToken lookupToken(className);
@@ -279,12 +292,15 @@ HdAkariRenderDelegate::CreateSprim(TfToken const &typeId, SdfPath const &sprimId
                     strcmp(className, "distantLight") == 0)) {
     return new HdAkariLight(sprimId, typeId);
   }
+
   if (className && strcmp(className, "camera") == 0) {
     return new HdCamera(sprimId);
   }
+
   if (className && strcmp(className, "extComputation") == 0) {
     return new HdExtComputation(sprimId);
   }
+
   if (className && strcmp(className, "material") == 0) {
     return new HdAkariMaterial(sprimId);
   }
@@ -307,15 +323,19 @@ HdAkariRenderDelegate::CreateFallbackSprim(TfToken const &typeId)
                     strcmp(className, "distantLight") == 0)) {
     return new HdAkariLight(SdfPath::EmptyPath(), typeId);
   }
+
   if (className && strcmp(className, "camera") == 0) {
     return new HdCamera(SdfPath::EmptyPath());
   }
+
   if (className && strcmp(className, "extComputation") == 0) {
     return new HdExtComputation(SdfPath::EmptyPath());
   }
+
   if (className && strcmp(className, "material") == 0) {
     return new HdAkariMaterial(SdfPath::EmptyPath());
   }
+
   return new HdCamera(SdfPath::EmptyPath());
 }
 
@@ -331,9 +351,11 @@ HdAkariRenderDelegate::CreateBprim(TfToken const &typeId, SdfPath const &bprimId
   if (className && strcmp(className, "renderBuffer") == 0) {
     return new HdAkariRenderBuffer(bprimId);
   }
+
   if (className && strcmp(className, "openvdbAsset") == 0) {
     return new HdAkariField(bprimId);
   }
+
   return nullptr;
 }
 
@@ -347,9 +369,11 @@ HdAkariRenderDelegate::CreateFallbackBprim(TfToken const &typeId)
   if (className && strcmp(className, "renderBuffer") == 0) {
     return new HdAkariRenderBuffer(SdfPath::EmptyPath());
   }
+
   if (className && strcmp(className, "openvdbAsset") == 0) {
     return new HdAkariField(SdfPath::EmptyPath());
   }
+
   return nullptr;
 }
 

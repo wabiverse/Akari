@@ -49,6 +49,7 @@ extern "C" long AkariSceneMeshCount(void *renderParam)
   if (!param || !param->GetScene()) {
     return -1;
   }
+
   return static_cast<long>(param->GetScene()->MeshCount());
 }
 
@@ -58,5 +59,6 @@ extern "C" long AkariSceneTriangleCount(void *renderParam)
   if (!param || !param->GetScene()) {
     return -1;
   }
+
   return static_cast<long>(param->GetScene()->TriangleCount());
 }

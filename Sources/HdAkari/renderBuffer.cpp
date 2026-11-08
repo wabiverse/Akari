@@ -81,6 +81,7 @@ HdAkariRenderBuffer::Sync(HdSceneDelegate *sceneDelegate,
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
     _hgi = param->GetHgi();
   }
+
   HdRenderBuffer::Sync(sceneDelegate, renderParam, dirtyBits);
 }
 
@@ -128,9 +129,11 @@ HdAkariRenderBuffer::SetWrappedTexture(HgiTextureHandle const &wrapped, uint64_t
   if (!wrapped || !_hgi) {
     return;
   }
+
   if (_hgi && _texture) {
     _hgi->DestroyTexture(&_texture);
   }
+
   _texture = wrapped;
   _wrappedResource = rawResource;
 }
@@ -141,6 +144,7 @@ HdAkariRenderBuffer::_Deallocate()
   if (_hgi && _texture) {
     _hgi->DestroyTexture(&_texture);
   }
+
   _texture = HgiTextureHandle();
   _wrappedResource = 0;
   _width = _height = 0;

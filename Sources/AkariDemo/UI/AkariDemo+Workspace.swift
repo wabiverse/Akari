@@ -56,7 +56,7 @@ extension AkariDemo
     let engine: Akari.RenderEngine
     let hydra: Hydra.RenderEngine
     let driver: any Akari.HydraFrameDriver
-    let sceneName: String
+    let scene: Binding<Kraken.SceneFile>
     let timeline: AkariDemo.Timeline
 
     @State private var settings: AkariDemo.HUDState
@@ -67,22 +67,36 @@ extension AkariDemo
     @State private var showsProperties = true
     @State private var showsStatistics = true
     @State private var showsAbout = false
+    @State private var layout: AkariDemo.Layout
 
     init(engine: Akari.RenderEngine,
          hydra: Hydra.RenderEngine,
          driver: any Akari.HydraFrameDriver,
          settings: AkariDemo.HUDState,
+         layout: AkariDemo.Layout,
          renderJob: AkariDemo.RenderJob,
          timeline: AkariDemo.Timeline,
-         sceneName: String)
+         scene: Binding<Kraken.SceneFile>)
     {
       self.engine = engine
       self.hydra = hydra
       self.driver = driver
-      self.sceneName = sceneName
+      self.scene = scene
       _settings = State(wrappedValue: settings)
       _renderJob = State(wrappedValue: renderJob)
       self.timeline = timeline
+      layout.sceneURL = scene.wrappedValue.fileURL
+      let playback = timeline.playback
+      layout.adoptStage =
+      { url, probeTimes in
+        scene.wrappedValue = Kraken.SceneFile(fileURL: url)
+        renderJob.path = AkariDemo.RenderJob.defaultOutputPath(for: url)
+        renderJob.adoptStage()
+        hydra.performOnFrameQueue { playback.adoptStage() }
+        Task { @MainActor in await playback.prebakeProbes(at: probeTimes) }
+      }
+
+      _layout = State(wrappedValue: layout)
     }
 
     var body: some View
@@ -97,17 +111,23 @@ extension AkariDemo
         {
           VStack(spacing: 0)
           {
+            LayoutHeader(layout: layout)
+            Rectangle()
+              .fill(Color(white: 0.09))
+              .frame(height: 1)
             Hydra.Viewport(engine: hydra)
               .frame(minWidth: 560, minHeight: 600)
-              .overlay(alignment: .topLeading)
-              {
-                if showsStatistics { ViewportOverlay(driver: driver) }
-              }
-              .overlay(alignment: .topTrailing) { OutlineButton(engine: engine, hydra: hydra).padding(16) }
               .overlay
               {
                 if renderJob.showsPassepartout { Passepartout(aspect: renderJob.aspect) }
               }
+              .overlay { layoutOverlay }
+              .overlay(alignment: .topLeading)
+              {
+                if showsStatistics { ViewportOverlay(driver: driver) }
+              }
+              .overlay(alignment: .topLeading) { LayoutToolbar(layout: layout) }
+              .overlay(alignment: .topTrailing) { OutlineButton(engine: engine, hydra: hydra).padding(16) }
               .overlay
               {
                 if renderJob.showsResult { RenderResult(job: renderJob) }
@@ -120,19 +140,37 @@ extension AkariDemo
               TimelineView(timeline: timeline, job: renderJob) { showsPlaybackMenu.toggle() }
             }
           }
+
           if showsProperties
           {
             Rectangle()
               .fill(Color(white: 0.09))
               .frame(width: 1)
-            HUD(state: settings, job: renderJob)
+            VStack(alignment: .leading, spacing: 0)
+            {
+              PrimOutliner(layout: layout)
+                .frame(width: Double(Properties.width + 30), height: PrimOutliner.height)
+              Rectangle()
+                .fill(Color(white: 0.09))
+                .frame(width: Double(Properties.width + 30), height: 1)
+              HUD(state: settings, job: renderJob, inspector: layout.inspector)
+            }
           }
         }
         .overlay(alignment: .topLeading) { menuLayer }
         .overlay(alignment: .bottomLeading) { playbackMenuLayer }
         .overlay { aboutLayer }
+        Rectangle()
+          .fill(Color(white: 0.09))
+          .frame(height: 1)
+        StatusBar(layout: layout)
       }
       .onAppear { renderJob.startPendingJob() }
+      .onOpenURL
+      { url in
+        guard url.isFileURL else { return }
+        layout.replaceStage(with: url, asking: true)
+      }
     }
 
     private var topBar: some View
@@ -146,6 +184,7 @@ extension AkariDemo
             .frame(width: 12, height: 18)
             .frame(width: Double(TopMenu.logoWidth), height: Double(26))
         }
+
         ForEach(TopMenu.allCases, id: \.self)
         { menu in
           MenuTitle(title: menu.rawValue, width: menu.width, open: openMenu == menu)
@@ -153,11 +192,20 @@ extension AkariDemo
             openMenu = openMenu == menu ? nil : menu
           }
         }
+
+        Rectangle()
+          .fill(Color.clear)
+          .frame(width: 12, height: 1)
+        ForEach(AkariDemo.Layout.Tab.allCases, id: \.self)
+        { tab in
+          WorkspaceTab(title: tab.rawValue, selected: layout.tab == tab) { layout.open(tab) }
+        }
+
         Spacer()
         Text("Scene")
           .font(Properties.font)
           .foregroundColor(Properties.label)
-        Text(sceneName)
+        Text(scene.wrappedValue.name)
           .font(Properties.font)
           .foregroundColor(Properties.text)
           .padding(.horizontal, 8)
@@ -184,6 +232,17 @@ extension AkariDemo
             .padding(.leading, menu.x)
         }
       }
+    }
+    
+    @ViewBuilder
+    private var layoutOverlay: some View
+    {
+      #if os(macOS)
+        LayoutOverlay(layout: layout,
+                      isPicking: { [settings] in settings.pickingFocus },
+                      isMenuOpen: { openMenu != nil || showsPlaybackMenu },
+                      toggleCamera: { [renderJob] in renderJob.toggleCameraView() })
+      #endif
     }
 
     @ViewBuilder
@@ -226,6 +285,7 @@ extension AkariDemo
                 .resizable()
                 .frame(width: 32, height: 48)
             }
+
             Text("Kraken ∙ Akari 灯り")
               .font(.system(size: 14, weight: .semibold))
               .foregroundColor(Properties.text)
@@ -248,7 +308,19 @@ extension AkariDemo
       switch menu
       {
         case .file:
-          return [MenuEntry(title: "Quit Akari", shortcut: "⌘Q") { Self.quit() }]
+          let layout = layout
+          var entries = [MenuEntry(title: "New", shortcut: "⌘N") { layout.newScene() },
+                         MenuEntry(title: "Open…", shortcut: "⌘O") { layout.openScene() },
+                         MenuEntry.separator,
+                         MenuEntry(title: "Save", shortcut: "⌘S") { layout.save() }]
+          #if os(macOS)
+            entries.append(MenuEntry(title: "Save As…", shortcut: "⇧⌘S") { layout.askSaveAs() })
+          #endif
+          return entries + [MenuEntry.separator, MenuEntry(title: "Quit Akari", shortcut: "⌘Q") { Self.quit() }]
+        case .edit:
+          let layout = layout
+          return [MenuEntry(title: "Undo", shortcut: "⌘Z") { layout.undo() },
+                  MenuEntry(title: "Redo", shortcut: "⇧⌘Z") { layout.redo() }]
         case .render:
           let settings = settings
           let renderJob = renderJob
@@ -260,20 +332,20 @@ extension AkariDemo
           ]
           let qualities: [MenuEntry] = RenderQuality.allCases.map
           { q in
-            MenuEntry(title: "\(q) Quality", checked: settings.quality == q)
+            MenuEntry(title: "\(q) Quality", checked: settings.current.quality == q)
             {
               settings.applyPreset(q)
-              settings.apply()
             }
           }
+
           let upscalers: [MenuEntry] = Upscaler.allCases.map
           { u in
-            MenuEntry(title: "\(u) Upscaler", checked: settings.upscaler == u)
+            MenuEntry(title: "\(u) Upscaler", checked: settings.current.upscaler == u)
             {
-              settings.upscaler = u
-              settings.apply()
+              settings.edit { $0.upscaler = u }
             }
           }
+
           return renders + qualities + [MenuEntry.separator] + upscalers
         case .view:
           return [
@@ -305,6 +377,7 @@ extension AkariDemo
   enum TopMenu: String, CaseIterable
   {
     case file = "File"
+    case edit = "Edit"
     case render = "Render"
     case view = "View"
     case help = "Help"
@@ -318,6 +391,7 @@ extension AkariDemo
       switch self
       {
         case .file: 38
+        case .edit: 38
         case .render: 54
         case .view: 42
         case .help: 42
@@ -387,6 +461,37 @@ extension AkariDemo
           .onHover { hovered = $0 }
           .onTapGesture { tap() }
       }
+    }
+  }
+
+  /// A workspace tab along the top bar: Layout, Modeling or Shading.
+  @MainActor
+  struct WorkspaceTab: View
+  {
+    let title: String
+    let selected: Bool
+    let tap: () -> Void
+
+    @State private var hovered = false
+
+    init(title: String, selected: Bool, tap: @escaping () -> Void)
+    {
+      self.title = title
+      self.selected = selected
+      self.tap = tap
+    }
+
+    var body: some View
+    {
+      Text(title)
+        .font(Properties.font)
+        .foregroundColor(selected ? Properties.text : Properties.label)
+        .padding(.horizontal, 10)
+        .frame(height: 22)
+        .background(RoundedRectangle(cornerRadius: 4)
+          .fill(selected ? Color(white: 0.24) : hovered ? Color(white: 0.18) : Color.clear))
+        .onHover { hovered = $0 }
+        .onTapGesture { tap() }
     }
   }
 

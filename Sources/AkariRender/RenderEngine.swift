@@ -43,6 +43,7 @@ import Foundation
 import HdAkari
 import HydraKit
 import LabGL
+import simd
 
 public extension Akari
 {
@@ -112,6 +113,14 @@ public extension Akari
     public private(set) var viewportFrames = 0
     private var lastStatsRevision: UInt64 = 0
     private var lastCamera: (view: [Float], projection: [Float])?
+    private let viewportCameraLock = NSLock()
+    private var _viewportCamera: (view: simd_float4x4, projection: simd_float4x4)?
+
+    /// The viewport's last frame world -> view and view -> clip, safe to read from any thread.
+    public var viewportCamera: (view: simd_float4x4, projection: simd_float4x4)?
+    {
+      viewportCameraLock.withLock { _viewportCamera }
+    }
 
     public init(settings: RenderSettings = RenderSettings())
     {
@@ -142,6 +151,7 @@ public extension Akari
       {
         if stage.enabled { settings.features.insert(.volumetrics) } else { settings.features.remove(.volumetrics) }
       }
+
       if pending || settings.features != graphFeatures
       {
         pipeline.settings = settings
@@ -153,18 +163,6 @@ public extension Akari
     }
 
     /// Per frame entry point. Called by the Hydra render pass.
-    ///
-    /// - Parameters:
-    ///   - hgi: the `HgiMetal` shared with Hydra.
-    ///   - color: the color AOV's render buffer, if bound.
-    ///   - depth: the depth AOV's render buffer, if bound.
-    ///   - primId: the primId AOV's render buffer, if bound.
-    ///   - instanceId: the instanceId AOV's render buffer, if bound.
-    ///   - view: 16 row-major floats, world->view.
-    ///   - projection: 16 row-major floats, view->clip.
-    ///   - width: target width dimension in pixels.
-    ///   - height: target height dimension in pixels.
-    ///   - isFinalRender: if rendering for output (still).
     public func renderFrame(hgi: Pixar.HgiMetal,
                             renderParam: Pixar.HdAkariRenderParam,
                             color: Pixar.HdAkariRenderBuffer?,
@@ -177,6 +175,7 @@ public extension Akari
                             height: Int,
                             isFinalRender: Bool = false)
     {
+      labfx.makeCurrent()
       var settings = applyPendingSettings()
       let finalSample = finalRenderSample
       let isFinalRender = isFinalRender || finalSample != nil
@@ -185,6 +184,9 @@ public extension Akari
         settings.features.remove(.dynamicResolution)
         settings.samples = max(settings.renderSamples, 1)
       }
+
+      if isFinalRender { settings.shading = .rendered }
+      settings.features.formIntersection(settings.shading.features)
 
       if gpu?.wraps(hgi) != true
       {
@@ -209,6 +211,10 @@ public extension Akari
       } ?? true
 
       lastCamera = (view: view, projection: projection)
+      if !isFinalRender
+      {
+        viewportCameraLock.withLock { _viewportCamera = (Matrix4(view).simd, Matrix4(projection).simd) }
+      }
 
       let unjitteredCamera = Akari.Camera(view: Matrix4(view), projection: Matrix4(projection),
                                           metersPerUnit: labfx.stageMetersPerUnit)
@@ -269,6 +275,7 @@ public extension Akari
         result += fraction * Float(i % base)
         i /= base
       }
+
       return result
     }
 

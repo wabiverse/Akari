@@ -226,7 +226,7 @@ HdAkariCube::Finalize(HdRenderParam *renderParam)
 {
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
     if (auto scene = param->GetScene()) {
-      scene->RemoveMesh(GetId());
+      scene->RemoveMesh(GetId(), GetPrimId());
       scene->RemoveStyle(GetPrimId());
       scene->RemoveProbe(GetId());
     }

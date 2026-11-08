@@ -87,34 +87,29 @@ extension Akari.LabFXEngine
     var sceneProjection = Akari.Matrix4.identity
   }
 
-  static let outlinePassNames = [
-    "outline mask",
-    "outline edge",
-    "outline span",
-    "outline"
+  static let outlinePassNames: [Pass] = [
+    .outlineMask,
+    .outlineEdge,
+    .outlineSpan,
+    .outline
   ]
 
   /// The texture the outline passes leave the final image in.
   var outlinedTexture: GLuint
   {
-    outline.passesActive ? runtime.texture("outline", named: "outline") : runtime.texture("tonemap", named: "tonemap")
+    outline.passesActive ? runtime.texture(.outline, named: .outline) : runtime.texture(.tonemap, named: .tonemap)
   }
 
   func createOutlineCapture() -> Bool
   {
     guard let capture = labgl.captureCreate() else { return false }
     outline.capture = capture
-    runtime.setPassCallback("draw-outline-mask", callback: akariOutlineMaskCallback,
+    runtime.setPassCallback(.drawOutlineMask, callback: akariOutlineMaskCallback,
                             userdata: Unmanaged.passUnretained(self).toOpaque())
     return true
   }
 
   /// Uploads the selection's labels when they changed and toggles the outline passes.
-  ///
-  /// - Parameters:
-  ///   - selection: what to outline, if anything.
-  ///   - projection: the unjittered camera projection the mask is drawn with.
-  ///   - sceneProjection: the jittered one the scene is drawn with.
   func updateOutline(_ selection: Akari.Selection?, projection: Akari.Matrix4, sceneProjection: Akari.Matrix4)
   {
     if (selection != nil) != outline.passesActive
@@ -123,6 +118,7 @@ extension Akari.LabFXEngine
       outline.needsRecord = true
       setPasses(Self.outlinePassNames, active: outline.passesActive)
     }
+
     guard let selection else { return }
 
     if outline.texture == 0 || selection.labels != outline.labels || selection.all != outline.all
@@ -131,13 +127,14 @@ extension Akari.LabFXEngine
       outline.all = selection.all
       outline.needsRecord = true
     }
+
     outline.projection = Akari.Matrix4.reversedDepth(projection)
     outline.sceneProjection = Akari.Matrix4.reversedDepth(sceneProjection)
 
-    setSampler("u_outlineLabels", outline.texture)
-    setVector("u_outline", SIMD4(0, Float(outline.textureWidth),
+    setSampler(.outlineLabels, outline.texture)
+    setVector(.outline, SIMD4(0, Float(outline.textureWidth),
                                  Float(selection.labels.count), Float(selection.width)))
-    setVector("u_outlineColor", selection.color)
+    setVector(.outlineColor, selection.color)
   }
 
   /// Rerecords the selected static meshes when the selection or which of
@@ -152,6 +149,7 @@ extension Akari.LabFXEngine
     {
       Int(primId) < outline.labels.count && primId >= 0 && outline.labels[Int(primId)] > 0
     }
+
     guard
       outline.needsRecord
       || changed.contains(where: { isSelected($0.primId) })
@@ -169,6 +167,8 @@ extension Akari.LabFXEngine
 
     outline.needsRecord = false
     outline.recordedIDs = ids
+    // a reframe building in the background is still writing the static recorder's cache.
+    geometry.view.reframing?.done.wait()
     outline.batch = recordBatch(selected, into: capture, recorder: outline.recorder,
                                 reusing: [geometry.staticRecorder])
   }
@@ -179,10 +179,12 @@ extension Akari.LabFXEngine
     {
       gl.deleteTextures(count: 1, textures: &outline.texture)
     }
+
     if let capture = outline.capture
     {
       labgl.captureDestroy(capture)
     }
+
     outline = Outline()
   }
 
@@ -200,6 +202,7 @@ extension Akari.LabFXEngine
     {
       labgl_capturePlaybackIndirect(capture)
     }
+
     gl.matrixMode(GL_PROJECTION)
     gl.loadMatrix(outline.sceneProjection.m)
     gl.matrixMode(GL_MODELVIEW)
@@ -225,6 +228,7 @@ extension Akari.LabFXEngine
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_NEAREST))
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GLint(GL_NEAREST))
     }
+
     gl.bindTexture(target: GL_TEXTURE_2D, texture: outline.texture)
 
     pixels.withUnsafeBufferPointer
@@ -239,6 +243,7 @@ extension Akari.LabFXEngine
                     type: GL_FLOAT,
                     pixels: buf.baseAddress)
     }
+
     gl.bindTexture(target: GL_TEXTURE_2D, texture: 0)
     outline.textureWidth = width
   }

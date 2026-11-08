@@ -72,6 +72,7 @@ public extension Akari
           Pixar.HdAkariCopyPointsFlat(points, $0.baseAddress!)
         }
       }
+
       return pointsFlat
     }
 
@@ -153,10 +154,12 @@ public extension Akari
           start[Int(triIndices[t * 3 + c]) + 1] += 1
         }
       }
+
       for p in 0 ..< pointCount
       {
         start[p + 1] += start[p]
       }
+
       var fill = start
       var faces = [Int32](repeating: 0, count: Int(start[pointCount]))
       for t in 0 ..< triCount where valid(t)
@@ -198,8 +201,6 @@ public extension Akari
                                  flipWinding: Bool = false,
                                  subdivided: Bool = false)
     {
-      let hardEdgeCos: Float = 0.8660254 // cos(30°)
-
       let triIndices = topology.triIndices
       let triUvs = topology.triUvs
       let triCount = triIndices.count / 3
@@ -207,6 +208,67 @@ public extension Akari
 
       verts.reserveCapacity(verts.count + ptCount * 8)
       indices.reserveCapacity(indices.count + triCount * 3)
+
+      let (smooth, faceNormals, faceValid) = normals(pointsFlat, triIndices: triIndices, pointCount: ptCount)
+      let vertexIsSmooth = subdivided
+        ? [Bool](repeating: true, count: ptCount)
+        : smoothVertices(topology, pointCount: ptCount, smooth: smooth, faceNormals: faceNormals, faceValid: faceValid)
+
+      // corners sharing a point, uv and normal weld into one vertex.
+      let base = Int32(verts.count / 8)
+      var head = [Int32](repeating: -1, count: ptCount)
+      var next: [Int32] = []
+      var owner: [Int32] = []
+      next.reserveCapacity(ptCount)
+      owner.reserveCapacity(ptCount)
+
+      func emitCorner(_ idx: Int, _ c: Int)
+      {
+        let p = Int(triIndices[idx * 3 + c])
+        let face = vertexIsSmooth[p] ? -1 : Int32(idx)
+        let uo = triUvs.count == 2 ? 0 : (idx * 3 + c) * 2
+        let uv = SIMD2<Float>(triUvs[uo], triUvs[uo + 1])
+        // a face owned corner is the only one of its face at this point.
+        var slot = face < 0 ? head[p] : -1
+        while slot >= 0
+        {
+          let o = Int(slot + base) * 8
+          if owner[Int(slot)] == face, verts[o + 6] == uv.x, verts[o + 7] == uv.y
+          {
+            indices.append(slot + base)
+            return
+          }
+
+          slot = next[Int(slot)]
+        }
+
+        let n = face < 0 ? smooth[p] : faceNormals[idx]
+        indices.append(appendVertex(p, n, uv, pointsFlat, &verts))
+        next.append(head[p])
+        owner.append(face)
+        head[p] = Int32(next.count - 1)
+      }
+
+      for idx in 0 ..< triCount
+      {
+        guard faceValid[idx] else { continue }
+        sources.append(Int32(idx) | (flipWinding != (!topology.flipped.isEmpty && topology.flipped[idx]) ? Int32.min : 0))
+        if flipWinding
+        {
+          emitCorner(idx, 0); emitCorner(idx, 2); emitCorner(idx, 1)
+        }
+        else
+        {
+          emitCorner(idx, 0); emitCorner(idx, 1); emitCorner(idx, 2)
+        }
+      }
+    }
+
+    /// Each triangle's unit normal, and each point's area weighted smooth normal.
+    private static func normals(_ pointsFlat: [Float], triIndices: [Int32], pointCount ptCount: Int)
+      -> (smooth: [SIMD3<Float>], faces: [SIMD3<Float>], valid: [Bool])
+    {
+      let triCount = triIndices.count / 3
 
       func point(_ i: Int32) -> SIMD3<Float>
       {
@@ -236,6 +298,7 @@ public extension Akari
         smooth[Int(i1)] += fn
         smooth[Int(i2)] += fn
       }
+
       for i in smooth.indices
       {
         let smoothLen = length(smooth[i])
@@ -244,12 +307,20 @@ public extension Akari
           : SIMD3<Float>(0, 1, 0)
       }
 
+      return (smooth, faceNormals, faceValid)
+    }
+
+    /// Points whose faces all meet within the crease angle, which share one smooth normal.
+    private static func smoothVertices(_ topology: Topology, pointCount ptCount: Int, smooth: [SIMD3<Float>],
+                                       faceNormals: [SIMD3<Float>], faceValid: [Bool]) -> [Bool]
+    {
+      let hardEdgeCos: Float = 0.8660254 // cos(30°)
       let faceStart = topology.vertexFaceStart
       let vertexFaces = topology.vertexFaces
       var vertexIsSmooth = [Bool](repeating: true, count: ptCount)
       // a point is still smooth when every face is within half the crease of its normal.
       let halfCreaseCos: Float = 0.9659258 // cos(15°)
-      for v in 0 ..< ptCount where !subdivided
+      for v in 0 ..< ptCount
       {
         let faces = Int(faceStart[v]) ..< Int(faceStart[v + 1])
         guard faces.count > 1 else { continue }
@@ -259,8 +330,10 @@ public extension Akari
           { a in
             !faceValid[Int(vertexFaces[a])] || dot(faceNormals[Int(vertexFaces[a])], smooth[v]) > halfCreaseCos
           }
+
           continue
         }
+
         outer: for a in faces where faceValid[Int(vertexFaces[a])]
         {
           for b in (a + 1) ..< faces.upperBound where faceValid[Int(vertexFaces[b])]
@@ -274,52 +347,7 @@ public extension Akari
         }
       }
 
-      // corners sharing a point, uv and normal weld into one vertex.
-      let base = Int32(verts.count / 8)
-      var head = [Int32](repeating: -1, count: ptCount)
-      var next: [Int32] = []
-      var owner: [Int32] = []
-      next.reserveCapacity(ptCount)
-      owner.reserveCapacity(ptCount)
-
-      func emitCorner(_ idx: Int, _ c: Int)
-      {
-        let p = Int(triIndices[idx * 3 + c])
-        let face = vertexIsSmooth[p] ? -1 : Int32(idx)
-        let uo = triUvs.count == 2 ? 0 : (idx * 3 + c) * 2
-        let uv = SIMD2<Float>(triUvs[uo], triUvs[uo + 1])
-        // a face owned corner is the only one of its face at this point.
-        var slot = face < 0 ? head[p] : -1
-        while slot >= 0
-        {
-          let o = Int(slot + base) * 8
-          if owner[Int(slot)] == face, verts[o + 6] == uv.x, verts[o + 7] == uv.y
-          {
-            indices.append(slot + base)
-            return
-          }
-          slot = next[Int(slot)]
-        }
-        let n = face < 0 ? smooth[p] : faceNormals[idx]
-        indices.append(appendVertex(p, n, uv, pointsFlat, &verts))
-        next.append(head[p])
-        owner.append(face)
-        head[p] = Int32(next.count - 1)
-      }
-
-      for idx in 0 ..< triCount
-      {
-        guard faceValid[idx] else { continue }
-        sources.append(Int32(idx) | (flipWinding != (!topology.flipped.isEmpty && topology.flipped[idx]) ? Int32.min : 0))
-        if flipWinding
-        {
-          emitCorner(idx, 0); emitCorner(idx, 2); emitCorner(idx, 1)
-        }
-        else
-        {
-          emitCorner(idx, 0); emitCorner(idx, 1); emitCorner(idx, 2)
-        }
-      }
+      return vertexIsSmooth
     }
 
     /// Repairs mesh face winding inconsistencies.
@@ -405,6 +433,7 @@ public extension Akari
               component.append(nbr)
               queue.append(nbr)
             }
+
             edge = Int32(next)
           }
         }
@@ -427,6 +456,7 @@ public extension Akari
         uvs.swapAt(uo + 2, uo + 4)
         uvs.swapAt(uo + 3, uo + 5)
       }
+
       return flip
     }
 
@@ -468,6 +498,7 @@ public extension Swift.Array where Element == Float
         out[r][c] = Double(self[r * 4 + c])
       }
     }
+
     return out
   }
 }

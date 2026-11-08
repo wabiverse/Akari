@@ -97,6 +97,12 @@ public extension Akari
       /// Level bias the shading pick must add.
       public var lodBias: Float = 0
     }
+    
+    public struct ShadowSunPayload
+    {
+      let smooth: SIMD3<Float>
+      let snapped: SIMD3<Float>
+    }
 
     public internal(set) var sun = Sun()
     /// Shared page pool.
@@ -108,9 +114,11 @@ public extension Akari
     public internal(set) var data: GLuint = 0
     public internal(set) var pageTable: GLuint = 0
 
-    var kernels = Kernels()
+    var kernels = Akari.ComputeKernels<Kernel>()
     var depthShader: GLuint = 0
-    var buffers = Buffers()
+    var buffers = Akari.GPUBuffers<Buffer>()
+    /// Per directional view, its tilemap slot when it has tiles to render.
+    var renderViewReadback: GLuint = 0
     var frames: [Frame] = []
     var ringCursor = 0
     var frame: Frame
@@ -134,16 +142,11 @@ public extension Akari
     /// This frame's fit, made before the usage tags so they land on the tiles it draws.
     var frameFit = FrameFit()
     var casterMotion = CasterMotion()
+    var staticMotion = CasterMotion()
     var casterRedraw = CasterRedraw.none
-    /// Raised while the page pool runs short, coarsening the secondary lights first.
-    public internal(set) var punctualPressure = 0
+    var pressure = PunctualPressure()
     /// The slots whose lights keep full resolution until the pool runs out for them too.
     public var mainSlots: Set<Int> = []
-    var punctualHeadroom = 0
-    var punctualHold = 60
-    var punctualSinceDrop = Int.max / 2
-    var punctualSettle = 0
-    var lastStaticGeneration: UInt64 = .max
     /// The material atlas, whose opacity lets light through the static casters.
     public var materialAtlas: GLuint = 0
     /// Untextured materials constants, what the alpha test reads for a uv of -(row + 1).
@@ -164,45 +167,60 @@ public extension Akari
     public func lodBias(slot: Int) -> Float
     {
       mainSlots.contains(slot)
-        ? Float(min(punctualPressure / 2 - 1, Self.lodMax))
-        : Float(min(1 + (punctualPressure + 1) / 2, Self.lodMax))
+        ? Float(min(pressure.level / 2 - 1, Self.lodMax))
+        : Float(min(1 + (pressure.level + 1) / 2, Self.lodMax))
     }
 
-    /// Raises the pressure a step when the pool ran short, and lowers
-    /// it once the finer levels would comfortably fit again.
-    func adaptPunctualBias()
+    /// Raised while the page pool runs short, coarsening the secondary lights first.
+    struct PunctualPressure
     {
-      punctualSinceDrop &+= 1
-      if punctualSinceDrop > 3600 { punctualHold = 60 }
-      withMappedBuffer(buffers.pagesInfo, as: Int32.self)
-      { info in
-        if punctualSettle > 0
+      var level = 0
+      var headroom = 0
+      var hold = 60
+      var sinceDrop = Int.max / 2
+      var settle = 0
+
+      /// Raises the level a step when the pool ran short, and lowers
+      /// it once the finer levels would comfortably fit again.
+      mutating func adapt(short: Bool, fitsFiner: Bool)
+      {
+        sinceDrop &+= 1
+        if sinceDrop > 3600 { hold = 60 }
+        if settle > 0
         {
-          punctualSettle -= 1
+          settle -= 1
         }
-        else if info[5] > 0, punctualPressure < 2 * Self.lodMax + 2
+        else if short, level < 2 * lodMax + 2
         {
           // short again soon after stepping down, so wait longer before the next try.
-          if punctualSinceDrop < 120 { punctualHold = min(punctualHold * 2, 1920) }
-          punctualPressure += 1
-          punctualHeadroom = 0
-          punctualSettle = 8
+          if sinceDrop < 120 { hold = min(hold * 2, 1920) }
+          level += 1
+          headroom = 0
+          settle = 8
         }
-        else if punctualPressure > 0, Int(info[7]) * 2 < Self.maxPage * 4 / 5
+        else if level > 0, fitsFiner
         {
-          punctualHeadroom += 1
-          if punctualHeadroom >= punctualHold
+          headroom += 1
+          if headroom >= hold
           {
-            punctualPressure -= 1
-            punctualHeadroom = 0
-            punctualSettle = 8
-            punctualSinceDrop = 0
+            level -= 1
+            headroom = 0
+            settle = 8
+            sinceDrop = 0
           }
         }
         else
         {
-          punctualHeadroom = 0
+          headroom = 0
         }
+      }
+    }
+
+    func adaptPunctualBias()
+    {
+      withMappedBuffer(buffers[.pagesInfo], as: Int32.self)
+      { info in
+        pressure.adapt(short: info[5] > 0, fitsFiner: Int(info[7]) * 2 < Self.maxPage * 4 / 5)
       }
     }
 
@@ -218,9 +236,8 @@ public extension Akari
                               lights: [Akari.Lux.PointLight],
                               punctualFarDistance: Float,
                               sceneRevision: UInt64,
-                              casterBounds: [Float],
-                              casterKeys: [UInt64],
-                              staticGeneration: UInt64,
+                              staticCasters: [Casters],
+                              dynamicCasters: [Casters],
                               volume: VolumeFroxels? = nil)
     {
       guard
@@ -244,19 +261,20 @@ public extension Akari
       lastSceneRevision = sceneRevision
       if sceneChanged
       {
-        casterRedraw = findCasterRedraw(casterBounds: casterBounds, casterKeys: casterKeys)
-        // the static pages hold the old static capture, only a full redraw replaces them.
-        if staticGeneration != lastStaticGeneration
-        {
-          casterRedraw = .all
-          lastStaticGeneration = staticGeneration
-        }
-        if casterRedraw == .all || kernels.tagUpdatePunctual == 0 { punctualDirty = -1 }
+        casterRedraw = findCasterRedraw(dynamicCasters)
+        // the static pages hold what the static captures drew, the tiles under what changed in them redraw.
+        let staticRedraw = findStaticRedraw(staticCasters)
+        if staticRedraw == nil { casterRedraw = .all }
+        frameFit.staticRedraw = staticRedraw ?? 0
+        if casterRedraw == .all || !kernels[.tagUpdatePunctual].isBuilt || frameFit.staticRedraw > 0 { punctualDirty = -1 }
+      }
+      else
+      {
+        frameFit.staticRedraw = 0
       }
 
       frameFit.castersMoved = sceneChanged
       frameFit.redraw = sceneChanged ? casterRedraw : .none
-
       dispatchBeginFrame(dirty: punctualDirty)
       dispatchTilemapShift(forceFullShift: frameFit.redraw == .all)
       if sceneChanged, case let .boxes(count) = casterRedraw
@@ -275,6 +293,7 @@ public extension Akari
                                lights: lights,
                                lightCount: lightCount)
       }
+
       if sunActive
       {
         dispatchTagUsageDirectional(gbufferPosition: gbufferPosition,
@@ -282,6 +301,7 @@ public extension Akari
                                     screenWidth: screenWidth,
                                     screenHeight: screenHeight)
       }
+
       if lightCount > 0
       {
         dispatchTagUsagePunctual(gbufferPosition: gbufferPosition,
@@ -308,7 +328,7 @@ public extension Akari
       let corners = Self.sceneCorners(sceneBounds)
       let technique = Self.resolveTechnique(camera: camera)
 
-      let sunChanged = sunMotion.advance(to: Self.quantize(lightDirection))
+      let sunChanged = sunMotion.advance(to: lightDirection)
       var fitSettings = settings
       fitSettings.levelLodBias = (settings.levelLodBias + sunMotion.lodBias).rounded()
 
@@ -316,15 +336,16 @@ public extension Akari
       {
         case .cascaded:
           Self.fitCascades(camera: camera,
-                           lightDirection: lightDirection,
+                           lightDirection: sunMotion.smoothDirection,
                            sceneCorners: corners,
                            settings: fitSettings)
         case .clipmap:
           Self.fitLevels(camera: camera,
-                         lightDirection: lightDirection,
+                         lightDirection: sunMotion.smoothDirection,
                          sceneCorners: corners,
                          settings: fitSettings)
       }
+
       let directional = fit.cascades
 
       sun = Sun(rotation: fit.rotation,
@@ -360,7 +381,7 @@ public extension Akari
       frameFit = FrameFit(directional: directional,
                           slots: directionalSlots,
                           punctualFaces: punctualFaces,
-                          lightDirection: lightDirection,
+                          lightDirection: sunMotion.smoothDirection,
                           cameraWorld: SIMD3(inverseView[3, 0], inverseView[3, 1], inverseView[3, 2]),
                           sunChanged: sunChanged,
                           isCurrent: true)
@@ -373,7 +394,7 @@ public extension Akari
     public func render(staticCaptures: [OpaquePointer],
                        dynamicCaptures: [OpaquePointer],
                        dynamicDrawBounds: [[Float]?],
-                       casterBounds: [Float]) -> [View]
+                       casters: [Casters]) -> [View]
     {
       guard ensureResources(), frameFit.isCurrent else { return [] }
       frameFit.isCurrent = false
@@ -383,16 +404,19 @@ public extension Akari
       let punctualFaces = frameFit.punctualFaces
       let redraw = frameFit.redraw
 
-      dispatchTileMapMaintenance(casterBounds: casterBounds,
+      dispatchTileMapMaintenance(casters: casters,
                                  slotCount: directionalSlots.isEmpty ? 0 : Self.maxDirectionalTilemaps,
                                  lightZ: frameFit.lightDirection,
                                  cameraWorld: frameFit.cameraWorld,
                                  castersMoved: frameFit.castersMoved,
-                                 redraw: redraw)
-      dispatchSelectViews()
+                                 redraw: redraw,
+                                 staticRedraw: frameFit.staticRedraw)
+      // a turned sun or changed static casters redraw in one frame, so no tile ever shows the old shadow beside the new.
+      let atomic = frameFit.sunChanged || frameFit.staticRedraw > 0 || redraw == .all
+      dispatchSelectViews(budget: atomic ? Int(Int32.max) : Self.renderTileBudget)
       dispatchPageTable()
 
-      let forceDirectional = frameFit.sunChanged || redraw.isNeeded
+      let forceDirectional = frameFit.sunChanged || redraw.isNeeded || frameFit.staticRedraw > 0
 
       let drawn = drawViews(staticCaptures: staticCaptures, dynamicCaptures: dynamicCaptures,
                             dynamicDrawBounds: dynamicDrawBounds,

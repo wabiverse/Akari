@@ -39,6 +39,7 @@
  * ----------------------------------------------------------------- */
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
+# include <Tf/staticTokens.h>
 # include <Hd/changeTracker.h>
 # include <Hd/instancer.h>
 # include <Hd/meshTopology.h>
@@ -52,6 +53,7 @@
 # include <Vt/value.h>
 #else
 # include <pxr/pxr.h>
+# include <pxr/base/tf/staticTokens.h>
 # include <pxr/imaging/hd/changeTracker.h>
 # include <pxr/imaging/hd/instancer.h>
 # include <pxr/imaging/hd/meshTopology.h>
@@ -77,11 +79,22 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
+TF_DEFINE_PRIVATE_TOKENS(_tokens,
+  (axis)
+  (height)
+  (radius)
+  (radiusBottom)
+  (radiusTop)
+  ((x, "X"))
+  ((y, "Y"))
+  ((z, "Z"))
+);
+
 namespace {
 
-double ImplicitDouble(HdSceneDelegate *sceneDelegate, SdfPath const &id, char const *name, double fallback)
+double ImplicitDouble(HdSceneDelegate *sceneDelegate, SdfPath const &id, TfToken const &name, double fallback)
 {
-  const VtValue value = sceneDelegate->Get(id, TfToken(name));
+  const VtValue value = sceneDelegate->Get(id, name);
   if (value.IsHolding<double>()) return value.UncheckedGet<double>();
   if (value.IsHolding<float>()) return value.UncheckedGet<float>();
   return fallback;
@@ -90,8 +103,8 @@ double ImplicitDouble(HdSceneDelegate *sceneDelegate, SdfPath const &id, char co
 // The frame turning the generators' +z spine onto the prim's axis.
 GfMatrix4d ImplicitBasis(TfToken const &axis)
 {
-  if (axis == TfToken("X")) return GfMatrix4d(0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1);
-  if (axis == TfToken("Y")) return GfMatrix4d(0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1);
+  if (axis == _tokens->x) return GfMatrix4d(0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1);
+  if (axis == _tokens->y) return GfMatrix4d(0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1);
   return GfMatrix4d(1.0);
 }
 
@@ -108,8 +121,9 @@ TfTokenVector const&
 HdAkariImplicit::GetBuiltinPrimvarNames() const
 {
   static const TfTokenVector primvarNames = {
-    TfToken("height"), TfToken("radius"), TfToken("radiusTop"), TfToken("radiusBottom"), TfToken("axis")
+    _tokens->height, _tokens->radius, _tokens->radiusTop, _tokens->radiusBottom, _tokens->axis
   };
+
   return primvarNames;
 }
 
@@ -170,12 +184,12 @@ HdAkariImplicit::Sync(HdSceneDelegate *sceneDelegate,
   const bool instanced = !instancerId.IsEmpty();
   if (instanced) HdInstancer::_SyncInstancerAndParents(sceneDelegate->GetRenderIndex(), instancerId);
 
-  const double height = ImplicitDouble(sceneDelegate, id, "height", _type == HdPrimTypeTokens->capsule ? 1.0 : 2.0);
-  const double radius = ImplicitDouble(sceneDelegate, id, "radius", _type == HdPrimTypeTokens->capsule ? 0.5 : 1.0);
-  const double top = ImplicitDouble(sceneDelegate, id, "radiusTop", radius);
-  const double bottom = ImplicitDouble(sceneDelegate, id, "radiusBottom", radius);
-  const VtValue axisVal = sceneDelegate->Get(id, TfToken("axis"));
-  const GfMatrix4d basis = ImplicitBasis(axisVal.IsHolding<TfToken>() ? axisVal.UncheckedGet<TfToken>() : TfToken("Z"));
+  const double height = ImplicitDouble(sceneDelegate, id, _tokens->height, _type == HdPrimTypeTokens->capsule ? 1.0 : 2.0);
+  const double radius = ImplicitDouble(sceneDelegate, id, _tokens->radius, _type == HdPrimTypeTokens->capsule ? 0.5 : 1.0);
+  const double top = ImplicitDouble(sceneDelegate, id, _tokens->radiusTop, radius);
+  const double bottom = ImplicitDouble(sceneDelegate, id, _tokens->radiusBottom, radius);
+  const VtValue axisVal = sceneDelegate->Get(id, _tokens->axis);
+  const GfMatrix4d basis = ImplicitBasis(axisVal.IsHolding<TfToken>() ? axisVal.UncheckedGet<TfToken>() : _tokens->z);
 
   const size_t numRadial = 96, numCapAxial = 24;
   PxOsdMeshTopology topology;
@@ -226,6 +240,7 @@ HdAkariImplicit::Sync(HdSceneDelegate *sceneDelegate,
       return;
     }
   }
+
   scene->UpdateMesh(std::move(data));
 
   *dirtyBits = HdChangeTracker::Clean;
@@ -236,7 +251,7 @@ HdAkariImplicit::Finalize(HdRenderParam *renderParam)
 {
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
     if (HdAkariScene *scene = param->GetScene()) {
-      scene->RemoveMesh(GetId());
+      scene->RemoveMesh(GetId(), GetPrimId());
       scene->RemoveStyle(GetPrimId());
     }
   }

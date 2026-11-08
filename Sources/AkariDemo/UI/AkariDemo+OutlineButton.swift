@@ -154,6 +154,7 @@ extension AkariDemo
           Text("\(Int(thickness)) px")
             .font(.system(size: 11, weight: .medium).monospaced())
         }
+
         Slider(value: $thickness.onChange { hydra.selectionOutlineWidth = Int32($0.rounded()) },
                in: 1 ... 10)
           .frame(width: 150)

@@ -43,6 +43,12 @@ import Foundation
 import HydraKit
 import Nanocolor
 
+@_silgen_name("objc_autoreleasePoolPush")
+private func autoreleasePoolPush() -> UnsafeMutableRawPointer?
+
+@_silgen_name("objc_autoreleasePoolPop")
+private func autoreleasePoolPop(_ pool: UnsafeMutableRawPointer)
+
 public extension Akari
 {
   protocol HydraFrameDriver: Hydra.FrameDelegate
@@ -57,6 +63,8 @@ public extension Akari
     public weak var akari: Akari.RenderEngine?
     public var cameraView: Akari.CameraView?
     public var playback: Akari.Playback?
+    /// Off for a view nothing is picked in, such as a material preview.
+    public var outlinesSelection = true
 
     /// Start of the current one second average, and the frames pulled in it.
     private var windowStart: CFAbsoluteTime = 0
@@ -74,6 +82,105 @@ public extension Akari
       var primId: Int32
       var groupVersion: Int?
       var modelsVersion: Int?
+      var objects: Int?
+    }
+
+    private var objectSelection: (paths: [String], version: Int)?
+    private var primPaths: [(id: Int32, path: String)]?
+    private var unresolved = (version: 0, tries: 0, frame: 0)
+
+    /// Outlines these objects in place of Hydra's pick, each on its own, `nil` hands the outline back.
+    public func select(objects paths: [String]?)
+    {
+      statsLock.lock()
+      objectSelection = paths.map { ($0, (objectSelection?.version ?? 0) + 1) }
+      statsLock.unlock()
+    }
+
+    private var missing = false
+
+    /// A just added prim gets its id a frame or so after it's selected, so a selection
+    /// with paths the ids don't reach yet looks again for a little while.
+    private func retryUnresolved()
+    {
+      statsLock.lock()
+      let resyncs = resyncFrames > 0
+      if resyncs { resyncFrames -= 1 }
+      statsLock.unlock()
+      if resyncs
+      {
+        primPaths = nil
+        selectionKey = nil
+        return
+      }
+
+      guard missing, objectSelection != nil, unresolved.tries < 12 else { return }
+      unresolved.frame += 1
+      guard unresolved.frame % 8 == 0 else { return }
+      unresolved.tries += 1
+      primPaths = nil
+      selectionKey = nil
+    }
+
+    /// The frames still to look the ids up again, a prim made again under its path
+    /// gets its new id only once Hydra syncs, after the frame's selection.
+    private var resyncFrames = 0
+
+    /// Forgets the prim ids' paths after prims come or go.
+    public func primsChanged()
+    {
+      statsLock.lock()
+      primPaths = nil
+      resyncFrames = 3
+      objectSelection = objectSelection.map { ($0.paths, $0.version + 1) }
+      statsLock.unlock()
+    }
+
+    private func objectLabels(_ engine: Hydra.RenderEngine, _ paths: [String]) -> [Int32]
+    {
+      if primPaths == nil
+      {
+        var imaging = engine.getEngine()
+        var found: [(id: Int32, path: String)] = []
+        var misses = 0
+        var id: Int32 = 0
+        while misses < 1024, id < 4_000_000
+        {
+          if let path = imaging.decodePrimPath(primId: id, instanceId: -1)
+          {
+            found.append((id, String(path.GetAsString())))
+            misses = 0
+          }
+          else { misses += 1 }
+          id += 1
+        }
+
+        primPaths = found
+      }
+
+      guard let cache = primPaths, let top = cache.last?.id, !paths.isEmpty else { return [] }
+      var labels = [Int32](repeating: 0, count: Int(top) + 1)
+      let index = Dictionary(paths.enumerated().map { ($1, Int32($0 + 1)) }, uniquingKeysWith: { a, _ in a })
+      var found = Set<Int32>()
+      for entry in cache
+      {
+        var path = Substring(entry.path)
+        while !path.isEmpty
+        {
+          if let label = index[String(path)]
+          {
+            labels[Int(entry.id)] = label
+            found.insert(label)
+            break
+          }
+
+          guard let slash = path.lastIndex(of: "/"), slash != path.startIndex else { break }
+          path = path[..<slash]
+        }
+      }
+
+      missing = found.count < index.count
+      return labels
     }
 
     public init(hydra: Hydra.RenderEngine, akari: Akari.RenderEngine)
@@ -95,6 +202,7 @@ public extension Akari
 
     public func hydraWillPull(deltaTime _: Double)
     {
+      framePool = autoreleasePoolPush()
       let pullStart = CFAbsoluteTimeGetCurrent()
       if windowStart == 0 { windowStart = pullStart }
       else { windowFrames += 1 }
@@ -111,25 +219,46 @@ public extension Akari
 
       playback?.advance()
       cameraView?.update()
+      retryUnresolved()
       syncSelection()
     }
 
+    /// Hydra's frame queue runs frames back to back without draining, so every frame's command
+    /// buffers, and the textures and buffers they hold, go with the frame.
     public func hydraDidPull()
-    {}
+    {
+      if let pool = framePool
+      {
+        framePool = nil
+        autoreleasePoolPop(pool)
+      }
+    }
+
+    private var framePool: UnsafeMutableRawPointer?
 
     /// Hands Hydra's selection to Akari's outline,
     /// rebuilding the labels only when it changed.
     private func syncSelection()
     {
-      guard let engine, let akari else { return }
+      guard outlinesSelection, let engine, let akari else { return }
 
-      let key = SelectionKey(primId: engine.selectedPrimId,
-                             groupVersion: engine.selectionUsesGroup ? engine.selectionGroupVersion : nil,
-                             modelsVersion: engine.selectionSelectAll ? engine.selectionModelLUTVersion : nil)
+      statsLock.lock()
+      let objects = objectSelection
+      statsLock.unlock()
+      let key = objects.map { SelectionKey(primId: -1, objects: $0.version) }
+        ?? SelectionKey(primId: engine.selectedPrimId,
+                        groupVersion: engine.selectionUsesGroup ? engine.selectionGroupVersion : nil,
+                        modelsVersion: engine.selectionSelectAll ? engine.selectionModelLUTVersion : nil)
       if key != selectionKey
       {
         selectionKey = key
-        if engine.selectionSelectAll
+        if let objects
+        {
+          let labels = objectLabels(engine, objects.paths)
+          selectionLabels = labels.isEmpty ? nil : (labels, false)
+          if unresolved.version != objects.version { unresolved = (objects.version, 0, 0) }
+        }
+        else if engine.selectionSelectAll
         {
           // model ids are hashes, renumber them so each stays exact as a float.
           var numbers: [Int32: Int32] = [:]
@@ -140,6 +269,7 @@ public extension Akari
             numbers[model] = number
             return number
           }
+
           selectionLabels = (labels, true)
         }
         else if engine.selectionUsesGroup

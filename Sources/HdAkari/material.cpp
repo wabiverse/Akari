@@ -71,38 +71,9 @@
 #include "HdAkari/renderParam.h"
 #include "HdAkari/textureAtlas.h"
 
+#include <algorithm>
+
 PXR_NAMESPACE_OPEN_SCOPE
-
-namespace {
-
-const TfToken kPreviewSurface("UsdPreviewSurface");
-const TfToken kEmissiveColor("emissiveColor");
-const TfToken kOpacity("opacity");
-
-// the preview surface's emission and opacity value sources, from the scene index.
-bool FindConstants(HdSceneDelegate *sceneDelegate, SdfPath const &id,
-                   HdSampledDataSourceHandle &emissive, HdSampledDataSourceHandle &opacity)
-{
-  HdRenderIndex &index = sceneDelegate->GetRenderIndex();
-  HdSceneIndexBaseRefPtr sceneIndex = index.GetTerminalSceneIndex();
-  if (!sceneIndex) return false;
-
-  const HdMaterialNetworkSchema network = HdMaterialSchema::GetFromParent(sceneIndex->GetPrim(id).dataSource)
-    .GetMaterialNetwork(index.GetRenderDelegate()->GetMaterialRenderContexts());
-  HdMaterialNodeContainerSchema nodes = network.GetNodes();
-  for (TfToken const &name : nodes.GetNames()) {
-    const HdMaterialNodeSchema node = nodes.Get(name);
-    const HdTokenDataSourceHandle identifier = node.GetNodeIdentifier();
-    if (!identifier || identifier->GetTypedValue(0.0f) != kPreviewSurface) continue;
-    HdMaterialNodeParameterContainerSchema params = node.GetParameters();
-    emissive = params.Get(kEmissiveColor).GetValue();
-    opacity = params.Get(kOpacity).GetValue();
-    return emissive || opacity;
-  }
-  return false;
-}
-
-} // namespace
 
 HdAkariMaterial::HdAkariMaterial(SdfPath const &id)
   : HdMaterial(id)
@@ -121,56 +92,47 @@ HdAkariMaterial::Sync(HdSceneDelegate *sceneDelegate,
 {
   auto *param = static_cast<HdAkariRenderParam *>(renderParam);
   HdAkariTextureAtlas *atlas = param ? param->GetTextureAtlas() : nullptr;
-  if (!atlas || !(*dirtyBits & HdMaterial::DirtyResource))
-  {
-    *dirtyBits = HdChangeTracker::Clean;
-    return;
-  }
-  HdAkariForgetMaterial(GetId());
-  if (!_emissive && !_opacity && !atlas->HasConstants(GetId().GetString()))
-  {
-    *dirtyBits = HdChangeTracker::Clean;
-    return;
-  }
-
-  if (_emissive || _opacity || FindConstants(sceneDelegate, GetId(), _emissive, _opacity))
-  {
-    const VtValue emissive = _emissive ? _emissive->GetValue(0.0f) : VtValue();
-    const VtValue opacity = _opacity ? _opacity->GetValue(0.0f) : VtValue();
-    const bool hasEmissive = emissive.IsHolding<GfVec3f>();
-    const bool hasOpacity = opacity.IsHolding<float>();
-    if ((hasEmissive || !_emissive) && (hasOpacity || !_opacity))
-    {
-      atlas->UpdateConstants(GetId().GetString(),
-                             hasEmissive ? &emissive.UncheckedGet<GfVec3f>() : nullptr,
-                             hasOpacity ? &opacity.UncheckedGet<float>() : nullptr);
-      *dirtyBits = HdChangeTracker::Clean;
-      return;
-    }
-    // the network changed under the cached sources, look again next time.
-    _emissive = nullptr;
-    _opacity = nullptr;
-  }
-
-  const VtValue resource = sceneDelegate->GetMaterialResource(GetId());
-  if (resource.IsHolding<HdMaterialNetworkMap>())
-  {
-    for (auto const &entry : resource.UncheckedGet<HdMaterialNetworkMap>().map)
-    {
-      for (HdMaterialNode const &node : entry.second.nodes)
-      {
-        if (node.identifier != kPreviewSurface) continue;
-        auto emissiveIt = node.parameters.find(kEmissiveColor);
-        auto opacityIt = node.parameters.find(kOpacity);
-        const bool hasEmissive = emissiveIt != node.parameters.end() && emissiveIt->second.IsHolding<GfVec3f>();
-        const bool hasOpacity = opacityIt != node.parameters.end() && opacityIt->second.IsHolding<float>();
-        atlas->UpdateConstants(GetId().GetString(),
-                               hasEmissive ? &emissiveIt->second.UncheckedGet<GfVec3f>() : nullptr,
-                               hasOpacity ? &opacityIt->second.UncheckedGet<float>() : nullptr);
-      }
-    }
-  }
+  const bool changed = *dirtyBits & (HdMaterial::DirtyResource | HdMaterial::DirtyParams);
   *dirtyBits = HdChangeTracker::Clean;
+  if (!atlas || !changed) return;
+  HdAkariForgetMaterial(GetId());
+  if (!_baked) {
+    _baked = true;
+    return;
+  }
+
+  const std::string key = GetId().GetString();
+  float row[HdAkariTextureAtlas::kConstantTexels * 4] = {0.18f, 0.18f, 0.18f, 1.0f, 0.5f, 0.0f, 0.0f, 0.0f};
+  const bool constant = atlas->GetConstants(key, row);
+  GfVec3f color(row[0], row[1], row[2]);
+  float opacity = row[3], roughness = row[4], metallic = row[5], opacityThreshold = row[6];
+  HdAkariMaterialTextures textures;
+  SdfPath resolved;
+  HdAkariApplyMaterialId(sceneDelegate, GetId(), color, opacity, roughness, metallic, opacityThreshold, textures,
+                         resolved);
+  const bool untextured = textures.roughnessPath.empty() && textures.metallicPath.empty()
+                       && textures.opacityPath.empty() && textures.colorPath.empty()
+                       && textures.normalPath.empty() && textures.emissivePath.empty();
+  if (constant && untextured) {
+    // the meshes classify on these, only a change of class needs them synced again.
+    auto emitter = [](GfVec3f const &c, GfVec3f const &e) {
+      return std::max({c[0], c[1], c[2]}) < 0.02f && std::max({e[0], e[1], e[2]}) > 0.5f;
+    };
+
+    const bool sameClass = (row[3] < 0.98f) == (opacity < 0.98f)
+                        && emitter(GfVec3f(row[0], row[1], row[2]), GfVec3f(row[8], row[9], row[10]))
+                             == emitter(color, textures.emissiveColor);
+    atlas->UpdateConstantMaterial(key, color, opacity, roughness, metallic, opacityThreshold, textures.emissiveColor);
+    if (sameClass) return;
+  }
+  else {
+    atlas->ForgetCell(key);
+  }
+
+  HdRenderIndex &index = sceneDelegate->GetRenderIndex();
+  for (SdfPath const &id : HdAkariMaterialUsers(key)) {
+    if (index.HasRprim(id)) index.GetChangeTracker().MarkRprimDirty(id, HdChangeTracker::DirtyMaterialId);
+  }
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

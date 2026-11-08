@@ -132,6 +132,7 @@ public struct OutputSettings: Sendable, Equatable
     {
       name += String(format: "%04d", frame)
     }
+
     return url(name)
   }
 
@@ -144,6 +145,7 @@ public struct OutputSettings: Sendable, Equatable
       let digits = name.distance(from: range.lowerBound, to: range.upperBound)
       name.replaceSubrange(range, with: String(format: "%0\(digits)d-%0\(digits)d", frameStart, frameEnd))
     }
+
     return url(name)
   }
 

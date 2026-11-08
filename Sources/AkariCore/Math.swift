@@ -176,6 +176,7 @@ public extension Akari.Math
       result += fraction * Float(i % base)
       i /= base
     }
+
     return result
   }
 }

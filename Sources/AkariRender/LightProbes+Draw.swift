@@ -69,12 +69,14 @@ extension Akari.LightProbes
         let rect = faceRect(view)
         rects += [rect.x, rect.y, rect.z, rect.w]
       }
+
       setAmplification(transforms: transforms, viewports: rects, count: run.count)
       setCaptureViews(transforms)
       for capture in captures
       {
         labgl.capturePlaybackIndirectDraws(capture)
       }
+
       gl.disableVertexAmplification()
       start = run.upperBound
     }
@@ -113,6 +115,7 @@ extension Akari.LightProbes
     {
       labgl.capturePlaybackIndirectDraws(capture)
     }
+
     gl.disableVertexAmplification()
     endPass()
   }
@@ -123,86 +126,75 @@ extension Akari.LightProbes
   {
     let next = 1 - shIndex
 
-    let project = kernels.project
+    let project = kernels[.project]
     setUniforms(project, lighting, param: 0)
-    gl.setComputeShaderImage(project, index: 0, texture: sh[next], format: GLenum(GL_RGBA16F), level: 0)
-    gl.setComputeShaderImage(project, index: 1, texture: sphereInfo, format: GL_RGBA32F, level: 0)
+    project.image(sh[next], at: 0, format: GLenum(GL_RGBA16F))
+    project.image(sphereInfo, at: 1, format: GL_RGBA32F)
     bindScene(project, environment: environment, sh: sh[shIndex])
-    gl.dispatchCompute(project, groupsX: GLuint(layout.probeCount), groupsY: 1, groupsZ: 1)
+    project.dispatch(layout.probeCount)
     shIndex = next
 
     guard !layout.spheres.isEmpty else { return }
 
-    let base = kernels.sphereBase
-    let baseGroups = GLuint((Self.octResolution + 2 + 15) / 16)
+    let base = kernels[.sphereBase]
+    let baseGroups = (Self.octResolution + 2 + 15) / 16
     setUniforms(base, lighting, param: 0)
-    gl.setComputeShaderImage(base, index: 0, texture: sphereAtlas, format: GLenum(GL_RGBA16F), level: 0)
-    gl.setComputeShaderSampler(base, index: 1, texture: sphereInfo, samplerIndex: 0)
+    base.image(sphereAtlas, at: 0, format: GLenum(GL_RGBA16F))
+    base.sample(sphereInfo, at: 1)
     bindScene(base, environment: environment, sh: sh[shIndex])
-    gl.dispatchCompute(base, groupsX: baseGroups, groupsY: baseGroups, groupsZ: GLuint(layout.spheres.count))
+    base.dispatch(baseGroups, baseGroups, layout.spheres.count)
 
-    let filter = kernels.sphereFilter
+    let filter = kernels[.sphereFilter]
     for level in 1 ..< Self.octLevels
     {
-      let groups = GLuint(((Self.octResolution >> level) + 2 + 15) / 16)
+      let groups = ((Self.octResolution >> level) + 2 + 15) / 16
       setUniforms(filter, lighting, param: Float(level))
-      gl.setComputeShaderImage(filter, index: 0, texture: sphereAtlas, format: GLenum(GL_RGBA16F), level: 0)
-      gl.dispatchCompute(filter, groupsX: groups, groupsY: groups, groupsZ: GLuint(layout.spheres.count))
+      filter.image(sphereAtlas, at: 0, format: GLenum(GL_RGBA16F))
+      filter.dispatch(groups, groups, layout.spheres.count)
     }
   }
 
   func clear(_ texture: GLuint, width: Int, height: Int, format: GLenum = GLenum(GL_RGBA16F))
   {
-    let kernel = kernels.clear
-    var value = SIMD4<Float>(repeating: 0)
-    gl.setComputeShaderUniform(kernel, name: "u_value", type: GL_FLOAT_VEC4, data: &value)
-    gl.setComputeShaderImage(kernel, index: 0, texture: texture, format: format, level: 0)
-    gl.dispatchCompute(kernel,
-                       groupsX: GLuint((width + 15) / 16),
-                       groupsY: GLuint((height + 15) / 16),
-                       groupsZ: 1)
+    let kernel = kernels[.clear]
+    kernel.set(.value, SIMD4<Float>(repeating: 0))
+    kernel.image(texture, at: 0, format: format)
+    kernel.dispatch((width + 15) / 16, (height + 15) / 16)
   }
 
-  private func bindScene(_ kernel: GLuint, environment: GLuint, sh: GLuint)
+  private func bindScene(_ kernel: Akari.ComputeKernel, environment: GLuint, sh: GLuint)
   {
-    gl.setComputeShaderSampler(kernel, index: 2, texture: captureTextures[0], samplerIndex: 0)
-    gl.setComputeShaderSampler(kernel, index: 3, texture: captureTextures[1], samplerIndex: 0)
-    gl.setComputeShaderSampler(kernel, index: 4, texture: captureTextures[2], samplerIndex: 0)
-    gl.setComputeShaderSampler(kernel, index: 5, texture: environment, samplerIndex: 0)
-    gl.setComputeShaderSampler(kernel, index: 6, texture: sunMap, samplerIndex: 0)
-    gl.setComputeShaderSampler(kernel, index: 7, texture: sh, samplerIndex: 0)
+    kernel.sample(captureTextures[0], at: 2)
+    kernel.sample(captureTextures[1], at: 3)
+    kernel.sample(captureTextures[2], at: 4)
+    kernel.sample(environment, at: 5)
+    kernel.sample(sunMap, at: 6)
+    kernel.sample(sh, at: 7)
   }
 
   /// Every relight kernel shares `U` fields set in declaration order.
-  private func setUniforms(_ kernel: GLuint, _ lighting: Lighting, param: Float)
+  private func setUniforms(_ kernel: Akari.ComputeKernel, _ lighting: Lighting, param: Float)
   {
-    func vector(_ name: String, _ value: SIMD4<Float>)
-    {
-      var value = value
-      gl.setComputeShaderUniform(kernel, name: name, type: GL_FLOAT_VEC4, data: &value)
-    }
-
-    sunMatrix.withUnsafeFloats
-    { buf in
-      gl.setComputeShaderUniform(kernel, name: "u_sunMatrix", type: GL_FLOAT_MAT4, data: buf.baseAddress)
-    }
-    vector("u_sun", SIMD4(lighting.sunDirection, lighting.sunHeight))
-    vector("u_sky", SIMD4(lighting.zUp ? 1 : 0, lighting.iblEnabled ? 1 : 0, near, 0))
-    vector("u_sunColor", lighting.sunColor)
-    vector("u_sunMap", SIMD4(Float(Self.sunResolution), sunTexelWorld, sunDepthPerWorld, 0))
-    vector("u_gridMin", SIMD4(layout.gridMin, Float(layout.volumeCount)))
-    vector("u_gridMax", SIMD4(layout.gridMax, Float(layout.spheres.count)))
-    vector("u_gridSize", SIMD4(SIMD3<Float>(layout.dims), layout.normalBias))
+    kernel.set(.sunMatrix, sunMatrix)
+    kernel.set(.sun, SIMD4(lighting.sunDirection, lighting.sunHeight))
+    kernel.set(.sky, SIMD4(lighting.zUp ? 1 : 0, lighting.iblEnabled ? 1 : 0, near, 0))
+    kernel.set(.sunColor, lighting.sunColor)
+    kernel.set(.sunMap, SIMD4(Float(Self.sunResolution), sunTexelWorld, sunDepthPerWorld, 0))
+    kernel.set(.gridMin, SIMD4(layout.gridMin, Float(layout.volumeCount)))
+    kernel.set(.gridMax, SIMD4(layout.gridMax, Float(layout.spheres.count)))
+    kernel.set(.gridSize, SIMD4(SIMD3<Float>(layout.dims), layout.normalBias))
     let lightCount = min(lighting.lights.count / 2, 4)
     for i in 0 ..< 4
     {
-      vector("u_lightPos\(i)", i < lightCount ? lighting.lights[i * 2] : .zero)
+      kernel.set(.lightPos, index: i, i < lightCount ? lighting.lights[i * 2] : .zero)
     }
+
     for i in 0 ..< 4
     {
-      vector("u_lightColor\(i)", i < lightCount ? lighting.lights[i * 2 + 1] : .zero)
+      kernel.set(.lightColor, index: i, i < lightCount ? lighting.lights[i * 2 + 1] : .zero)
     }
-    vector("u_params", SIMD4(Float(lightCount), param, 0, 0))
+
+    kernel.set(.params, SIMD4(Float(lightCount), param, 0, 0))
   }
 
   /// Uploads the run's projection matrices for the combined instanced entry
@@ -217,6 +209,7 @@ extension Akari.LightProbes
     {
       UnsafeMutableRawPointer(ptr).copyMemory(from: $0.baseAddress!, byteCount: $0.count)
     }
+
     gl.unmapBuffer(captureViewXf)
     gl.setShaderVertexBuffer(captureShader, index: 4, buffer: captureViewXf)
   }
@@ -229,12 +222,14 @@ extension Akari.LightProbes
                                 size: GLsizei(buf.count * MemoryLayout<Float>.size),
                                 transforms: buf.baseAddress, cullRadius: 0, usage: GL_STATIC_DRAW)
     }
+
     viewports.withUnsafeBufferPointer
     { buf in
       gl.instanceViewportsData(handle: amplification.viewports,
                                size: GLsizei(buf.count * MemoryLayout<Int32>.size),
                                viewports: buf.baseAddress, usage: GL_STATIC_DRAW)
     }
+
     gl.setVertexAmplification(viewsHandle: amplification.views,
                               viewportsHandle: amplification.viewports,
                               count: GLsizei(count))
@@ -254,8 +249,7 @@ extension Akari.LightProbes
     gl.scissor(x: 0, y: 0, width: GLsizei(size.x), height: GLsizei(size.y))
 
     gl.useShader(captureShader)
-    var mode = SIMD4<Float>(sunPass ? 1 : 0, 0, 0, 0)
-    gl.setShaderUniform(captureShader, name: "u_mode", type: GL_FLOAT_VEC4, data: &mode)
+    gl.setShaderUniform(captureShader, .mode, SIMD4<Float>(sunPass ? 1 : 0, 0, 0, 0))
     gl.setShaderImageArgument(captureShader, bufferIndex: 0, texture: materials.material)
     gl.setShaderImageArgument(captureShader, bufferIndex: 1, texture: materials.color)
     gl.setShaderImageArgument(captureShader, bufferIndex: 4, texture: materials.emissive)

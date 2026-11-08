@@ -108,11 +108,13 @@ public final class LatticeBulbDriver: Hydra.FrameDelegate
       print("[lattice] unreadable motion \(motionFile)")
       return nil
     }
+
     prototypes = ranges.compactMap
     {
       guard let path = $0["path"] as? String, let offset = $0["offset"] as? Int, let count = $0["count"] as? Int else { return nil }
       return Prototype(path: path, offset: offset, count: count)
     }
+
     let rows: [LatticeBulbMotion] = data.withUnsafeBytes { Array($0.bindMemory(to: LatticeBulbMotion.self)) }
 
     #if canImport(Metal)
@@ -126,11 +128,13 @@ public final class LatticeBulbDriver: Hydra.FrameDelegate
         store.set(row, on: entity)
         store.set(InstanceXform(tx: 0, ty: 0, tz: 0, sx: row.size, sy: row.size, sz: row.size, rx: 0, ry: 0, rz: 0, rw: 1), on: entity)
       }
+
       store.query(InstanceXform.self, LatticeBulbMotion.self).forEachColumnPair
       { x, m in
         xforms = x as? MetalBackedColumn<InstanceXform>
         motions = m as? MetalBackedColumn<LatticeBulbMotion>
       }
+
       do
       {
         let options = MTLCompileOptions()
@@ -150,6 +154,7 @@ public final class LatticeBulbDriver: Hydra.FrameDelegate
     {
       Akari.LiveInstances.register(prototype: prototype.path, count: prototype.count)
     }
+
     print("[lattice] \(rows.count) instances over \(prototypes.count) prototypes, gpu-direct")
     Self.shared = self
   }
@@ -170,6 +175,7 @@ public final class LatticeBulbDriver: Hydra.FrameDelegate
                                                        options: .storageModeShared, deallocator: nil)
             prototypes[i].version = slot.version
           }
+
           guard let matrices = prototypes[i].matrices, let encoder = commands.makeComputeCommandEncoder() else { continue }
           var offset = UInt32(prototypes[i].offset)
           var count = UInt32(prototypes[i].count)
@@ -185,6 +191,7 @@ public final class LatticeBulbDriver: Hydra.FrameDelegate
                                        threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
           encoder.endEncoding()
         }
+
         commands.commit()
         commands.waitUntilCompleted()
         xforms.markWholeColumnChanged(tick: store.currentTick)

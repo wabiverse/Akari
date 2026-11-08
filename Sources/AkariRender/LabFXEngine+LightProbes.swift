@@ -45,12 +45,18 @@ import simd
 
 public extension Akari.LabFXEngine
 {
+  /// What the light probes bake from besides the scene.
+  struct Probes
+  {
+    var overrides: [Akari.LightProbes.Override] = []
+    var overrideRevision: UInt64 = .max
+    /// Probe identity without the transform, keys the probe layout bake.
+    var structuralRevision: UInt64 = 0
+    /// The material, color and emissive atlases the probe capture samples.
+    var materials: (material: GLuint, color: GLuint, emissive: GLuint, constants: GLuint) = (0, 0, 0, 0)
+  }
+
   /// Advances the light probe bake and binds the probes for the deferred resolve.
-  ///
-  /// - Parameters:
-  ///   - renderParam: hydra render param.
-  ///   - camera: the view an unauthored "landscape" volume is fitted around.
-  ///   - settings: the frame's render settings.
   func updateLightProbes(renderParam: Pixar.HdAkariRenderParam, camera: Akari.Camera, settings: RenderSettings)
   {
     let captures = geometry.shadowCaptures
@@ -61,15 +67,16 @@ public extension Akari.LabFXEngine
     else { return }
 
     let revision = scene.ProbeRevision()
-    if revision != probeOverrideRevision
+    if revision != probes.overrideRevision
     {
-      probeOverrideRevision = revision
+      probes.overrideRevision = revision
       let (overrides, structural) = Self.lightProbeOverrides(scene)
-      probeOverrides = overrides
-      probeStructuralRevision = structural
+      probes.overrides = overrides
+      probes.structuralRevision = structural
     }
-    var overrides = probeOverrides
-    var structural = probeStructuralRevision
+
+    var overrides = probes.overrides
+    var structural = probes.structuralRevision
     if overrides.isEmpty, let volume = landscapeProbeVolume(camera: camera, sceneBounds: sceneBounds)
     {
       overrides = [volume]
@@ -87,15 +94,15 @@ public extension Akari.LabFXEngine
 
     let lighting = Akari.LightProbes.Lighting(
       sunDirection: worldSpaceSunDirection(settings.light),
-      sunHeight: settings.light.sunHeight,
+      sunHeight: effectiveSunHeight(settings.light),
       zUp: stageIsZUp,
       iblEnabled: settings.features.contains(.imageBasedLighting),
       sunColor: sunColor(iblEnabled: settings.features.contains(.imageBasedLighting)),
-      environment: environmentRevision,
+      environment: environment.revision,
       // a light that moves every frame would relight every probe every frame,
       // so intensity is kept to an eighth of a stop so flicker doesn't relight
       // them either.
-      lights: syncedPointLights.filter(\.probes).flatMap
+      lights: pointLights.shadowed.filter(\.probes).flatMap
       {
         [SIMD4($0.position, exp2((log2(max($0.intensity, 1e-6)) * 8).rounded() / 8)), SIMD4($0.color, $0.radius)]
       }
@@ -106,19 +113,19 @@ public extension Akari.LabFXEngine
                                    overrides: overrides,
                                    overrideRevision: structural,
                                    upAxis: stageIsZUp ? 2 : 1,
-                                   materials: probeMaterials,
-                                   environment: runtime.texture("envCube", named: "envCube"),
+                                   materials: probes.materials,
+                                   environment: runtime.texture(.envCube, named: .envCube),
                                    lighting: lighting,
                                    settings: probeSettings)
     guard ready else { return }
 
     let layout = lightProbes.layout
-    setSampler("u_probe_volume", lightProbes.volumeSH)
-    setSampler("u_probe_sphere", lightProbes.sphereAtlas)
-    setSampler("u_probe_info", lightProbes.sphereInfo)
-    setVector("u_probeGridMin", SIMD4(layout.gridMin, layout.volumeCount > 0 ? 1 : 0))
-    setVector("u_probeGridMax", SIMD4(layout.gridMax, Float(layout.spheres.count)))
-    setVector("u_probeGridSize", SIMD4(SIMD3<Float>(layout.dims), layout.normalBias))
+    setSampler(.probeVolume, lightProbes.volumeSH)
+    setSampler(.probeSphere, lightProbes.sphereAtlas)
+    setSampler(.probeInfo, lightProbes.sphereInfo)
+    setVector(.probeGridMin, SIMD4(layout.gridMin, layout.volumeCount > 0 ? 1 : 0))
+    setVector(.probeGridMax, SIMD4(layout.gridMax, Float(layout.spheres.count)))
+    setVector(.probeGridSize, SIMD4(SIMD3<Float>(layout.dims), layout.normalBias))
   }
 
   /// A "landscape" (a kilometer or more across) with no probes of its own gets, in a final render, a volume around the view,

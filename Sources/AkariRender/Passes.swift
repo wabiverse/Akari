@@ -102,9 +102,9 @@ public extension Akari
                                planetCloudMarchSteps: ctx.isFinalRender
                                  ? ctx.settings.renderPlanetCloudMarchSteps
                                  : ctx.settings.planetCloudMarchSteps)
-      ctx.labfx.cullStaticGeometry(projection: ctx.camera.projection, view: ctx.camera.view)
+      ctx.labfx.cullStaticGeometry(projection: ctx.unjitteredCamera.projection, view: ctx.camera.view)
 
-      ctx.labfx.renderGbufferEarly()
+      ctx.labfx.renderGbufferEarly(wireframe: ctx.settings.shading == .wireframe)
     }
   }
 
@@ -126,7 +126,9 @@ public extension Akari
         projection: ctx.camera.projection,
         view: ctx.camera.view,
         light: ctx.settings.light,
-        shadowsEnabled: ctx.settings.features.contains(.shadowMaps)
+        shadowsEnabled: ctx.settings.features.contains(.shadowMaps),
+        shading: ctx.settings.shading,
+        grid: ctx.settings.overlays && !ctx.isFinalRender
       )
     }
   }

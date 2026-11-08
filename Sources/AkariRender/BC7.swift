@@ -76,10 +76,12 @@ public extension Akari
               {
                 scratch.weights[k] = weights[k]
               }
+
               for v in 0 ... 64
               {
                 scratch.nearest[v] = Int32(nearestWeight[v])
               }
+
               for bx in 0 ..< blocksWide
               {
                 for i in 0 ..< 16
@@ -87,6 +89,7 @@ public extension Akari
                   let p = pixels + ((by * 4 + i / 4) * stride + bx * 4 + i % 4) * 4
                   scratch.texels[i] = SIMD4(Float(p[2]), Float(p[1]), Float(p[0]), Float(p[3]))
                 }
+
                 encodeBlock(scratch, into: blocks + (by * blocksWide + bx) * blockBytes)
               }
             }
@@ -115,6 +118,7 @@ public extension Akari
             lo |= UInt64(b[i]) << UInt64(8 * i)
             hi |= UInt64(b[8 + i]) << UInt64(8 * i)
           }
+
           var position = 0
           func take(_ count: Int) -> Int
           {
@@ -125,9 +129,11 @@ public extension Akari
               let bit = at < 64 ? (lo >> UInt64(at)) & 1 : (hi >> UInt64(at - 64)) & 1
               v |= bit << UInt64(k)
             }
+
             position += count
             return Int(v)
           }
+
           let mode = take(7)
           var q0 = SIMD4<Int>.zero, q1 = SIMD4<Int>.zero
           for c in 0 ..< 4
@@ -135,6 +141,7 @@ public extension Akari
             q0[c] = take(7)
             q1[c] = take(7)
           }
+
           let e0 = q0 &* 2 &+ take(1), e1 = q1 &* 2 &+ take(1)
           for i in 0 ..< 16
           {
@@ -192,6 +199,7 @@ public extension Akari
         hi = pointwiseMax(hi, t[i])
         mean += t[i]
       }
+
       mean /= 16
 
       if lo == hi
@@ -201,6 +209,7 @@ public extension Akari
         {
           s.indices[i] = 0
         }
+
         write(Endpoints(q0: e.q, q1: e.q, p0: e.p, p1: e.p), s.indices, into: out)
         return
       }
@@ -213,6 +222,7 @@ public extension Akari
         tMin = min(tMin, d)
         tMax = max(tMax, d)
       }
+
       var best = endpoints(mean + axis * tMin, mean + axis * tMax)
       let bestError = assign(s, best, into: s.indices)
 
@@ -231,6 +241,7 @@ public extension Akari
         ax += a * t[i]
         bx += w * t[i]
       }
+
       let det = aa * bb - ab * ab
       if abs(det) > 1e-6
       {
@@ -254,6 +265,7 @@ public extension Akari
           s.indices[i] = 15 - s.indices[i]
         }
       }
+
       write(best, s.indices, into: out)
     }
 
@@ -269,6 +281,7 @@ public extension Akari
         c2 += d * d.z
         c3 += d * d.w
       }
+
       var v = fallback
       for _ in 0 ..< 4
       {
@@ -277,6 +290,7 @@ public extension Akari
         guard length > 1e-6 else { break }
         v = next / length
       }
+
       let length = (v * v).sum().squareRoot()
       return length > 1e-6 ? v / length : .zero
     }
@@ -292,6 +306,7 @@ public extension Akari
         let r = q * 2 + p - clamped
         return (q, (r * r).sum())
       }
+
       let even = fit(0), odd = fit(1)
       return even.error <= odd.error ? (even.q, 0) : (odd.q, 1)
     }
@@ -318,6 +333,7 @@ public extension Akari
         let w = s.weights[k]
         s.palette[k] = ((a * (64 - w) + b * w + 32) / 64).rounded(.down)
       }
+
       let axis = b - a
       let length = (axis * axis).sum()
       let scale = length > 0 ? 64 / length : 0
@@ -337,9 +353,11 @@ public extension Akari
             best = k
           }
         }
+
         indices[i] = Int32(best)
         total += bestError
       }
+
       return total
     }
 
@@ -353,12 +371,14 @@ public extension Akari
         bits.put(UInt64(e.q0[c]), 7)
         bits.put(UInt64(e.q1[c]), 7)
       }
+
       bits.put(UInt64(e.p0), 1)
       bits.put(UInt64(e.p1), 1)
       for i in 0 ..< 16
       {
         bits.put(UInt64(indices[i]), i == 0 ? 3 : 4)
       }
+
       for i in 0 ..< 8
       {
         out[i] = UInt8(truncatingIfNeeded: bits.lo >> UInt64(8 * i))
@@ -384,6 +404,7 @@ public extension Akari
         {
           hi |= v << UInt64(position - 64)
         }
+
         position += count
       }
     }

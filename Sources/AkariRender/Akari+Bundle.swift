@@ -57,24 +57,21 @@ public extension Bundle
   }
 
   static let akari: Bundle = {
-    // in bundled app contexts, swift bundler nests compiled resources under
-    // Contents/Resources - check there before falling back to .module.
+    // a bundled app nests compiled resources under Contents/Resources, so look there before .module.
     if let bundle = akariBundle("Akari_AkariRender")
     { return bundle }
     return .module
   }()
 
   static let hdAkari: Bundle = {
-    // in bundled app contexts, swift bundler nests compiled resources under
-    // Contents/Resources - check there before falling back to .module.
+    // a bundled app nests compiled resources under Contents/Resources, so look there before .module.
     if let bundle = akariBundle("Akari_HdAkari")
     { return bundle }
     return .module
   }()
 
   static let fonts: Bundle = {
-    // in bundled app contexts, swift bundler nests compiled resources under
-    // Contents/Resources - check there before falling back to .module.
+    // a bundled app nests compiled resources under Contents/Resources, so look there before .module.
     if let bundle = akariBundle("SwiftLabGL_LabGL")
     { return bundle }
     return .module

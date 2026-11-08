@@ -120,16 +120,26 @@ public extension Akari
       var upAxis: Int
     }
 
-    struct Kernels
+    enum Kernel: Akari.ComputeKernelName
     {
-      var clear: GLuint = 0
-      var project: GLuint = 0
-      var sphereBase: GLuint = 0
-      var sphereFilter: GLuint = 0
+      case clear, project, sphereBase, sphereFilter
 
-      var all: [GLuint]
+      static let label = "probe"
+
+      var msl: String
       {
-        [clear, project, sphereBase, sphereFilter]
+        switch self
+        {
+          case .clear: clearMSL
+          case .project: projectMSL
+          case .sphereBase: sphereBaseMSL
+          case .sphereFilter: sphereFilterMSL
+        }
+      }
+
+      var threadgroup: SIMD3<Int>
+      {
+        self == .project ? SIMD3(256, 1, 1) : SIMD3(16, 16, 1)
       }
     }
 
@@ -176,7 +186,7 @@ public extension Akari
     var layout = Layout()
     var layoutKey: LayoutKey?
 
-    var kernels = Kernels()
+    var kernels = Akari.ComputeKernels<Kernel>()
     var captureShader: GLuint = 0
     var captureTarget: GLuint = 0
     var captureDepth: GLuint = 0
@@ -213,9 +223,7 @@ public extension Akari
       release()
     }
 
-    /// Advances the bake by one frame and relights when the lights changed.
-    ///
-    /// - Returns: whether the probes can be sampled this frame.
+    /// Advances the bake by one frame and relights when the lights changed, true when the probes can be sampled.
     func update(captures: [OpaquePointer],
                 sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
                 overrides: [Override],
@@ -252,15 +260,18 @@ public extension Akari
           {
             clear(tex, width: Self.shProbesPerRow * 4, height: Self.maxVolumeProbes / Self.shProbesPerRow)
           }
+
           clear(sphereAtlas, width: Self.octTile.x * Self.octTilesPerRow,
                 height: Self.octTile.y * Self.maxSphereProbes / Self.octTilesPerRow)
         }
+
         let extent = sceneBounds.max - sceneBounds.min
         near = max((extent * extent).sum().squareRoot() * 1e-4, 1e-4)
         for tex in captureTextures
         {
           clear(tex, width: Self.atlasWidth, height: Self.atlasHeight)
         }
+
         captured = 0
         sunKey = nil
       }
@@ -280,11 +291,13 @@ public extension Akari
         sunKey = lighting.sunDirection
         lastLighting = nil
       }
+
       if lighting != lastLighting
       {
         lastLighting = lighting
         relightFrames = max(settings.bounces, 0) + 1
       }
+
       if relightFrames > 0
       {
         relight(lighting, environment: environment)
@@ -305,6 +318,7 @@ public extension Akari
         return SIMD4(Int32((view % perRow) * Self.volumeFace), Int32((view / perRow) * Self.volumeFace),
                      Int32(Self.volumeFace), Int32(Self.volumeFace))
       }
+
       let tile = view - layout.volumeCount * 6
       let perRow = Self.atlasWidth / Self.sphereFace
       return SIMD4(Int32((tile % perRow) * Self.sphereFace),
@@ -375,6 +389,7 @@ public extension Akari
         {
           dims[k] -= 1
         }
+
         layout.gridMin = lo
         layout.gridMax = hi
         layout.dims = SIMD3(Int32(dims[0]), Int32(dims[1]), Int32(dims[2]))
@@ -385,6 +400,7 @@ public extension Akari
         let center = (probe.min + probe.max) * 0.5
         return SIMD4(center, ((probe.max - probe.min) * 0.5).max())
       }
+
       layout.spheres = Array(spheres.sorted { $0.w > $1.w }.prefix(maxSphereProbes))
 
       return layout
@@ -396,14 +412,13 @@ public extension Akari
       {
         gl.deleteRenderTarget(target)
       }
+
       for var tex in captureTextures + sh + [captureDepth, sunMap, sunDepth, sphereAtlas, sphereInfo] where tex != 0
       {
         gl.deleteTextures(count: 1, textures: &tex)
       }
-      for kernel in kernels.all where kernel != 0
-      {
-        gl.deleteComputeShader(kernel)
-      }
+
+      kernels.release()
       if captureViewXf != 0 { gl.deleteBuffer(captureViewXf) }
       if captureShader != 0 { gl.deleteShader(captureShader) }
       if amplification.views != 0
@@ -411,6 +426,7 @@ public extension Akari
         var handle = amplification.views
         gl.deleteInstanceTransforms(count: 1, handles: &handle)
       }
+
       if amplification.viewports != 0
       {
         var handle = amplification.viewports
@@ -421,7 +437,6 @@ public extension Akari
       sunTarget = 0; sunDepth = 0; sunMap = 0
       sh = [0, 0]; shIndex = 0
       sphereAtlas = 0; sphereInfo = 0
-      kernels = Kernels()
       captureShader = 0
       captureViewXf = 0
       amplification = Akari.ShadowAtlas.Amplification()
@@ -440,19 +455,12 @@ public extension Akari
     {
       guard captureShader == 0, !failed else { return }
 
-      kernels.clear = gl.precompileComputeShader(name: "akari-probe-clear", glsl: "", msl: Self.clearMSL)
-      kernels.project = gl.precompileComputeShader(name: "akari-probe-project", glsl: "", msl: Self.projectMSL)
-      kernels.sphereBase = gl.precompileComputeShader(name: "akari-probe-sphere-base", glsl: "", msl: Self.sphereBaseMSL)
-      kernels.sphereFilter = gl.precompileComputeShader(name: "akari-probe-sphere-filter", glsl: "", msl: Self.sphereFilterMSL)
+      kernels = .precompile()
       captureShader = gl.precompileShader(name: "akari-probe-capture",
                                           vertexGLSL: "",
                                           fragmentGLSL: "",
                                           vertexMSL: Self.captureMSL,
                                           fragmentMSL: nil)
-      gl.setComputeShaderThreadgroupSize(kernels.clear, x: 16, y: 16, z: 1)
-      gl.setComputeShaderThreadgroupSize(kernels.project, x: 256, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(kernels.sphereBase, x: 16, y: 16, z: 1)
-      gl.setComputeShaderThreadgroupSize(kernels.sphereFilter, x: 16, y: 16, z: 1)
     }
 
     private func ensureResources() -> Bool
@@ -462,7 +470,7 @@ public extension Akari
 
       precompileShaders()
       guard
-        kernels.all.allSatisfy({ $0 != 0 && gl.waitComputeShader($0) != 0 }),
+        kernels.wait().isEmpty,
         gl.waitShader(captureShader) != 0
       else { return fail("probe shaders failed to compile") }
 
@@ -481,6 +489,7 @@ public extension Akari
       { _ in
         makeTexture(width: Self.atlasWidth, height: Self.atlasHeight, internalFormat: GLint(GL_RGBA16F))
       }
+
       captureDepth = gl.createMemorylessDepthTexture(width: GLsizei(Self.atlasWidth),
                                                      height: GLsizei(Self.atlasHeight),
                                                      layers: 1,
@@ -496,6 +505,7 @@ public extension Akari
                     height: Self.maxVolumeProbes / Self.shProbesPerRow,
                     internalFormat: GLint(GL_RGBA16F))
       }
+
       sphereAtlas = makeTexture(width: Self.octTile.x * Self.octTilesPerRow,
                                 height: Self.octTile.y * Self.maxSphereProbes / Self.octTilesPerRow,
                                 internalFormat: GLint(GL_RGBA16F))
@@ -513,6 +523,7 @@ public extension Akari
       {
         gl.renderTargetTexture(target: rt, attachment: GLenum(GL_COLOR_ATTACHMENT0) + GLenum(slot), texture: tex)
       }
+
       gl.renderTargetTexture(target: rt, attachment: GLenum(GL_DEPTH_ATTACHMENT), texture: captureDepth)
       captureTarget = rt
 
@@ -561,6 +572,7 @@ public extension Akari
         texels[i * 4 + 2] = sphere.z
         texels[i * 4 + 3] = sphere.w
       }
+
       gl.bindTexture(target: GL_TEXTURE_2D, texture: sphereInfo)
       texels.withUnsafeBytes
       { buf in
@@ -574,6 +586,7 @@ public extension Akari
                       type: GL_FLOAT,
                       pixels: buf.baseAddress)
       }
+
       gl.bindTexture(target: GL_TEXTURE_2D, texture: 0)
     }
 

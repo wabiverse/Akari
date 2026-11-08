@@ -58,6 +58,7 @@
 #include "HdAkari/textureAtlas.h"
 
 #include <string>
+#include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -102,6 +103,9 @@ void HdAkariApplyMaterialId(HdSceneDelegate *sceneDelegate, SdfPath const &mater
 
 /// Drops a material's parsed inputs after its network changes.
 void HdAkariForgetMaterial(SdfPath const &materialId);
+
+/// The rprims whose triangles last took the material keyed `materialKey`.
+std::vector<SdfPath> HdAkariMaterialUsers(std::string const &materialKey);
 
 /// Fetches the prim's raw UV primvar, remapped into its atlas cell.
 void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, HdMeshUtil &meshUtil,

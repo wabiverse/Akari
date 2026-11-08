@@ -198,6 +198,7 @@ public:
       HdContainerDataSourceHandle ds = _input->GetPrim(_members.front()).dataSource;
       return ds ? ds->Get(name) : nullptr;
     }
+
     const TfTokenVector names = GetNames();
     if (std::find(names.begin(), names.end(), name) == names.end()) return nullptr;
     std::call_once(_once, [this] { _merged = _Merge(); });
@@ -253,6 +254,7 @@ private:
         points.push_back(GfVec3f(world));
         bounds.UnionWith(world);
       }
+
       Grow(counts, memberCounts.size());
       for (int c : memberCounts) counts.push_back(c);
       Grow(indices, memberIndices.size());
@@ -267,6 +269,7 @@ private:
           if (first == ds) constants.emplace_back(name, primvars.GetContainer()->Get(name));
           continue;
         }
+
         size_t expected = memberPoints.size();
         if (interpolation == HdPrimvarSchemaTokens->faceVarying) expected = memberIndices.size();
         else if (interpolation == HdPrimvarSchemaTokens->uniform) expected = memberCounts.size();
@@ -276,11 +279,13 @@ private:
           it->second.interpolation = interpolation;
           it->second.role = TypedValue<TfToken>(primvar.GetRole());
         }
+
         Varying &v = it->second;
         v.ok = v.ok && v.interpolation == interpolation &&
                AppendAny(Value(primvar.GetFlattenedPrimvarValue()), expected, v.merged);
       }
     }
+
     if (!first) return nullptr;
 
     std::vector<TfToken> names = {HdTokens->points};
@@ -300,6 +305,7 @@ private:
                          .SetRole(HdPrimvarSchema::BuildRoleDataSource(v.role))
                          .Build());
     }
+
     for (auto const &[name, value] : constants) {
       if (std::find(names.begin(), names.end(), name) != names.end()) continue;
       names.push_back(name);
@@ -354,6 +360,7 @@ SdfPath PrototypeRootOf(SdfPath const &path, HdContainerDataSourceHandle const &
   for (SdfPath const &root : instancedBy.GetPrototypeRoots()->GetTypedValue(0.0f)) {
     if (path.HasPrefix(root)) return root;
   }
+
   return SdfPath();
 }
 
@@ -395,6 +402,7 @@ uint64_t MergeKey(HdContainerDataSourceHandle const &ds)
     key = Mix(Mix(key, name.Hash()), interpolation.Hash());
     if (interpolation == HdPrimvarSchemaTokens->constant) key = Mix(key, Value(primvar.GetPrimvarValue()).GetHash());
   }
+
   return key ? key : 1;
 }
 
@@ -428,6 +436,7 @@ HdAkariPrototypeMergingSceneIndex::_GetRoot(SdfPath const &rootPath) const
     const auto building = _building.find(rootPath);
     if (building != _building.end()) pending = building->second;
   }
+
   if (pending.valid()) return pending.get();
   if (!_IsRoot(rootPath)) return nullptr;
   std::promise<std::shared_ptr<Root>> promise;
@@ -439,6 +448,7 @@ HdAkariPrototypeMergingSceneIndex::_GetRoot(SdfPath const &rootPath) const
     if (building != _building.end()) pending = building->second;
     else _building.emplace(rootPath, promise.get_future().share());
   }
+
   if (pending.valid()) return pending.get();
 
   HdSceneIndexBaseRefPtr const &input = _GetInputSceneIndex();
@@ -457,6 +467,7 @@ HdAkariPrototypeMergingSceneIndex::_GetRoot(SdfPath const &rootPath) const
     SdfPathVector children = input->GetChildPrimPaths(path);
     stack.insert(stack.end(), children.rbegin(), children.rend());
   }
+
   std::vector<std::pair<uint64_t, size_t>> keys(meshes.size());
   WorkWithScopedParallelism([&]() {
     WorkParallelForN(meshes.size(), [&](size_t begin, size_t end) {
@@ -480,6 +491,7 @@ HdAkariPrototypeMergingSceneIndex::_GetRoot(SdfPath const &rootPath) const
       slot = open.insert_or_assign(key, root->groups.size()).first;
       root->groups.push_back(group);
     }
+
     Group &group = *root->groups[slot->second];
     group.members.push_back(path);
     group.faces += faces;
@@ -489,6 +501,7 @@ HdAkariPrototypeMergingSceneIndex::_GetRoot(SdfPath const &rootPath) const
   for (auto &group : root->groups) {
     if (group->members.size() == 1) root->memberGroup.erase(group->members.front());
   }
+
   root->groups.erase(std::remove_if(root->groups.begin(), root->groups.end(),
                                     [](auto const &group) { return group->members.size() < 2; }),
                      root->groups.end());
@@ -514,6 +527,7 @@ HdAkariPrototypeMergingSceneIndex::_FindBuiltRoot(SdfPath const &path) const
     const auto found = _roots.find(p);
     if (found != _roots.end()) return found->second;
   }
+
   return nullptr;
 }
 
@@ -527,6 +541,7 @@ HdSceneIndexPrim HdAkariPrototypeMergingSceneIndex::GetPrim(SdfPath const &primP
         return {HdPrimTypeTokens->mesh, group->data};
       }
     }
+
     return {};
   }
 
@@ -546,6 +561,7 @@ SdfPathVector HdAkariPrototypeMergingSceneIndex::GetChildPrimPaths(SdfPath const
   if (std::shared_ptr<Root> root = _GetRoot(primPath)) {
     for (auto const &group : root->groups) children.push_back(group->path);
   }
+
   return children;
 }
 
@@ -563,6 +579,7 @@ void HdAkariPrototypeMergingSceneIndex::_Rebuild(std::vector<SdfPath> const &roo
       _roots.erase(found);
     }
   }
+
   WorkParallelForN(rootPaths.size(), [&](size_t begin, size_t end) {
     for (size_t i = begin; i < end; ++i) {
       WorkWithScopedParallelism([&]() { roots[i] = _GetRoot(rootPaths[i]); });
@@ -577,12 +594,15 @@ void HdAkariPrototypeMergingSceneIndex::_Rebuild(std::vector<SdfPath> const &roo
         kept.insert(group->path);
         added->emplace_back(group->path, HdPrimTypeTokens->mesh);
       }
+
       for (auto const &[member, group] : root->memberGroup) added->emplace_back(member, TfToken());
     }
+
     if (old) {
       for (auto const &group : old->groups) {
         if (!kept.count(group->path)) removed->emplace_back(group->path);
       }
+
       for (auto const &[member, group] : old->memberGroup) {
         if (!root || !root->memberGroup.count(member)) added->emplace_back(member, HdPrimTypeTokens->mesh);
       }
@@ -602,8 +622,10 @@ void HdAkariPrototypeMergingSceneIndex::_PrimsAdded(HdSceneIndexBase const &,
     } else if (entry.primType == HdPrimTypeTokens->mesh) {
       rootPath = PrototypeRootOf(entry.primPath, _GetInputSceneIndex()->GetPrim(entry.primPath).dataSource);
     }
+
     if (!rootPath.IsEmpty() && seen.insert(rootPath).second) stale.push_back(rootPath);
   }
+
   HdSceneIndexObserver::AddedPrimEntries rebuilt;
   HdSceneIndexObserver::RemovedPrimEntries removed;
   _Rebuild(stale, &rebuilt, &removed);
@@ -616,6 +638,7 @@ void HdAkariPrototypeMergingSceneIndex::_PrimsAdded(HdSceneIndexBase const &,
   for (auto const &entry : entries) {
     if (!retyped.count(entry.primPath)) added.push_back(entry);
   }
+
   added.insert(added.end(), rebuilt.begin(), rebuilt.end());
   if (!removed.empty()) _SendPrimsRemoved(removed);
   _SendPrimsAdded(added);
@@ -634,9 +657,11 @@ void HdAkariPrototypeMergingSceneIndex::_PrimsRemoved(HdSceneIndexBase const &,
       }
     }
   }
+
   for (auto const &entry : entries) {
     if (std::shared_ptr<Root> root = _FindBuiltRoot(entry.primPath)) stale.push_back(root->path);
   }
+
   _SendPrimsRemoved(entries);
   if (stale.empty()) return;
   std::sort(stale.begin(), stale.end());
@@ -665,17 +690,21 @@ void HdAkariPrototypeMergingSceneIndex::_PrimsDirtied(HdSceneIndexBase const &,
       dirtied.push_back(entry);
       continue;
     }
+
     if (entry.dirtyLocators.Intersects(structural)) {
       stale.push_back(root->path);
       continue;
     }
+
     std::shared_ptr<Group> group = root->groups[root->memberGroup.at(entry.primPath)];
     {
       std::lock_guard<std::mutex> lock(_mutex);
       group->data = MergedDataSource::New(_GetInputSceneIndex(), group->members);
     }
+
     dirtied.emplace_back(group->path, geometry);
   }
+
   if (!dirtied.empty()) _SendPrimsDirtied(dirtied);
   if (stale.empty()) return;
   std::sort(stale.begin(), stale.end());

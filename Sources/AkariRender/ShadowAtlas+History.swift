@@ -51,9 +51,10 @@ extension Akari.ShadowAtlas
     /// Long enough to bridge a slow slider drag's gaps between steps.
     static let holdDuration = 45
     /// Frames the fine levels stay forced after the bias drops.
-    static let settleDuration = 3
+    static let settleDuration = 5
 
-    private var lastDirection: SIMD3<Float>?
+    public private(set) var smoothDirection: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
+
     private var movingFrames = 0
     private var settleFrames = 0
 
@@ -65,14 +66,23 @@ extension Akari.ShadowAtlas
     /// Returns true when the directional pages must be redrawn this frame.
     mutating func advance(to direction: SIMD3<Float>) -> Bool
     {
-      let stepped = direction != lastDirection
+      let blendFactor: Float = 0.08
+      let continuousGlide = simd_mix(smoothDirection, direction, SIMD3<Float>(repeating: blendFactor))
+      
+      let nextSmooth = Akari.ShadowAtlas.quantize(Akari.Math.normalize(continuousGlide))
+      
+      let stepped = nextSmooth != smoothDirection
+      
       let biasDropping = !stepped && movingFrames == 1
       if stepped { movingFrames = Self.holdDuration; settleFrames = 0 }
       else if movingFrames > 0 { movingFrames -= 1 }
       else if settleFrames > 0 { settleFrames -= 1 }
+      
       let changed = stepped || biasDropping || settleFrames > 0
       if biasDropping { settleFrames = Self.settleDuration }
-      lastDirection = direction
+      
+      smoothDirection = nextSmooth
+      
       return changed
     }
   }
@@ -111,6 +121,7 @@ extension Akari.ShadowAtlas
             {
               freeSlotOffsets.append(slotForLevel.removeValue(forKey: staleLevel)!)
             }
+
             let offset = freeSlotOffsets.popLast() ?? 0
             slotForLevel[cascade.absoluteLevel] = offset
             return offset
@@ -132,15 +143,18 @@ extension Akari.ShadowAtlas
         {
           isDirty = true
         }
+
         if let previousLevel = lastLevel[offset], previousLevel != cascade.absoluteLevel
         {
           isDirty = true
         }
+
         let depth = SIMD3<Float>(cascade.view.transform(.zero).z, cascade.zScale, cascade.zBias)
         if let previousDepth = lastDepth[offset], previousDepth != depth
         {
           isDirty = true
         }
+
         lastDepth[offset] = depth
         if let last = lastGridOffset[offset]
         {
@@ -182,6 +196,7 @@ extension Akari.ShadowAtlas
           {
             pendingDirty |= (1 << Int32(slot))
           }
+
           lastFingerprint[slot] = key
         }
       }
@@ -200,6 +215,8 @@ extension Akari.ShadowAtlas
     var isCurrent = false
     var castersMoved = false
     var redraw = CasterRedraw.none
+    /// Moved static caster boxes, uploaded to `Frame.movedStaticBoxes`, whose tiles redraw.
+    var staticRedraw = 0
   }
 
   /// What a scene change left stale in the shadow pages.
@@ -217,48 +234,71 @@ extension Akari.ShadowAtlas
   }
 
   /// Finds the casters that moved or changed between scene revisions.
+  /// A batch's caster boxes, six floats each, and their keys, read in place from the batch.
+  public typealias Casters = (bounds: [Float], keys: [UInt64])
+
+  /// Finds the casters that moved or changed between scene revisions.
   struct CasterMotion
   {
-    private struct Caster: Hashable
+    /// Each caster's hash of its box and key, sorted, with where it sits across `parts`.
+    private var previous: (hashes: [UInt64], order: [Int32], parts: [Casters])?
+
+    private static func sorted(_ parts: [Casters]) -> (hashes: [UInt64], order: [Int32])
     {
-      var min: SIMD3<Float>
-      var max: SIMD3<Float>
-      var key: UInt64
+      var hashes: [UInt64] = []
+      hashes.reserveCapacity(parts.reduce(0) { $0 + min($1.keys.count, $1.bounds.count / 6) })
+      for part in parts
+      {
+        part.bounds.withUnsafeBufferPointer
+        { b in
+          for i in 0 ..< min(part.keys.count, b.count / 6)
+          {
+            var h: UInt64 = 14_695_981_039_346_656_037 ^ part.keys[i]
+            for k in 0 ..< 6 { h = (h ^ UInt64(b[i * 6 + k].bitPattern)) &* 1_099_511_628_211 }
+            hashes.append(h ^ (h >> 29))
+          }
+        }
+      }
+
+      let order = (0 ..< Int32(hashes.count)).sorted { hashes[Int($0)] < hashes[Int($1)] }
+      return (order.map { hashes[Int($0)] }, order)
     }
 
-    private var previous: [Caster: Int]?
+    private static func box(_ parts: [Casters], _ index: Int32) -> ArraySlice<Float>
+    {
+      var i = Int(index)
+      for part in parts
+      {
+        let count = min(part.keys.count, part.bounds.count / 6)
+        if i < count { return part.bounds[i * 6 ..< i * 6 + 6] }
+        i -= count
+      }
+
+      return []
+    }
 
     /// Old and new boxes of every changed caster, six floats each, merged down
     /// to `limit` boxes past it. nil on the first frame, when every shadow has
     /// to redraw.
-    mutating func movedBoxes(bounds: [Float], keys: [UInt64], limit: Int) -> [Float]?
+    mutating func movedBoxes(_ parts: [Casters], limit: Int) -> [Float]?
     {
-      var next: [Caster: Int] = [:]
-      next.reserveCapacity(keys.count)
-      for i in 0 ..< min(keys.count, bounds.count / 6)
-      {
-        let o = i * 6
-        let caster = Caster(min: SIMD3(bounds[o], bounds[o + 1], bounds[o + 2]),
-                            max: SIMD3(bounds[o + 3], bounds[o + 4], bounds[o + 5]),
-                            key: keys[i])
-        next[caster, default: 0] += 1
-      }
-      defer { self.previous = next }
+      let next = Self.sorted(parts)
+      defer { previous = (next.hashes, next.order, parts) }
       guard let previous else { return nil }
 
       var moved: [Float] = []
-      func add(_ c: Caster)
+      var i = 0, j = 0
+      let a = next.hashes, b = previous.hashes
+      while i < a.count || j < b.count
       {
-        moved += [c.min.x, c.min.y, c.min.z, c.max.x, c.max.y, c.max.z]
+        let h = i < a.count && (j >= b.count || a[i] <= b[j]) ? a[i] : b[j]
+        let firstNew = i, firstOld = j
+        while i < a.count, a[i] == h { i += 1 }
+        while j < b.count, b[j] == h { j += 1 }
+        guard i - firstNew != j - firstOld else { continue }
+        moved += i > firstNew ? Self.box(parts, next.order[firstNew]) : Self.box(previous.parts, previous.order[firstOld])
       }
-      for (caster, count) in next where previous[caster] != count
-      {
-        add(caster)
-      }
-      for (caster, _) in previous where next[caster] == nil
-      {
-        add(caster)
-      }
+
       return moved.count / 6 > limit ? Self.merge(moved, into: limit) : moved
     }
 
@@ -280,6 +320,7 @@ extension Akari.ShadowAtlas
         lo = pointwiseMin(lo, box(i).min)
         hi = pointwiseMax(hi, box(i).max)
       }
+
       let scale = 1023 / pointwiseMax(hi - lo, SIMD3(repeating: 1e-6))
 
       func spread(_ v: UInt32) -> UInt32
@@ -291,11 +332,13 @@ extension Akari.ShadowAtlas
         x = (x | (x << 2)) & 0x0924_9249
         return x
       }
+
       let keys = (0 ..< count).map
       { i in
         let q = (((box(i).min + box(i).max) * 0.5 - lo) * scale).rounded(.down)
         return spread(UInt32(q.x)) | (spread(UInt32(q.y)) << 1) | (spread(UInt32(q.z)) << 2)
       }
+
       let order = (0 ..< count).sorted { keys[$0] < keys[$1] }
 
       var merged: [Float] = []
@@ -311,8 +354,10 @@ extension Akari.ShadowAtlas
           groupMin = pointwiseMin(groupMin, box(i).min)
           groupMax = pointwiseMax(groupMax, box(i).max)
         }
+
         merged += [groupMin.x, groupMin.y, groupMin.z, groupMax.x, groupMax.y, groupMax.z]
       }
+
       return merged
     }
   }

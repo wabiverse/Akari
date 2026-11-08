@@ -39,6 +39,7 @@
  * ----------------------------------------------------------------- */
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
+# include <Tf/staticTokens.h>
 # include <Hd/changeTracker.h>
 # include <Hd/repr.h>
 # include <Hd/sceneDelegate.h>
@@ -46,6 +47,7 @@
 # include <Vt/value.h>
 #else
 # include <pxr/pxr.h>
+# include <pxr/base/tf/staticTokens.h>
 # include <pxr/imaging/hd/changeTracker.h>
 # include <pxr/imaging/hd/repr.h>
 # include <pxr/imaging/hd/sceneDelegate.h>
@@ -60,6 +62,14 @@
 #include <algorithm>
 
 PXR_NAMESPACE_OPEN_SCOPE
+
+TF_DEFINE_PRIVATE_TOKENS(_tokens,
+  (density)
+  ((volumeAlbedo, "akari:volume:albedo"))
+  ((volumeAnisotropy, "akari:volume:anisotropy"))
+  ((volumeDensityScale, "akari:volume:densityScale"))
+  ((volumeMaxResolution, "akari:volume:maxResolution"))
+);
 
 namespace {
 
@@ -79,12 +89,13 @@ bool First(VtValue const &value, T &out)
     out = values[0];
     return true;
   }
+
   return false;
 }
 
-void ReadFloat(HdSceneDelegate *sceneDelegate, SdfPath const &id, char const *name, float &out)
+void ReadFloat(HdSceneDelegate *sceneDelegate, SdfPath const &id, TfToken const &name, float &out)
 {
-  const VtValue value = sceneDelegate->Get(id, TfToken(name));
+  const VtValue value = sceneDelegate->Get(id, name);
   double d = 0.0;
   int i = 0;
   if (First(value, out)) return;
@@ -145,15 +156,16 @@ HdAkariVolume::Sync(HdSceneDelegate *sceneDelegate,
   data.transform = sceneDelegate->GetTransform(id);
   data.visible = sceneDelegate->GetVisible(id);
   for (HdVolumeFieldDescriptor const &field : sceneDelegate->GetVolumeFieldDescriptors(id)) {
-    if (data.densityField.IsEmpty() || field.fieldName == TfToken("density")) {
+    if (data.densityField.IsEmpty() || field.fieldName == _tokens->density) {
       data.densityField = field.fieldId;
       data.densityName = field.fieldName.GetString();
     }
   }
-  ReadFloat(sceneDelegate, id, "akari:volume:densityScale", data.densityScale);
-  ReadFloat(sceneDelegate, id, "akari:volume:anisotropy", data.anisotropy);
-  ReadFloat(sceneDelegate, id, "akari:volume:maxResolution", data.maxResolution);
-  const VtValue albedo = sceneDelegate->Get(id, TfToken("akari:volume:albedo"));
+
+  ReadFloat(sceneDelegate, id, _tokens->volumeDensityScale, data.densityScale);
+  ReadFloat(sceneDelegate, id, _tokens->volumeAnisotropy, data.anisotropy);
+  ReadFloat(sceneDelegate, id, _tokens->volumeMaxResolution, data.maxResolution);
+  const VtValue albedo = sceneDelegate->Get(id, _tokens->volumeAlbedo);
   GfVec3f c;
   if (First(albedo, c)) { data.albedoR = c[0]; data.albedoG = c[1]; data.albedoB = c[2]; }
 
@@ -198,6 +210,7 @@ HdAkariField::Sync(HdSceneDelegate *sceneDelegate,
     SdfAssetPath const &asset = path.UncheckedGet<SdfAssetPath>();
     data.filePath = asset.GetResolvedPath().empty() ? asset.GetAssetPath() : asset.GetResolvedPath();
   }
+
   const VtValue name = sceneDelegate->Get(id, HdFieldTokens->fieldName);
   if (name.IsHolding<TfToken>()) data.fieldName = name.UncheckedGet<TfToken>().GetString();
   else if (name.IsHolding<std::string>()) data.fieldName = name.UncheckedGet<std::string>();

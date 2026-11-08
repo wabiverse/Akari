@@ -86,6 +86,9 @@ extension Akari.ShadowAtlas
     }
     """
 
+  /// Tiles a sun's penumbra reaches past the tiles it falls on, so pages stand ready around them.
+  static let penumbraTiles = 2
+
   static let dilateUsageDirectionalGLSL = """
     #version 430
     layout(local_size_x = \(tilemapRes), local_size_y = \(tilemapRes), local_size_z = 1) in;
@@ -100,8 +103,8 @@ extension Akari.ShadowAtlas
       used_local[local] = packed & 0x80000000u;
       barrier();
       if (used_local[local] != 0u) return;
-      for (int dy = -1; dy <= 1; ++dy)
-      for (int dx = -1; dx <= 1; ++dx)
+      for (int dy = -\(penumbraTiles); dy <= \(penumbraTiles); ++dy)
+      for (int dx = -\(penumbraTiles); dx <= \(penumbraTiles); ++dx)
       {
         ivec2 n = co + ivec2(dx, dy);
         if (any(lessThan(n, ivec2(0))) || any(greaterThanEqual(n, ivec2(\(tilemapRes))))) continue;
@@ -129,8 +132,8 @@ extension Akari.ShadowAtlas
       used_local[local] = packed & 0x80000000u;
       threadgroup_barrier(mem_flags::mem_threadgroup);
       if (used_local[local] != 0u) return;
-      for (int dy = -1; dy <= 1; ++dy)
-      for (int dx = -1; dx <= 1; ++dx)
+      for (int dy = -\(penumbraTiles); dy <= \(penumbraTiles); ++dy)
+      for (int dx = -\(penumbraTiles); dx <= \(penumbraTiles); ++dx)
       {
         int2 n = co + int2(dx, dy);
         if (any(n < int2(0)) || any(n >= int2(\(tilemapRes)))) continue;
@@ -323,8 +326,8 @@ extension Akari.ShadowAtlas
     layout(std430, binding = 0) buffer Tiles { uint tiles_buf[]; };
     layout(binding = 0) uniform sampler2D u_position;
     uniform mat4 u_invView;
-    \(punctualUniforms("u_lightPosRadius"))
-    \(punctualUniforms("u_lightLodBias"))
+    \(punctualUniforms(.lightPosRadius))
+    \(punctualUniforms(.lightLodBias))
     uniform vec4 u_params;
     \(tagUsagePunctualCommon)
     void akpTag(vec3 worldPos, float distToCamera, int lightIdx, vec4 posRadius, float lodBias)
@@ -577,8 +580,8 @@ extension Akari.ShadowAtlas
     uniform mat4 u_eyeToLightRotation;
     uniform mat4 u_invProj;
     uniform vec4 u_directionalRefOffset;
-    \(punctualUniforms("u_lightPosRadius"))
-    \(punctualUniforms("u_lightLodBias"))
+    \(punctualUniforms(.lightPosRadius))
+    \(punctualUniforms(.lightLodBias))
     uniform vec4 u_volume;
     uniform vec4 u_params;
     uniform vec4 u_lodRange;

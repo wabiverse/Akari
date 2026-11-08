@@ -66,7 +66,7 @@ public extension Akari
 
     private var anchor: (timeCode: Double, uptime: Double, epoch: Int)?
     private var audible = false
-    private let soundtrack: Soundtrack?
+    private var soundtrack: Soundtrack?
 
     public init(hydra: Hydra.RenderEngine, akari: Akari.RenderEngine)
     {
@@ -82,6 +82,31 @@ public extension Akari
                                                    mediaOffset: info.soundtrackMediaOffset,
                                                    gain: info.soundtrackGain,
                                                    timeCodesPerSecond: timeCodesPerSecond)
+    }
+
+    /// Takes the range, rate and soundtrack of the stage the viewport shows now, on the frame queue.
+    public func adoptStage()
+    {
+      guard let hydra else { return }
+      let info = Pixar.HdAkariInspectStage(hydra.stage)
+      let timeCodesPerSecond = info.timeCodesPerSecond > 0 ? info.timeCodesPerSecond : 24
+      silence()
+      anchor = nil
+      let path = String(info.soundtrack)
+      soundtrack = path.isEmpty ? nil : Soundtrack(url: URL(fileURLWithPath: path),
+                                                   startTimeCode: info.soundtrackStartTimeCode,
+                                                   mediaOffset: info.soundtrackMediaOffset,
+                                                   gain: info.soundtrackGain,
+                                                   timeCodesPerSecond: timeCodesPerSecond)
+      lock.withLock
+      {
+        direction = 0
+        _range = info.startTimeCode ... max(info.endTimeCode, info.startTimeCode)
+        _frameRate = timeCodesPerSecond
+        epoch += 1
+      }
+
+      hydra.currentTimeCode = info.startTimeCode
     }
 
     public var isPlaying: Bool
@@ -193,6 +218,7 @@ public extension Akari
         {
           try? await Task.sleep(for: .milliseconds(20))
         }
+
         let seen = akari.viewportFrames + 3
         while akari.viewportFrames < seen, ProcessInfo.processInfo.systemUptime < deadline
         {
@@ -203,6 +229,7 @@ public extension Akari
           try? await Task.sleep(for: .milliseconds(100))
         }
       }
+
       seek(to: home)
     }
 
@@ -215,6 +242,7 @@ public extension Akari
         defer { pendingSeek = nil }
         return (self.direction, _range, _frameRate, _muted, pendingSeek, self.epoch)
       }
+
       if let seek { hydra.currentTimeCode = seek }
       akari?.labfx.isPlaying = direction != 0
 
@@ -233,6 +261,7 @@ public extension Akari
         if start < range.lowerBound || start >= range.upperBound + 1 { start = direction > 0 ? range.lowerBound : range.upperBound }
         restart(at: start, now: now, epoch: epoch, forward: direction > 0, rate: rate, muted: muted)
       }
+
       guard let anchor else { return }
 
       var t = anchor.timeCode + direction * (now - anchor.uptime) * rate
@@ -246,6 +275,7 @@ public extension Akari
         t = range.upperBound - (range.lowerBound - t).truncatingRemainder(dividingBy: range.upperBound + 1 - range.lowerBound)
         restart(at: t, now: now, epoch: epoch, forward: false, rate: rate, muted: muted)
       }
+
       hydra.currentTimeCode = min(t, range.upperBound)
     }
 
@@ -353,6 +383,7 @@ public extension Akari
         engine.connect(varispeed, to: engine.mainMixerNode, format: format)
         self.engine = engine
       }
+
       return (try? engine.start()) != nil
     }
 
@@ -373,6 +404,7 @@ public extension Akari
         target[channel].update(from: source[channel] + offset, count: length)
         if pcm.format.isInterleaved { break }
       }
+
       return tail
     }
   }

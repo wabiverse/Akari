@@ -95,6 +95,7 @@ extension Akari.LabFXEngine
         lab.fx.free(graph)
         self.graph = nil
       }
+
       if shader != 0
       {
         gl.deleteShader(shader)
@@ -114,18 +115,21 @@ extension Akari.LabFXEngine
         print("[akari/fireflies] Fireflies.labfx missing from bundle")
         return false
       }
+
       guard let parsed = lab.fx.parse(source, length: source.utf8.count)
       else
       {
         print("[akari/fireflies] labfx parse failed")
         return false
       }
+
       guard runtime.pointee.build(parsed, rootWidth: 1, rootHeight: 1)
       else
       {
         print("[akari/fireflies] runtime build failed")
         return false
       }
+
       graph = parsed
 
       runtime.pointee.setPassCallback("simulate", callback: akariFireflySimulateCallback,
@@ -179,6 +183,7 @@ extension Akari.LabFXEngine
         gl.vertex(x: p.x + s, y: p.y - s, z: Float(0))
         gl.vertex(x: p.x + s, y: p.y + s, z: Float(0))
       }
+
       gl.end()
       gl.useShader(0)
     }

@@ -147,6 +147,16 @@ public:
   /// for either animated over time. Null leaves that one as is. False when there's nothing to do.
   bool UpdateConstants(std::string const &materialKey, GfVec3f const *emissive, float const *opacity);
 
+  /// Rewrites an untextured material's row in place, false when it has none.
+  bool UpdateConstantMaterial(std::string const &materialKey, GfVec3f const &color, float opacity, float roughness,
+                              float metallic, float opacityThreshold, GfVec3f const &emissive);
+
+  /// An untextured material's row, false when it has none.
+  bool GetConstants(std::string const &materialKey, float *out);
+
+  /// Drops a material's cell, so its next use bakes it again.
+  void ForgetCell(std::string const &materialKey);
+
   /// Marks an untextured material's row with the Ptex map its color streams from, one past its id.
   void SetConstantsPtexMap(std::string const &materialKey, int map);
 
@@ -211,6 +221,7 @@ public:
     std::lock_guard<std::mutex> lock(_mutex);
     return _pixels.empty() ? nullptr : _pixels.data();
   }
+
   int Width() const { return _gridSize * _cellPixels; }
   int Height() const { return _gridSize * _cellPixels; }
 

@@ -108,11 +108,12 @@ extension Akari.LightProbes
     vertex VertOut vert_instanced_main(VertIn in [[stage_in]],
                                        constant float4x4* instanceXf [[buffer(1)]],
                                        constant LabGLBuiltins& B [[buffer(3)]],
+                                       device const uint* instanceIndex [[buffer(10)]],
                                        uint instance [[instance_id]],
                                                  uint base [[base_instance]])
     {
       VertOut out;
-      float4x4 world = instanceXf[instance - base];
+      float4x4 world = instanceXf[instanceIndex[instance - base]];
       out.position = B.u_modelviewProjection * (world * in.a_position);
       out.normal = (probe_normal_matrix(world) * in.a_normal);
       out.uv = in.a_texcoord;
@@ -133,12 +134,13 @@ extension Akari.LightProbes
     vertex VertOut vert_amplified_instanced_main(VertIn in [[stage_in]],
                                                  constant float4x4* instanceXf [[buffer(1)]],
                                                  const device float4x4* viewsXf [[buffer(4)]],
+                                                 device const uint* instanceIndex [[buffer(10)]],
                                                  ushort ampId [[amplification_id]],
                                                  uint instance [[instance_id]],
                                                  uint base [[base_instance]])
     {
       VertOut out;
-      float4x4 world = instanceXf[instance - base];
+      float4x4 world = instanceXf[instanceIndex[instance - base]];
       out.position = viewsXf[ampId] * (world * in.a_position);
       out.normal = (probe_normal_matrix(world) * in.a_normal);
       out.uv = in.a_texcoord;

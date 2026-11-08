@@ -70,11 +70,13 @@ struct Bins
     VtValue array;
     uint64_t used;
   };
+
   struct Bin
   {
     std::mutex mutex;
     std::unordered_multimap<uint64_t, Entry> entries;
   };
+
   std::array<Bin, 64> bins;
   std::atomic<uint64_t> pass{0};
   /// Only a pass that synced something ages the bins, an idle frame doesn't.
@@ -98,6 +100,7 @@ struct Bins
       it->second.used = pass.load(std::memory_order_relaxed);
       return held;
     }
+
     bin.entries.emplace(hash, Entry{VtValue(array), pass.load(std::memory_order_relaxed)});
     return array;
   }
@@ -112,6 +115,7 @@ struct Bins
         it = it->second.used + keep < now ? bin.entries.erase(it) : std::next(it);
       }
     }
+
     return true;
   }
 };
@@ -161,6 +165,7 @@ void HdAkariTriangulate(HdMeshTopology const &topology, HdMeshUtil &meshUtil, Vt
       return;
     }
   }
+
   meshUtil.ComputeTriangleIndices(triangles, params);
   std::lock_guard<std::mutex> lock(triangulationMutex);
   triangulations.emplace(key, Triangulation{*triangles, *params, now});

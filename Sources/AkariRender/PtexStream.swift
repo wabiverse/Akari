@@ -144,7 +144,7 @@ extension Akari
     private var table: GLuint = 0
     private var tableBuffer: GLuint = 0
     private var placeholder: GLuint = 0
-    private var kernels: (table: GLuint, copy: GLuint, hash: GLuint, clear: GLuint, gather: GLuint) = (0, 0, 0, 0, 0)
+    private var kernels = Akari.ComputeKernels<Kernel>()
     private var staging: [GLuint] = []
     private var copies: [GLuint] = []
     private var updates: [GLuint] = []
@@ -167,20 +167,21 @@ extension Akari
     func update(keys: (GLuint, GLuint), width: Int, height: Int)
       -> (table: GLuint, atlas: GLuint, hash: GLuint, params: SIMD4<Int32>)
     {
-      if kernels.copy == 0 { compileKernels() }
-      guard faces.count > 1, kernels.copy != 0, atlas != 0 || allocate()
+      if kernels.isEmpty { kernels = .precompile() }
+      guard faces.count > 1, kernels[.copy].isBuilt, atlas != 0 || allocate()
       else
       {
         if placeholder == 0 { placeholder = gl.createTextureArray(width: 4, height: 1, layers: 1, format: GLenum(GL_R32UI)) }
         return (placeholder, placeholder, placeholder, .zero)
       }
+
       frame += 1
       stale = nil
       if tableRevision != faces.revision { uploadTable() }
       readRequests()
       let r = Int(frame) % Self.ring
       let placed = takeTiles(into: r)
-      if placed > 0 { dispatch(kernels.copy, count: placed, buffers: [copies[r], staging[r]], image: atlas, groups: placed) }
+      if placed > 0 { dispatch(kernels[.copy], count: placed, buffers: [copies[r], staging[r]], image: atlas, groups: placed) }
       if !dirty.isEmpty { dispatchHashUpdates(into: r) }
       if keys.0 != 0, keys.1 != 0 { gather(keys, width: width, height: height) }
       return (table, atlas, hash, SIMD4(Int32(bitPattern: mask), Int32(probes), 0, 1))
@@ -207,9 +208,9 @@ extension Akari
       updateCapacity = [Int](repeating: Self.maxUpdates, count: Self.ring)
       readback = gl.createComputeReadback(sizeBytes: GLsizei(Self.maxSamples * 8), ringSize: 3)
       // the hash table starts empty, a texture starts as whatever its memory held.
-      setParams(kernels.clear, SIMD4(4096, Int32(entries / 1024), 0, 0))
-      gl.setComputeShaderImage(kernels.clear, index: 0, texture: hash, format: GLenum(GL_R32UI), layered: GLboolean(1), level: 0)
-      gl.dispatchCompute(kernels.clear, groupsX: 4096 / 16, groupsY: GLuint(entries / 1024 / 16), groupsZ: 1)
+      kernels[.clear].set(.params, SIMD4<Int32>(4096, Int32(entries / 1024), 0, 0))
+      kernels[.clear].layeredImage(hash, at: 0, format: GLenum(GL_R32UI))
+      kernels[.clear].dispatch(4096 / 16, entries / 1024 / 16)
       return true
     }
 
@@ -232,9 +233,10 @@ extension Akari
         gl.mapBuffer(buffer)?.copyMemory(from: bytes.baseAddress!, byteCount: bytes.count)
         return buffer
       }
+
       if table != 0, tableBuffer != 0
       {
-        dispatch(kernels.table, count: entries.count, buffers: [tableBuffer], image: table, groups: (entries.count + 63) / 64)
+        dispatch(kernels[.table], count: entries.count, buffers: [tableBuffer], image: table, groups: (entries.count + 63) / 64)
       }
     }
 
@@ -258,6 +260,7 @@ extension Akari
           wanted.insert(key)
         }
       }
+
       quiet = wanted.isEmpty ? quiet + 1 : 0
       let keys = Array(wanted)
       keys.withUnsafeBufferPointer { Pixar.HdAkariPtexRequestTiles($0.baseAddress, Int32($0.count)) }
@@ -280,6 +283,7 @@ extension Akari
         commands[placed] = SIMD4(offsets[i], origin(slot), UInt32(width + 2) | UInt32(height + 2) << 16, 0)
         placed += 1
       }
+
       gl.unmapBuffer(copies[r])
       return placed
     }
@@ -294,6 +298,7 @@ extension Akari
         updates[r] = gl.createBuffer(usage: GLuint(LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_MAP_WRITE),
                                      sizeBytes: GLsizei(updateCapacity[r] * 16))
       }
+
       guard let out = gl.mapBuffer(updates[r])?.assumingMemoryBound(to: SIMD4<UInt32>.self) else { return }
       var count = 0
       for index in dirty
@@ -301,9 +306,10 @@ extension Akari
         out[count] = SIMD4(UInt32(index), hashA[index], hashB[index], hashSlot[index])
         count += 1
       }
+
       gl.unmapBuffer(updates[r])
       dirty.removeAll(keepingCapacity: true)
-      dispatch(kernels.hash, count: count, buffers: [updates[r]], image: hash, groups: (count + 63) / 64)
+      dispatch(kernels[.hash], count: count, buffers: [updates[r]], image: hash, groups: (count + 63) / 64)
     }
 
     /// A pixel in `stride` each way, a different one each frame.
@@ -312,31 +318,21 @@ extension Akari
       stride = max(4, Int((Double(width * height) / Double(Self.maxSamples)).squareRoot().rounded(.up)))
       let columns = (width + stride - 1) / stride, rows = (height + stride - 1) / stride
       let step = Int(frame) % (stride * stride)
-      setParams(kernels.gather, SIMD4(Int32(stride), Int32(step % stride | (step / stride) << 8), Int32(columns), Int32(rows)))
-      gl.setComputeShaderSampler(kernels.gather, index: 0, texture: keys.0, samplerIndex: 0)
-      gl.setComputeShaderSampler(kernels.gather, index: 1, texture: keys.1, samplerIndex: 0)
-      gl.setComputeShaderBuffer(kernels.gather, binding: 0, buffer: gl.computeReadbackCurrentBuffer(readback))
-      gl.setComputeShaderReadback(kernels.gather, bindingIndex: 0, readback: readback)
-      gl.dispatchCompute(kernels.gather, groupsX: GLuint(Self.maxSamples / 64), groupsY: 1, groupsZ: 1)
+      kernels[.gather].set(.params, SIMD4(Int32(stride), Int32(step % stride | (step / stride) << 8), Int32(columns), Int32(rows)))
+      kernels[.gather].sample(keys.0, at: 0)
+      kernels[.gather].sample(keys.1, at: 1)
+      kernels[.gather].bind(gl.computeReadbackCurrentBuffer(readback))
+      kernels[.gather].readback(readback, at: 0)
+      kernels[.gather].dispatch(Self.maxSamples / 64)
     }
 
-    private func dispatch(_ kernel: GLuint, count: Int, buffers: [GLuint], image: GLuint, groups: Int)
+    private func dispatch(_ kernel: Akari.ComputeKernel, count: Int, buffers: [GLuint], image: GLuint, groups: Int)
     {
-      setParams(kernel, SIMD4(Int32(count), 0, 0, 0))
-      for (binding, buffer) in buffers.enumerated()
-      {
-        gl.setComputeShaderBuffer(kernel, binding: GLuint(binding), buffer: buffer)
-      }
-      gl.setComputeShaderImage(kernel, index: 0, texture: image, format: GLenum(GL_R32UI), layered: GLboolean(1), level: 0)
-      gl.dispatchCompute(kernel, groupsX: GLuint(groups), groupsY: 1, groupsZ: 1)
-    }
+      kernel.set(.params, SIMD4(Int32(count), 0, 0, 0))
+      kernel.bind(buffers)
 
-    private func setParams(_ kernel: GLuint, _ params: SIMD4<Int32>)
-    {
-      withUnsafeBytes(of: params)
-      {
-        gl.setComputeShaderUniform(kernel, name: "u_params", type: GL_INT_VEC4, data: $0.baseAddress)
-      }
+      kernel.layeredImage(image, at: 0, format: GLenum(GL_R32UI))
+      kernel.dispatch(groups)
     }
 
     private static func sizeClass(_ width: Int, _ height: Int) -> Int
@@ -375,6 +371,7 @@ extension Akari
       {
         evict(victim)
       }
+
       guard let slot = freeSlot(size) else { return nil }
       let s = Int(slot >> 12), local = Int(slot & 0xFFF)
       slabs[s].keys[local] = key
@@ -396,13 +393,16 @@ extension Akari
           if slabs[s].free.isEmpty { open[size].removeLast() }
           return UInt32(s) << 12 | UInt32(local)
         }
+
         open[size].removeLast()
       }
+
       if let s = freeSlabs.popLast()
       {
         assign(s, size)
         return freeSlot(size)
       }
+
       if let victim = oldest(size)
       {
         evict(victim)
@@ -421,10 +421,12 @@ extension Akari
         {
           evict(UInt32(s) << 12 | UInt32(local))
         }
+
         open[slabs[s].size].removeAll { $0 == s }
         assign(s, size)
         return freeSlot(size)
       }
+
       return nil
     }
 
@@ -454,6 +456,7 @@ extension Akari
         let used = slabs[Int(slot >> 12)].used[Int(slot & 0xFFF)]
         if used < bestUsed { best = slot; bestUsed = used }
       }
+
       return bestUsed + Self.inFlight < frame ? best : nil
     }
 
@@ -471,6 +474,7 @@ extension Akari
         residents[size][place] = last
         slabs[Int(last >> 12)].places[Int(last & 0xFFF)] = Int32(place)
       }
+
       slabs[s].keys[local] = 0
       slabs[s].places[local] = -1
       slabs[s].free.append(UInt16(local))
@@ -497,6 +501,7 @@ extension Akari
         i = (i + 1) & mask
         distance += 1
       }
+
       hashA[Int(i)] = a
       hashB[Int(i)] = b
       hashSlot[Int(i)] = slot
@@ -513,6 +518,7 @@ extension Akari
         guard hashA[Int(i)] != 0 else { return }
         i = (i + 1) & mask
       }
+
       var j = i
       while true
       {
@@ -527,29 +533,40 @@ extension Akari
         dirty.insert(Int(i))
         i = j
       }
+
       hashA[Int(i)] = 0
       hashB[Int(i)] = 0
       hashSlot[Int(i)] = 0
       dirty.insert(Int(i))
     }
 
-    private func compileKernels()
+    private enum Kernel: Akari.ComputeKernelName
     {
-      func compile(_ name: String, _ body: String, _ threadgroup: (Int, Int)) -> GLuint
+      case table, copy, hash, clear, gather
+
+      static let label = "ptex"
+
+      var glsl: String
       {
-        let kernel = gl.precompileComputeShader(name: "akari-ptex-\(name)", glsl: "#version 430\nvoid main() {}\n",
-                                                msl: Self.prologue + body)
-        if kernel != 0
-        {
-          gl.setComputeShaderThreadgroupSize(kernel, x: GLuint(threadgroup.0), y: GLuint(threadgroup.1), z: 1)
-        }
-        return kernel
+        "#version 430\nvoid main() {}\n"
       }
-      kernels.table = compile("table", Self.tableMSL, (64, 1))
-      kernels.copy = compile("copy", Self.copyMSL, (64, 1))
-      kernels.hash = compile("hash", Self.hashMSL, (64, 1))
-      kernels.clear = compile("clear", Self.clearMSL, (16, 16))
-      kernels.gather = compile("gather", Self.gatherMSL, (64, 1))
+
+      var msl: String
+      {
+        switch self
+        {
+          case .table: prologue + tableMSL
+          case .copy: prologue + copyMSL
+          case .hash: prologue + hashMSL
+          case .clear: prologue + clearMSL
+          case .gather: prologue + gatherMSL
+        }
+      }
+
+      var threadgroup: SIMD3<Int>
+      {
+        self == .clear ? SIMD3(16, 16, 1) : SIMD3(64, 1, 1)
+      }
     }
 
     private static let prologue = """
@@ -636,12 +653,11 @@ extension Akari.LabFXEngine
   /// Streams the Ptex tiles the last frames asked for and binds the cache for the gbuffer.
   func syncPtex()
   {
-    let bound = ptex.update(keys: (runtime.texture("gbuffer", named: "ptexA"), runtime.texture("gbuffer", named: "ptexB")),
-                            width: renderWidth, height: renderHeight)
-    setSampler("u_ptexTable", bound.table)
-    setSampler("u_ptexAtlas", bound.atlas)
-    setSampler("u_ptexHash", bound.hash)
-    var params = bound.params
-    runtime.setUniform("u_ptexParams", type: GL_INT_VEC4, data: &params)
+    let bound = ptex.update(keys: (runtime.texture(.gbuffer, named: .ptexA), runtime.texture(.gbuffer, named: .ptexB)),
+                            width: sizes.render.width, height: sizes.render.height)
+    setSampler(.ptexTable, bound.table)
+    setSampler(.ptexAtlas, bound.atlas)
+    setSampler(.ptexHash, bound.hash)
+    runtime.setUniform(.ptexParams, bound.params)
   }
 }

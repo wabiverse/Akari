@@ -84,6 +84,7 @@ int PtexOpenFiles()
   {
     return 256;
   }
+
   const long long soft = static_cast<long long>(limit.rlim_cur);
   return int(std::clamp<long long>(soft / 4, 16, 256));
 }
@@ -98,6 +99,7 @@ PtexCache *Cache()
     {
       std::fprintf(stderr, "HdAkari: ptex keeps %d files open, the process's file limit is low\n", files);
     }
+
     return PtexCache::create(
         files,
         size_t(std::max<long long>((long long)sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGE_SIZE) / 64, 128ll << 20)));
@@ -121,6 +123,7 @@ struct TextureHold
   {
     if (texture) texture->release();
   }
+
   TextureHold(TextureHold const &) = delete;
   TextureHold &operator=(TextureHold const &) = delete;
 };
@@ -166,6 +169,7 @@ Map const &LoadMap(std::string const &path)
       texture->getPixel(f, 0, 0, texel, 0, channels, Ptex::Res(0, 0));
       for (int c = 0; c < 3; ++c) sum[c] += Linear(texel[std::min(c, channels - 1)]);
     }
+
     if (sampled > 0) map.average = sum / float(sampled);
     streams = channels > 0 && texture->numChannels() <= 4 && texture->meshType() == Ptex::mt_quad &&
               texture->numFaces() <= (1 << HdAkariPtexFaceBits);
@@ -180,6 +184,7 @@ Map const &LoadMap(std::string const &path)
     it->second.id = int(mapPaths.size());
     mapPaths.push_back(path);
   }
+
   return it->second;
 }
 
@@ -195,6 +200,7 @@ struct Texels
         width(res.u()), height(res.v())
   {
   }
+
   ~Texels()
   {
     if (data) data->release();
@@ -213,6 +219,7 @@ struct Texels
       Ptex::ConvertToFloat(f, raw, type, channels);
       for (int k = 0; k < 3; ++k) c[k] = uint8_t(std::clamp(f[std::min(k, channels - 1)], 0.0f, 1.0f) * 255.0f + 0.5f);
     }
+
     return uint32_t(c[0]) | uint32_t(c[1]) << 8 | uint32_t(c[2]) << 16 | 0xFF000000u;
   }
 };
@@ -235,12 +242,14 @@ void Decode(Tile &tile)
     if (map < 0 || size_t(map) >= mapPaths.size()) return;
     path = mapPaths[size_t(map)];
   }
+
   Ptex::String error;
   PtexTexture *texture = nullptr;
   {
     std::lock_guard<std::mutex> lock(cacheMutex);
     texture = Cache()->get(path.c_str(), error);
   }
+
   if (!texture) return;
   // released after the faces' data it hands out.
   TextureHold hold(texture);
@@ -277,6 +286,7 @@ void Decode(Tile &tile)
           texture, adj, Ptex::Res(std::max(other.res.ulog2 - drop, 0), std::max(other.res.vlog2 - drop, 0)));
       neighbourEdges[edge] = adjEdge;
     }
+
     Texels const &n = *neighbours[edge];
     // the shared edge runs the other way round the neighbour.
     const float s = 1.0f - t;
@@ -296,6 +306,7 @@ void Decode(Tile &tile)
       *dst++ = gx >= 0 && gx < w && gy >= 0 && gy < h ? own.Read(gx, gy) : beyond(gx, gy);
     }
   }
+
   tile.size = uint32_t(tw) | uint32_t(th) << 16;
 }
 
@@ -327,6 +338,7 @@ struct Streamer
         queue.pop_back();
         ++busy;
       }
+
       Decode(tile);
       std::lock_guard<std::mutex> lock(mutex);
       --busy;
@@ -371,6 +383,7 @@ void HdAkariPtexRequestTiles(uint64_t const *keys, int count)
     streamer.waiting.erase(streamer.queue.front());
     streamer.queue.pop_front();
   }
+
   streamer.wake.notify_all();
 }
 
@@ -393,6 +406,7 @@ int HdAkariPtexTakeTiles(uint64_t *keys, uint32_t *sizes, uint32_t *offsets, uin
     streamer.done.pop_front();
     ++taken;
   }
+
   if (taken > 0) streamer.wake.notify_all();
   return taken;
 }

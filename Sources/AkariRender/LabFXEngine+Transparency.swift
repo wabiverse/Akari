@@ -53,7 +53,7 @@ extension Akari.LabFXEngine
   }
 
   /// The clear always runs, so the motion blur never reads a transparent surface's motion from a past shot.
-  static let transparencyPasses = ["transparent", "transparent composite", "transparent apply"]
+  static let transparencyPasses: [Pass] = [.transparent, .transparentComposite, .transparentApply]
 
   /// The timeline's time in seconds, what the water's waves move with.
   public var waterTime: Double
@@ -99,6 +99,7 @@ extension Akari.LabFXEngine
       hi = pointwiseMax(hi, SIMD2(w[a], w[c]))
       heights[i] = w[up]
     }
+
     heights.sort()
     let across = max(hi.x - lo.x, hi.y - lo.y)
     let swell = heights[n * 19 / 20] - heights[n / 20]
@@ -109,19 +110,20 @@ extension Akari.LabFXEngine
 
   func applyTransparency(projection: Akari.Matrix4, view: Akari.Matrix4)
   {
-    let active = !geometry.transparent.isEmpty || water != nil
+    let active = !geometry.flags.transparent.isEmpty || water != nil
     if active != transparency.passesActive
     {
       setPasses(Self.transparencyPasses, active: active)
       transparency.passesActive = active
     }
-    setVector("u_transparency", SIMD4(stageMetersPerUnit, Self.transparencyIOR, 0.6, Float(projection[1, 1])))
+
+    setVector(.transparency, SIMD4(stageMetersPerUnit, Self.transparencyIOR, 0.6, Float(projection[1, 1])))
     let plane = water ?? WaterPlane(level: 0, lo: .zero, hi: .zero, color: .zero, roughness: 0)
-    setVector("u_water", SIMD4(plane.level, water == nil ? 0 : 1, 1.33, plane.roughness))
-    setVector("u_waterColor", SIMD4(plane.color, stageMetersPerUnit))
-    setVector("u_waterBounds", SIMD4(plane.lo.x, plane.lo.y, plane.hi.x, plane.hi.y))
-    setVector("u_waterWaves", SIMD4(Float(transparency.waterTime.truncatingRemainder(dividingBy: 3600)), 0, 0, 0))
-    setMatrix("u_waterView", view)
-    setMatrix("u_waterInvView", view.inverse())
+    setVector(.water, SIMD4(plane.level, water == nil ? 0 : 1, 1.33, plane.roughness))
+    setVector(.waterColor, SIMD4(plane.color, stageMetersPerUnit))
+    setVector(.waterBounds, SIMD4(plane.lo.x, plane.lo.y, plane.hi.x, plane.hi.y))
+    setVector(.waterWaves, SIMD4(Float(transparency.waterTime.truncatingRemainder(dividingBy: 3600)), 0, 0, 0))
+    setMatrix(.waterView, view)
+    setMatrix(.waterInvView, view.inverse())
   }
 }

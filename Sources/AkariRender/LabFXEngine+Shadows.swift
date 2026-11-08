@@ -44,18 +44,25 @@ import LabGL
 
 public extension Akari.LabFXEngine
 {
+  /// The shadow atlas as the deferred pass sees it, and the casters it draws.
+  struct Shadows
+  {
+    var boundAtlas: GLuint = 0
+    /// The static and instanced batches' shadow casters, and the deformed ones, read in place from the batches.
+    var staticCasters: [Akari.ShadowAtlas.Casters] = []
+    var dynamicCasters: [Akari.ShadowAtlas.Casters] = []
+    /// Set once the atlas has tiles the deferred pass can sample.
+    var ready = false
+  }
+
   /// Fits the shadow views to this frame, then tags
   /// the pages its G-buffer and froxels sample.
-  ///
-  /// - Parameters:
-  ///   - camera: the view the G-buffer was just rendered from.
-  ///   - settings: the frame's render settings.
   func markShadowPageUsage(camera: Akari.Camera, settings: RenderSettings)
   {
     guard settings.features.contains(.shadowMaps) else { return }
     measureLightImportance(camera: camera)
 
-    let posTex = runtime.texture("gbuffer", named: "position")
+    let posTex = runtime.texture(.gbuffer, named: .position)
     guard
       posTex != 0,
       let sceneBounds
@@ -63,40 +70,53 @@ public extension Akari.LabFXEngine
 
     shadowAtlas.markPageUsage(gbufferPosition: posTex,
                               camera: camera,
-                              screenWidth: renderWidth,
-                              screenHeight: renderHeight,
-                              footprintHeight: max(renderHeight, lastHeight),
-                              lightDirection: worldSpaceSunDirection(settings.light),
+                              screenWidth: sizes.render.width,
+                              screenHeight: sizes.render.height,
+                              footprintHeight: max(sizes.render.height, sizes.target.height),
+                              lightDirection: Self.shadowSun(worldSpaceSunDirection(settings.light), angle: effectiveSunAngle(settings.light)),
                               sceneBounds: sceneBounds,
                               settings: settings.light.shadow,
-                              lights: syncedPointLights,
+                              lights: pointLights.shadowed,
                               punctualFarDistance: Self.punctualFarDistance(sceneBounds),
-                              sceneRevision: lastGeometryRevision,
-                              casterBounds: casterBounds,
-                              casterKeys: casterKeys,
-                              staticGeneration: geometry.staticShadow.map { labgl.captureGeneration($0) } ?? 0,
+                              sceneRevision: shadowCasterRevision,
+                              staticCasters: shadows.staticCasters,
+                              dynamicCasters: shadows.dynamicCasters,
                               volume: volumetrics.froxels)
+  }
+  
+  /// The sun the shadow maps draw from, in bands an eighth of its disk wide, so a turning sun doesn't redraw them every frame.
+  static func shadowSun(_ direction: SIMD3<Float>, angle: Float) -> SIMD3<Float>
+  {
+    return Akari.Math.normalize(direction)
+  }
+
+  /// Changes with the scene and whenever a capture the shadows draw records again, a reframe
+  /// choosing other meshes or details without the scene changing.
+  private var shadowCasterRevision: UInt64
+  {
+    var revision = lastGeometryRevision
+    for capture in geometry.shadowCaptures
+    {
+      revision = (revision ^ labgl.captureGeneration(capture)) &* 1_099_511_628_211
+    }
+
+    return revision
   }
 
   /// Redraws whichever tiles `markShadowPageUsage` found
   /// stale, then binds them for the deferred resolve.
-  ///
-  /// - Parameters:
-  ///   - renderParam: hydra render param.
-  ///   - camera: the view the cascades were fitted to.
-  ///   - settings: the frame's render settings.
-  ///   - frameIndex: per frame counter, drives atlas eviction.
   func renderShadows(renderParam: Pixar.HdAkariRenderParam,
                      camera: Akari.Camera,
                      settings: RenderSettings,
                      frameIndex _: UInt64)
   {
-    shadowsReady = false
+    shadows.ready = false
     var staticCaptures: [OpaquePointer] = []
     if !geometry.staticBatch.isEmpty, let capture = geometry.staticShadow
     {
       staticCaptures.append(capture)
     }
+
     if !geometry.instancedBatch.isEmpty, let capture = geometry.staticInstancedCapture
     {
       staticCaptures.append(capture)
@@ -117,14 +137,14 @@ public extension Akari.LabFXEngine
     else { return }
 
     let shadow = settings.light.shadow
-    shadowAtlas.materialAtlas = probeMaterials.material
-    shadowAtlas.materialConstants = probeMaterials.constants
+    shadowAtlas.materialAtlas = probes.materials.material
+    shadowAtlas.materialConstants = probes.materials.constants
     let views = shadowAtlas.render(staticCaptures: staticCaptures,
                                    dynamicCaptures: dynamicCaptures,
                                    dynamicDrawBounds: dynamicDrawBounds,
-                                   casterBounds: casterBounds)
+                                   casters: shadows.staticCasters + shadows.dynamicCasters)
     bindShadowViews(views, settings: shadow)
-    shadowsReady = true
+    shadows.ready = true
 
     // the atlas draws left the light's matrices on the stack,
     // so put the camera back before the captured replay.
@@ -145,27 +165,27 @@ public extension Akari.LabFXEngine
   {
     guard
       shadowAtlas.prepare(),
-      shadowAtlas.atlas != boundShadowAtlas
+      shadowAtlas.atlas != shadows.boundAtlas
     else { return }
 
-    boundShadowAtlas = shadowAtlas.atlas
-    setSampler("u_shadow_atlas", shadowAtlas.atlas)
-    setSampler("u_shadow_data", shadowAtlas.data)
-    setSampler("u_shadow_pagetable", shadowAtlas.pageTable)
+    shadows.boundAtlas = shadowAtlas.atlas
+    setSampler(.shadowAtlas, shadowAtlas.atlas)
+    setSampler(.shadowData, shadowAtlas.data)
+    setSampler(.shadowPagetable, shadowAtlas.pageTable)
   }
 
   private func bindShadowViews(_ views: [Akari.ShadowAtlas.View], settings: ShadowSettings)
   {
     ensureShadowBindings()
-    setSampler("u_shadow_data", shadowAtlas.data)
+    setSampler(.shadowData, shadowAtlas.data)
 
-    setFloat("u_shadowLevelCount", Float(views.count))
-    setVector("u_shadowBias", SIMD4(settings.depthBias, settings.normalBias, 0, 0))
+    setFloat(.shadowLevelCount, Float(views.count))
+    setVector(.shadowBias, SIMD4(settings.depthBias, settings.normalBias, 0, 0))
 
     let sun = shadowAtlas.sun
-    setMatrix("u_eyeToLightRotation", sun.eyeToLightRotation)
-    setVector("u_directionalRefOffset", SIMD4(sun.refOffset.x, sun.refOffset.y, sun.refOffset.z, 0))
-    setVector("u_shadowLodRange", SIMD4(Float(sun.lodMin),
+    setMatrix(.eyeToLightRotation, sun.eyeToLightRotation)
+    setVector(.directionalRefOffset, SIMD4(sun.refOffset.x, sun.refOffset.y, sun.refOffset.z, 0))
+    setVector(.shadowLodRange, SIMD4(Float(sun.lodMin),
                                         Float(sun.lodMax),
                                         sun.isClipmap ? 1 : 0,
                                         sun.lodBias))
@@ -184,53 +204,52 @@ public extension Akari.LabFXEngine
   /// count the most.
   func measureLightImportance(camera: Akari.Camera)
   {
-    if importanceKernel == 0
+    if pointLights.onScreen.readback == 0
     {
-      importanceKernel = gl.precompileComputeShader(name: "akari-light-importance",
-                                                    glsl: Self.importanceGLSL, msl: Self.importanceMSL)
-      if importanceKernel != 0 { gl.setComputeShaderThreadgroupSize(importanceKernel, x: 256, y: 1, z: 1) }
-      importanceReadback = gl.createComputeReadback(sizeBytes: GLsizei(16 * MemoryLayout<Float>.size), ringSize: 3)
+      pointLights.onScreen.kernel = Akari.ComputeKernel(label: "akari-light-importance", glsl: Self.importanceGLSL,
+                                                        msl: Self.importanceMSL, threadgroup: SIMD3(256, 1, 1))
+      _ = pointLights.onScreen.kernel.wait()
+      pointLights.onScreen.readback = gl.createComputeReadback(sizeBytes: GLsizei(16 * MemoryLayout<Float>.size), ringSize: 3)
     }
+
     guard
-      importanceKernel != 0,
-      importanceReadback != 0,
-      gl.waitComputeShader(importanceKernel) != 0,
-      pointLightTexture != 0
+      pointLights.onScreen.kernel.isBuilt,
+      pointLights.onScreen.readback != 0,
+      pointLights.texture != 0
     else { return }
 
     var size: GLsizei = 0
-    if let raw = gl.computeReadbackLatest(importanceReadback, size: &size), size == GLsizei(16 * MemoryLayout<Float>.size)
+    if let raw = gl.computeReadbackLatest(pointLights.onScreen.readback, size: &size), size == GLsizei(16 * MemoryLayout<Float>.size)
     {
       let sums = raw.assumingMemoryBound(to: Float.self)
-      for (slot, key) in shadowSlots.enumerated() where slot < 16
+      for (slot, key) in pointLights.slots.enumerated() where slot < 16
       {
         let value = sums[slot]
         guard value.isFinite else { continue }
-        lightImportance[key] = lightImportance[key].map { $0 * 0.92 + value * 0.08 } ?? value
+        pointLights.importance[key] = pointLights.importance[key].map { $0 * 0.92 + value * 0.08 } ?? value
       }
     }
 
     let textures = [
-      runtime.texture("gbuffer", named: "position"),
-      runtime.texture("gbuffer", named: "normal"),
-      pointLightTexture
-    ] + (0 ..< 4).map { runtime.texture("pointShadow", named: "pointShadow\($0)") }
+      runtime.texture(.gbuffer, named: .position),
+      runtime.texture(.gbuffer, named: .normal),
+      pointLights.texture
+    ] + ([.pointShadow0, .pointShadow1, .pointShadow2, .pointShadow3] as [Attachment]).map { runtime.texture(.pointShadow, named: $0) }
     guard textures.allSatisfy({ $0 != 0 }) else { return }
-    let kernel = importanceKernel
-    camera.view.inverse().withUnsafeFloats
-    { buf in
-      gl.setComputeShaderUniform(kernel, name: "u_invView", type: GL_FLOAT_MAT4, data: buf.baseAddress)
-    }
-    if importanceBoxes.isEmpty
+    let kernel = pointLights.onScreen.kernel
+    kernel.set(.invView, camera.view.inverse())
+
+    if pointLights.onScreen.boxes.isEmpty
     {
-      importanceBoxes = (0 ..< 3).map
+      pointLights.onScreen.boxes = (0 ..< 3).map
       { _ in
         gl.createBuffer(usage: LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_MAP_WRITE,
                         sizeBytes: GLsizei(Self.importanceMaxBoxes * 8 * MemoryLayout<Float>.size))
       }
     }
-    importanceBoxCursor = (importanceBoxCursor + 1) % importanceBoxes.count
-    let boxes = importanceBoxes[importanceBoxCursor]
+
+    pointLights.onScreen.cursor = (pointLights.onScreen.cursor + 1) % pointLights.onScreen.boxes.count
+    let boxes = pointLights.onScreen.boxes[pointLights.onScreen.cursor]
     let bounds = geometry.dynamicBatch.casterBounds
     let boxCount = min(bounds.count / 6, Self.importanceMaxBoxes)
     if boxes != 0, let p = gl.mapBuffer(boxes)
@@ -244,19 +263,20 @@ public extension Akari.LabFXEngine
           out[b * 8 + 4 + c] = bounds[b * 6 + 3 + c]
         }
       }
+
       gl.unmapBuffer(boxes)
     }
-    var params = SIMD4<Float>(Float(min(syncedPointLights.count, 16)),
-                              Float(Self.importanceGrid.width), Float(Self.importanceGrid.height), Float(boxCount))
-    gl.setComputeShaderUniform(kernel, name: "u_params", type: GL_FLOAT_VEC4, data: &params)
+
+    kernel.set(.params, SIMD4<Float>(Float(min(pointLights.shadowed.count, 16)),
+                                     Float(Self.importanceGrid.width), Float(Self.importanceGrid.height), Float(boxCount)))
     for (i, texture) in textures.enumerated()
     {
-      gl.setComputeShaderSampler(kernel, index: GLuint(i), texture: texture, samplerIndex: GLuint(i))
+      kernel.sample(texture, at: i, sampler: i)
     }
-    gl.setComputeShaderBuffer(kernel, binding: 0, buffer: gl.computeReadbackCurrentBuffer(importanceReadback))
-    gl.setComputeShaderBuffer(kernel, binding: 1, buffer: boxes)
-    gl.setComputeShaderReadback(kernel, bindingIndex: 0, readback: importanceReadback)
-    gl.dispatchCompute(kernel, groupsX: 1, groupsY: 1, groupsZ: 1)
+
+    kernel.bind(gl.computeReadbackCurrentBuffer(pointLights.onScreen.readback), boxes)
+    kernel.readback(pointLights.onScreen.readback, at: 0)
+    kernel.dispatch(1)
   }
 
   static let importanceBody = """

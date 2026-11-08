@@ -95,6 +95,12 @@ public extension Akari.Geom
     {
       verts.isEmpty || indices.isEmpty
     }
+
+    /// Read from the cache's file, so the system can drop its pages, not held in memory.
+    public var isMapped: Bool
+    {
+      pack != nil
+    }
   }
 
   /// An append only file, unlinked as soon as it's open and
@@ -120,6 +126,7 @@ public extension Akari.Geom
         close(fd)
         return nil
       }
+
       self.fd = fd
       self.base = base
       self.capacity = capacity
@@ -145,6 +152,7 @@ public extension Akari.Geom
         lock.unlock()
         return nil
       }
+
       end += length
       lock.unlock()
       var at = offset
@@ -157,8 +165,10 @@ public extension Akari.Geom
           guard count > 0 else { return nil }
           written += count
         }
+
         at += part.count
       }
+
       return (offset, length)
     }
   }
@@ -198,6 +208,7 @@ public extension Akari.Geom
         limit = 0
         return
       }
+
       let parent = caches.appendingPathComponent("Akari/geometry-v\(Self.version)").path
       Self.sweep(parent)
       let root = "\(parent)/\(getpid())"
@@ -208,6 +219,7 @@ public extension Akari.Geom
         limit = 0
         return
       }
+
       self.root = root
       let free = (try? FileManager.default.attributesOfFileSystem(forPath: root)[.systemFreeSize] as? Int64) ?? 0
       let configured = Double(environment["AKARI_GEOMETRY_CACHE_GB"] ?? "").map { Int64($0 * 1_073_741_824) }
@@ -252,6 +264,7 @@ public extension Akari.Geom
       {
         key = (key ^ value) &* 1_099_511_628_211
       }
+
       return key == 0 ? 1 : key
     }
 
@@ -313,18 +326,38 @@ public extension Akari.Geom
     /// disk is short of room, the caller keeps them in memory instead.
     public func mappedBuffer(usage: GLuint, _ parts: [UnsafeRawBufferPointer]) -> GLuint
     {
+      pack(parts).map { buffer(usage: usage, $0) } ?? 0
+    }
+
+    /// Where `pack` wrote, which holds its file open.
+    public struct Slice: @unchecked Sendable
+    {
+      let pack: Pack
+      let offset: Int
+      let length: Int
+    }
+
+    /// `mappedBuffer`'s write, from any thread, nil when the disk is short of room.
+    public func pack(_ parts: [UnsafeRawBufferPointer]) -> Slice?
+    {
       let bytes = parts.reduce(0) { $0 + $1.count }
-      guard bytes > 0, let root, let free = freeDisk, free > Int64(bytes) else { return 0 }
+      guard bytes > 0, let root, let free = freeDisk, free > Int64(bytes) else { return nil }
       lock.lock()
       if buffers.isEmpty { buffers = Self.packs(in: root) }
       let pack = buffers.isEmpty ? nil : buffers[next % buffers.count]
       next &+= 1
       lock.unlock()
-      guard let pack, let slice = pack.append(parts) else { return 0 }
+      guard let pack, let slice = pack.append(parts) else { return nil }
+      return Slice(pack: pack, offset: slice.offset, length: slice.length)
+    }
+
+    /// `mappedBuffer`'s GPU buffer, from the render thread.
+    public func buffer(usage: GLuint, _ slice: Slice) -> GLuint
+    {
       // each buffer holds the pack, which unmaps after the last of them.
-      return gl.createBuffer(usage: usage, noCopy: pack.base + slice.offset, length: GLsizei(slice.length),
-                             release: { Unmanaged<Pack>.fromOpaque($0!).release() },
-                             context: Unmanaged.passRetained(pack).toOpaque())
+      gl.createBuffer(usage: usage, noCopy: slice.pack.base + slice.offset, length: GLsizei(slice.length),
+                      release: { Unmanaged<Pack>.fromOpaque($0!).release() },
+                      context: Unmanaged.passRetained(slice.pack).toOpaque())
     }
   }
 }

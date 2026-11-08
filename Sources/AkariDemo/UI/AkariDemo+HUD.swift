@@ -53,11 +53,12 @@ extension AkariDemo
     @State private var state: AkariDemo.HUDState
     @State private var job: AkariDemo.RenderJob
     @State private var tab = Tab.render
+    @State private var inspector: AkariDemo.Inspector
 
     /// Properties tabs, top to bottom.
     enum Tab: CaseIterable, Hashable
     {
-      case render, output, scene, planet
+      case render, output, scene, world, object, data, material
 
       var title: String
       {
@@ -66,15 +67,41 @@ extension AkariDemo
           case .render: "Render"
           case .output: "Output"
           case .scene: "Scene"
-          case .planet: "Planet"
+          case .world: "World"
+          case .object: "Object"
+          case .data: "Object Data"
+          case .material: "Material"
         }
       }
     }
 
-    init(state: AkariDemo.HUDState, job: AkariDemo.RenderJob)
+    init(state: AkariDemo.HUDState, job: AkariDemo.RenderJob, inspector: AkariDemo.Inspector)
     {
       _state = State(wrappedValue: state)
       _job = State(wrappedValue: job)
+      _inspector = State(wrappedValue: inspector)
+    }
+
+    /// A prim's tabs only show while one is active,
+    /// its data tab for a camera or light, its material
+    /// tab for geometry.
+    private var tabs: [Tab]
+    {
+      Tab.allCases.filter
+      { t in
+        switch t
+        {
+          case .object: inspector.path != nil
+          case .data: inspector.path != nil && (inspector.isCamera || inspector.isLight)
+          case .material: inspector.path != nil && inspector.geometry
+          default: true
+        }
+      }
+    }
+
+    private var shown: Tab
+    {
+      tabs.contains(tab) ? tab : [.data, .material].contains(tab) && tabs.contains(.object) ? .object : .render
     }
 
     var body: some View
@@ -83,13 +110,14 @@ extension AkariDemo
       {
         VStack(spacing: 2)
         {
-          ForEach(Tab.allCases, id: \.self)
+          ForEach(tabs, id: \.self)
           { t in
-            tabIcon(t, selected: tab == t)
+            tabIcon(t, selected: shown == t)
               .frame(width: 24, height: 24)
-              .background(RoundedRectangle(cornerRadius: 4).fill(tab == t ? Properties.region : Color.clear))
+              .background(RoundedRectangle(cornerRadius: 4).fill(shown == t ? Properties.tabActive : Properties.tabButton))
               .onTapGesture { tab = t }
           }
+
           Spacer()
         }
         .padding(.vertical, 6)
@@ -100,8 +128,8 @@ extension AkariDemo
         {
           HStack(spacing: 6)
           {
-            tabIcon(tab, selected: true)
-            Text(tab.title)
+            tabIcon(shown, selected: true)
+            Text(shown == .data && inspector.isCamera ? "Camera" : shown == .data ? "Light" : shown.title)
               .font(.system(size: 11))
               .foregroundColor(Properties.text)
             Spacer()
@@ -112,17 +140,72 @@ extension AkariDemo
           .padding(.horizontal, 12)
           .padding(.vertical, 7)
 
-          if tab == .output
+          if shown == .output
           {
             OutputProperties(job: job)
           }
-          else if tab == .scene
+          else if shown == .scene
           {
             SceneProperties(job: job)
           }
-          else if tab == .planet
+          else if shown == .world
           {
-            PlanetProperties(state: state.planet, renderSettings: state)
+            ScrollView
+            {
+              VStack(alignment: .leading, spacing: 4)
+              {
+                PropertiesPanel("Surface")
+                {
+                  slider("Sun Height", state.binding(\.light.sunHeight, marking: \.light.overridesStageSun), in: -1 ... 1, step: 0.01)
+                  {
+                    String(format: "%.2f", $0)
+                  }
+
+                  slider("Sun Angle", state.binding(\.light.sunAngle, scale: 180 / .pi, marking: \.light.overridesStageSun), in: 0 ... 20, step: 0.1)
+                  {
+                    String(format: "%.1f°", $0)
+                  }
+
+                  Properties.check("Image Based Lighting", state.binding(for: .imageBasedLighting))
+                  Properties.check("Light Probes", state.binding(for: .lightProbes))
+                }
+
+                PropertiesPanel("Volume", toggle: state.binding(for: .volumetrics))
+                {
+                  slider("Density", state.binding(\.volume.density), in: 0 ... 0.2, step: 0.001)
+                  {
+                    String(format: "%.3f", $0)
+                  }
+
+                  slider("Anisotropy", state.binding(\.volume.anisotropy), in: -0.9 ... 0.9, step: 0.01)
+                  {
+                    String(format: "%+.2f", $0)
+                  }
+
+                  slider("Max Distance", state.binding(\.volume.maxDistance), in: 5 ... 500, step: 1)
+                  {
+                    String(format: "%.0f m", $0)
+                  }
+
+                  Properties.check("Shadows", state.volumeShadowsBinding)
+                }
+
+                PlanetProperties(state: state.planet, renderSettings: state)
+              }
+              .padding(6)
+            }
+          }
+          else if shown == .object
+          {
+            ObjectProperties(inspector: inspector)
+          }
+          else if shown == .data
+          {
+            DataProperties(inspector: inspector)
+          }
+          else if shown == .material
+          {
+            MaterialProperties(inspector: inspector)
           }
           else
           {
@@ -132,12 +215,7 @@ extension AkariDemo
               {
                 Properties.row("Quality")
                 {
-                  Dropdown(options: RenderQuality.allCases,
-                           selection: state.$quality.onChange
-                           { q in
-                             if let q { state.applyPreset(q) }
-                             state.apply()
-                           })
+                  Dropdown(options: RenderQuality.allCases, selection: state.qualitySelection)
                 }
                 .padding(.vertical, 4)
 
@@ -145,12 +223,13 @@ extension AkariDemo
                 {
                   PropertiesPanel("Viewport", nested: true)
                   {
-                    slider("Samples", state.$samples, in: 1 ... 64, step: 1) { "\(Int($0))" }
+                    slider("Samples", state.binding(\.samples), in: 1 ... 64, step: 1) { "\(Int($0))" }
                     Properties.check("Temporal Reprojection", state.binding(for: .temporalAA))
                   }
+
                   PropertiesPanel("Render", nested: true)
                   {
-                    slider("Samples", state.$renderSamples, in: 1 ... 128, step: 1) { "\(Int($0))" }
+                    slider("Samples", state.binding(\.renderSamples), in: 1 ... 128, step: 1) { "\(Int($0))" }
                   }
                 }
 
@@ -158,22 +237,25 @@ extension AkariDemo
                 {
                   Properties.row("Upscaler")
                   {
-                    Dropdown(options: Upscaler.allCases, selection: state.$upscaler.onChange { _ in state.apply() })
+                    Dropdown(options: Upscaler.allCases, selection: state.selection(\.upscaler))
                   }
-                  slider("Supersampling", state.$supersampling, in: 1 ... 2, step: 0.01)
+
+                  slider("Supersampling", state.binding(\.supersampling), in: 1 ... 2, step: 0.01)
                   {
                     String(format: "%.2f×", RenderSettings.supersamplingStep(Float($0)))
                   }
+
                   Properties.check("Dynamic Resolution", state.binding(for: .dynamicResolution))
                 }
 
                 PropertiesPanel("Shadows", toggle: state.binding(for: .shadowMaps))
                 {
-                  slider("Clipmap LOD Bias", state.$shadowLevelLodBias, in: -4 ... 4, step: 1)
+                  slider("Clipmap LOD Bias", state.binding(\.light.shadow.levelLodBias), in: -4 ... 4, step: 1)
                   {
                     String(format: "%+.0f", $0)
                   }
-                  slider("Max Distance", state.$shadowMaxDistance, in: 2 ... 200, step: 1)
+
+                  slider("Max Distance", state.binding(\.light.shadow.maxDistance), in: 2 ... 200, step: 1)
                   {
                     String(format: "%.0f m", $0)
                   }
@@ -182,60 +264,32 @@ extension AkariDemo
                 PropertiesPanel("Raytracing", expanded: false, toggle: state.binding(for: .hardwareRayTracing))
                 {
                   Properties.check("Screen Space Reflections", state.binding(for: .screenSpaceReflections))
-                  slider("Max Roughness", state.$reflectionMaxRoughness, in: 0 ... 1, step: 0.01)
+                  slider("Max Roughness", state.binding(\.reflection.maxRoughness), in: 0 ... 1, step: 0.01)
                   {
                     String(format: "%.2f", $0)
                   }
+
                   Properties.check("Screen Space GI", state.binding(for: .screenSpaceGI))
-                }
-
-                PropertiesPanel("World")
-                {
-                  slider("Sun Height", state.$environmentSunHeight, in: -1 ... 1, step: 0.01)
-                  {
-                    String(format: "%.2f", $0)
-                  }
-                  slider("Sun Angle", state.$environmentSunAngle, in: 0 ... 20, step: 0.1)
-                  {
-                    String(format: "%.1f°", $0)
-                  }
-                  Properties.check("Image Based Lighting", state.binding(for: .imageBasedLighting))
-                  Properties.check("Light Probes", state.binding(for: .lightProbes))
-                }
-
-                PropertiesPanel("Volumes", toggle: state.binding(for: .volumetrics))
-                {
-                  slider("Density", state.$volumeDensity, in: 0 ... 0.2, step: 0.001)
-                  {
-                    String(format: "%.3f", $0)
-                  }
-                  slider("Anisotropy", state.$volumeAnisotropy, in: -0.9 ... 0.9, step: 0.01)
-                  {
-                    String(format: "%+.2f", $0)
-                  }
-                  slider("Max Distance", state.$volumeMaxDistance, in: 5 ... 500, step: 1)
-                  {
-                    String(format: "%.0f m", $0)
-                  }
-                  Properties.check("Shadows", state.volumeShadowsBinding)
                 }
 
                 PropertiesPanel("Bloom", expanded: false, toggle: state.binding(for: .bloom))
                 {
-                  slider("Threshold", state.$bloomThreshold, in: 0 ... 10, step: 0.01) { String(format: "%.2f", $0) }
-                  slider("Smoothness", state.$bloomSmoothness, in: 0 ... 1, step: 0.01) { String(format: "%.2f", $0) }
-                  slider("Maximum", state.$bloomMaximum, in: 0 ... 100, step: 0.1)
+                  slider("Threshold", state.binding(\.bloom.threshold), in: 0 ... 10, step: 0.01) { String(format: "%.2f", $0) }
+                  slider("Smoothness", state.binding(\.bloom.smoothness), in: 0 ... 1, step: 0.01) { String(format: "%.2f", $0) }
+                  slider("Maximum", state.binding(\.bloom.maximum), in: 0 ... 100, step: 0.1)
                   {
                     $0 > 0 ? String(format: "%.1f", $0) : "None"
                   }
-                  slider("Strength", state.$bloomStrength, in: 0 ... 4, step: 0.01) { String(format: "%.2f", $0) }
-                  slider("Saturation", state.$bloomSaturation, in: 0 ... 2, step: 0.01) { String(format: "%.2f", $0) }
+
+                  slider("Strength", state.binding(\.bloom.strength), in: 0 ... 4, step: 0.01) { String(format: "%.2f", $0) }
+                  slider("Saturation", state.binding(\.bloom.saturation), in: 0 ... 2, step: 0.01) { String(format: "%.2f", $0) }
                   Properties.row("Tint")
                   {
-                    ColorField(color: state.$bloomTint.onChange { _ in state.apply() })
+                    ColorField(color: state.binding(\.bloom.tint))
                   }
-                  slider("Streaks", state.$bloomStreaks, in: 0 ... 1, step: 0.01) { String(format: "%.2f", $0) }
-                  slider("Ghosts", state.$bloomGhosts, in: 0 ... 1, step: 0.01) { String(format: "%.2f", $0) }
+
+                  slider("Streaks", state.binding(\.bloom.streaks), in: 0 ... 1, step: 0.01) { String(format: "%.2f", $0) }
+                  slider("Ghosts", state.binding(\.bloom.ghosts), in: 0 ... 1, step: 0.01) { String(format: "%.2f", $0) }
                 }
 
                 PropertiesPanel("Depth of Field", expanded: false, toggle: state.binding(for: .depthOfField))
@@ -245,15 +299,18 @@ extension AkariDemo
                     ObjectField(name: state.focusObjectName, picking: state.pickingFocus,
                                 pick: { state.pickFocusObject() }, clear: { state.clearFocusObject() })
                   }
-                  lensSlider("Focus Distance", state.$focusDistance, in: 0.1 ... 200, step: 0.1)
+
+                  slider("Focus Distance", state.binding(\.depthOfField.focusDistance, marking: \.depthOfField.overridesCamera), in: 0.1 ... 200, step: 0.1)
                   {
                     String(format: "%.1f m", $0)
                   }
+
                   PropertiesPanel("Aperture", nested: true)
                   {
-                    lensSlider("F-Stop", state.$fStop, in: 0.5 ... 32, step: 0.1) { String(format: "%.1f", $0) }
+                    slider("F-Stop", state.binding(\.depthOfField.fStop, marking: \.depthOfField.overridesCamera), in: 0.5 ... 32, step: 0.1) { String(format: "%.1f", $0) }
                   }
-                  slider("Max Size", state.$dofMaxSize, in: 4 ... 48, step: 1) { String(format: "%.0f px", $0) }
+
+                  slider("Max Size", state.binding(\.depthOfField.maxSize), in: 4 ... 48, step: 1) { String(format: "%.0f px", $0) }
                 }
 
                 PropertiesPanel("Color Management")
@@ -261,18 +318,21 @@ extension AkariDemo
                   Properties.row("View")
                   {
                     Dropdown(options: Akari.Color.ViewTransform.allCases,
-                             selection: state.$viewTransform.onChange { _ in state.apply() })
+                             selection: state.selection(\.color.viewTransform))
                   }
+
                   Properties.row("Look")
                   {
                     Dropdown(options: Akari.Color.Look.allCases,
-                             selection: state.$look.onChange { _ in state.apply() })
+                             selection: state.selection(\.color.look))
                   }
-                  slider("Exposure", state.$exposure, in: -4 ... 4, step: 0.1)
+
+                  slider("Exposure", state.binding(\.color.exposure), in: -4 ... 4, step: 0.1)
                   {
                     String(format: "%+.1f EV", $0)
                   }
-                  slider("Gamma", state.$gamma, in: 0.4 ... 2.5, step: 0.01)
+
+                  slider("Gamma", state.binding(\.color.gamma), in: 0.4 ... 2.5, step: 0.01)
                   {
                     String(format: "%.2f", $0)
                   }
@@ -298,14 +358,17 @@ extension AkariDemo
     {
       switch t
       {
-        case .render: SymbolIcon("camera.fill", size: 12, white: 0.8)
-        case .output: SymbolIcon("printer.fill", size: 12, white: 0.8)
-        case .scene: SceneIcon(size: 15, background: selected ? 0.188 : 0.114)
-        case .planet: SymbolIcon("globe.americas.fill", size: 12, white: 0.8)
+        case .render: TabIcon(kind: .render, background: selected ? Properties.tabActiveWhite : Properties.tabButtonWhite)
+        case .output: TabIcon(kind: .output, background: selected ? Properties.tabActiveWhite : Properties.tabButtonWhite)
+        case .scene: TabIcon(kind: .scene, background: selected ? Properties.tabActiveWhite : Properties.tabButtonWhite)
+        case .world: TabIcon(kind: .world, background: selected ? Properties.tabActiveWhite : Properties.tabButtonWhite)
+        case .object: TabIcon(kind: .object, background: selected ? Properties.tabActiveWhite : Properties.tabButtonWhite)
+        case .data: TabIcon(kind: inspector.isLight ? .light : .camera,
+                            background: selected ? Properties.tabActiveWhite : Properties.tabButtonWhite)
+        case .material: TabIcon(kind: .material, background: selected ? Properties.tabActiveWhite : Properties.tabButtonWhite)
       }
     }
 
-    /// A slider row that pushes the edit into the engine on change.
     private func slider(_ label: String,
                         _ binding: Binding<Double>,
                         in range: ClosedRange<Double>,
@@ -314,20 +377,7 @@ extension AkariDemo
     {
       Properties.row(label)
       {
-        SliderField(value: binding.onChange { _ in state.apply() }, range: range, step: step, format: format)
-      }
-    }
-
-    /// A slider for the lens, an edit replacing the USD camera's own from then on.
-    private func lensSlider(_ label: String,
-                            _ binding: Binding<Double>,
-                            in range: ClosedRange<Double>,
-                            step: Double,
-                            _ format: @escaping (Double) -> String) -> some View
-    {
-      Properties.row(label)
-      {
-        SliderField(value: binding.onChange { _ in state.applyLens() }, range: range, step: step, format: format)
+        SliderField(value: binding, range: range, step: step, format: format)
       }
     }
 
@@ -355,7 +405,9 @@ extension AkariDemo
       {
         FPSCounter(driver: driver)
       }
-      .padding(16)
+      .padding(.vertical, 16)
+      .padding(.trailing, 16)
+      .padding(.leading, 48)
     }
   }
 }

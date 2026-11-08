@@ -111,6 +111,7 @@ extension AkariDemo
               SliderField(value: Binding(get: { Double(job.percentage) }, set: { job.percentage = Int($0) }),
                           range: 1 ... 100, step: 1) { "\(Int($0))%" }
             }
+
             Spacer().frame(height: 4)
             Properties.row("Frame Rate") { Dropdown(options: FrameRate.allCases, selection: frameRate) }
             if frameRate.wrappedValue == .custom
@@ -145,6 +146,7 @@ extension AkariDemo
                 {
                   Properties.row("Video Codec") { Dropdown(options: VideoCodec.allCases, selection: constant(.h264)) }
                 }
+
                 PropertiesPanel("Audio", nested: true)
                 {
                   Properties.row("Audio Codec") { Dropdown(options: AudioCodec.allCases, selection: audioCodec) }

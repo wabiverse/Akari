@@ -52,10 +52,31 @@ public extension Akari
     private var depthSize = SIMD2<Int>(0, 0)
     private var history: [GLuint] = [0, 0]
     private var historyRead = 0
-    private var depthShader: GLuint = 0
-    private var integrateShader: GLuint = 0
+    private var kernels = Akari.ComputeKernels<Kernel>()
     private var built = false
     private var failed = false
+
+    private enum Kernel: Akari.ComputeKernelName
+    {
+      case depth, integrate
+
+      static let label = "froxel"
+
+      var glsl: String
+      {
+        self == .depth ? depthGLSL : integrateGLSL
+      }
+
+      var msl: String
+      {
+        self == .depth ? depthMSL : integrateMSL
+      }
+
+      var threadgroup: SIMD3<Int>
+      {
+        self == .depth ? SIMD3(16, 16, 1) : SIMD3(8, 8, 1)
+      }
+    }
 
     public init()
     {}
@@ -68,16 +89,9 @@ public extension Akari
     /// Starts the kernels compiling in the background.
     public func precompileShaders()
     {
-      guard depthShader == 0, !failed else { return }
+      guard kernels.isEmpty, !failed else { return }
 
-      depthShader = gl.precompileComputeShader(name: "akari-froxel-depth",
-                                               glsl: Self.depthGLSL,
-                                               msl: Self.depthMSL)
-      integrateShader = gl.precompileComputeShader(name: "akari-froxel-integrate",
-                                                   glsl: Self.integrateGLSL,
-                                                   msl: Self.integrateMSL)
-      gl.setComputeShaderThreadgroupSize(depthShader, x: 16, y: 16, z: 1)
-      gl.setComputeShaderThreadgroupSize(integrateShader, x: 8, y: 8, z: 1)
+      kernels = .precompile()
     }
 
     /// Waits for the kernels, once.
@@ -87,9 +101,7 @@ public extension Akari
       if failed { return false }
 
       precompileShaders()
-      guard
-        gl.waitComputeShader(depthShader) != 0,
-        gl.waitComputeShader(integrateShader) != 0
+      guard kernels.wait().isEmpty
       else
       {
         print("[akari/volume] froxel compute kernels failed to compile, volumetrics disabled")
@@ -97,6 +109,7 @@ public extension Akari
         failed = true
         return false
       }
+
       built = true
       return true
     }
@@ -116,15 +129,10 @@ public extension Akari
         ensureTextures(width: gridWidth, height: gridHeight)
       else { return false }
 
-      var params = SIMD4<Float>(Float(gridWidth), Float(gridHeight), Float(screenWidth), Float(screenHeight))
-      gl.setComputeShaderUniform(depthShader, name: "u_params", type: GL_FLOAT_VEC4, data: &params)
-      gl.setComputeShaderImage(depthShader, index: 0, texture: depthTexture,
-                               format: GL_RGBA32F, level: 0)
-      gl.setComputeShaderSampler(depthShader, index: 1, texture: gbufferPosition, samplerIndex: 0)
-      gl.dispatchCompute(depthShader,
-                         groupsX: GLuint(gridWidth),
-                         groupsY: GLuint(gridHeight),
-                         groupsZ: 1)
+      kernels[.depth].set(.params, SIMD4<Float>(Float(gridWidth), Float(gridHeight), Float(screenWidth), Float(screenHeight)))
+      kernels[.depth].image(depthTexture, at: 0, format: GL_RGBA32F)
+      kernels[.depth].sample(gbufferPosition, at: 1)
+      kernels[.depth].dispatch(gridWidth, gridHeight)
       return true
     }
 
@@ -148,17 +156,11 @@ public extension Akari
         gridHeight > 0
       else { return }
 
-      var params = SIMD4<Float>(Float(gridWidth), Float(gridHeight), 0, 0)
-      gl.setComputeShaderUniform(integrateShader, name: "u_params", type: GL_FLOAT_VEC4, data: &params)
-      gl.setComputeShaderImage(integrateShader, index: 0, texture: integrated,
-                               format: GLenum(GL_RGBA16F), level: 0)
-      gl.setComputeShaderSampler(integrateShader, index: 1, texture: scatter, samplerIndex: 0)
-      gl.setComputeShaderImage(integrateShader, index: 2, texture: historyWrite,
-                               format: GLenum(GL_RGBA16F), level: 0)
-      gl.dispatchCompute(integrateShader,
-                         groupsX: GLuint((gridWidth + 7) / 8),
-                         groupsY: GLuint((gridHeight + 7) / 8),
-                         groupsZ: 1)
+      kernels[.integrate].set(.params, SIMD4<Float>(Float(gridWidth), Float(gridHeight), 0, 0))
+      kernels[.integrate].image(integrated, at: 0, format: GLenum(GL_RGBA16F))
+      kernels[.integrate].sample(scatter, at: 1)
+      kernels[.integrate].image(historyWrite, at: 2, format: GLenum(GL_RGBA16F))
+      kernels[.integrate].dispatch((gridWidth + 7) / 8, (gridHeight + 7) / 8)
 
       historyRead = 1 - historyRead
       hasHistory = true
@@ -167,12 +169,7 @@ public extension Akari
     public func release()
     {
       releaseTextures()
-      for shader in [depthShader, integrateShader] where shader != 0
-      {
-        gl.deleteComputeShader(shader)
-      }
-      depthShader = 0
-      integrateShader = 0
+      kernels.release()
       built = false
     }
 
@@ -187,6 +184,7 @@ public extension Akari
       { _ in
         makeTexture(width: width * 8, height: height * 8, internalFormat: GLint(GL_RGBA16F))
       }
+
       guard depthTexture != 0, !history.contains(0)
       else
       {
@@ -204,6 +202,7 @@ public extension Akari
       {
         gl.deleteTextures(count: 1, textures: &tex)
       }
+
       depthTexture = 0
       history = [0, 0]
       hasHistory = false

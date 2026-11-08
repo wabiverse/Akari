@@ -67,11 +67,13 @@ HdAkariLoadVolumeGrid(std::string const &path, std::string const &gridName, int 
         if (candidate && candidate->isType<openvdb::FloatGrid>()) { base = candidate; break; }
       }
     }
+
     file.close();
     grid = openvdb::gridPtrCast<openvdb::FloatGrid>(base);
   } catch (openvdb::Exception const &) {
     return nullptr;
   }
+
   if (!grid) return nullptr;
 
   const openvdb::CoordBBox box = grid->evalActiveVoxelBoundingBox();
@@ -98,6 +100,7 @@ HdAkariLoadVolumeGrid(std::string const &path, std::string const &gridName, int 
           out->voxels[(size_t(oz) * out->height + oy) * out->width + ox] += v;
         }
   }
+
   const float norm = 1.0f / float(stride * stride * stride);
   float peak = 0.0f;
   for (float &v : out->voxels) { v = std::max(v * norm, 0.0f); peak = std::max(peak, v); }

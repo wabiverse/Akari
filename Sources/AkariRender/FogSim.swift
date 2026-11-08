@@ -108,7 +108,40 @@ public extension Akari
     private var densCurrent = 0
     private var frame: Double?
     private var layoutKey: [Double] = []
-    private var kernels: [String: GLuint] = [:]
+    private enum Kernel: Akari.ComputeKernelName
+    {
+      case advect, curl, confine, divergence, jacobi, project, reset, resetDensity, export, densityPredict, densityCorrect
+      case exportVelocity, visibility
+
+      static let label = "fogsim"
+
+      var threadgroup: SIMD3<Int>
+      {
+        SIMD3(8, 8, 4)
+      }
+
+      var msl: String
+      {
+        switch self
+        {
+          case .advect: FogSim.advectMSL
+          case .curl: FogSim.curlMSL
+          case .confine: FogSim.confineMSL
+          case .divergence: FogSim.divergenceMSL
+          case .jacobi: FogSim.jacobiMSL
+          case .project: FogSim.projectMSL
+          case .reset: FogSim.resetMSL
+          case .resetDensity: FogSim.resetDensityMSL
+          case .export: FogSim.exportMSL
+          case .densityPredict: FogSim.densityPredictMSL
+          case .densityCorrect: FogSim.densityCorrectMSL
+          case .exportVelocity: FogSim.exportVelocityMSL
+          case .visibility: FogSim.visibilityMSL
+        }
+      }
+    }
+
+    private var kernels = Akari.ComputeKernels<Kernel>()
     private var failed = false
 
     public init() {}
@@ -132,6 +165,7 @@ public extension Akari
         isActive = false
         return
       }
+
       let key = [Double(first.boundsMin.x), Double(first.boundsMin.y), Double(first.boundsMin.z),
                  Double(first.boundsMax.x), Double(first.boundsMax.y), Double(first.boundsMax.z),
                  Double(first.resolution), first.startFrame, Double(first.substeps), first.zUp ? 1 : 0,
@@ -142,6 +176,7 @@ public extension Akari
         layoutKey = key
         frame = nil
       }
+
       let start = first.startFrame.rounded()
       let goal = max(target.rounded(), start)
       if frame == nil || goal < frame!
@@ -149,6 +184,7 @@ public extension Akari
         reset(frameAt(start), seconds: start / framesPerSecond)
         frame = start
       }
+
       let substeps = max(first.substeps, 1)
       let dt = Float(1 / (framesPerSecond * Double(substeps)))
       if let at = frame, goal - at > Double(first.catchUp), goal - at <= 48 { frame = goal - Double(first.catchUp) }
@@ -163,10 +199,12 @@ public extension Akari
           step(settings, dt: dt, seconds: time / framesPerSecond,
                disturbers: disturbersAt(time, 1 / Double(substeps)))
         }
+
         frame = next
         // a warm up of hundreds of frames goes to the GPU one frame at a time.
         if warmUp { if Int(next) % 8 == 0 { gl.finish() } else { gl.flush() } }
       }
+
       export()
       isActive = true
     }
@@ -174,26 +212,17 @@ public extension Akari
     private func prepareKernels() -> Bool
     {
       if !kernels.isEmpty { return true }
-      let sources = ["advect": Self.advectMSL, "curl": Self.curlMSL, "confine": Self.confineMSL,
-                     "divergence": Self.divergenceMSL, "jacobi": Self.jacobiMSL, "project": Self.projectMSL,
-                     "reset": Self.resetMSL, "resetDensity": Self.resetDensityMSL, "export": Self.exportMSL,
-                     "densityPredict": Self.densityPredictMSL, "densityCorrect": Self.densityCorrectMSL,
-                     "exportVelocity": Self.exportVelocityMSL, "visibility": Self.visibilityMSL]
-      var built: [String: GLuint] = [:]
-      for (name, msl) in sources
+      kernels = .precompile()
+      let failed = kernels.wait()
+      guard failed.isEmpty
+      else
       {
-        let kernel = gl.precompileComputeShader(name: "akari-fogsim-\(name)", glsl: "", msl: msl)
-        gl.setComputeShaderThreadgroupSize(kernel, x: 8, y: 8, z: 4)
-        built[name] = kernel
-      }
-      for (name, kernel) in built where kernel == 0 || gl.waitComputeShader(kernel) == 0
-      {
-        print("[akari] fog sim: kernel \(name) failed to compile")
-        built.values.filter { $0 != 0 }.forEach { gl.deleteComputeShader($0) }
-        failed = true
+        print("[akari] fog sim: kernels \(failed) failed to compile")
+        kernels.release()
+        self.failed = true
         return false
       }
-      kernels = built
+
       return true
     }
 
@@ -220,6 +249,23 @@ public extension Akari
       divergence = gl.createBuffer(usage: usage, sizeBytes: GLsizei(cells * 4))
       curl = gl.createBuffer(usage: usage, sizeBytes: GLsizei(cells * 16))
 
+      texture = makeVolume(GLint(GL_R16F), GLenum(GL_RED), size: densDims)
+      visibilityTexture = makeVolume(GLint(GL_R16F), GLenum(GL_RED), size: dims)
+      velocityTexture = makeVolume(GLint(GL_RGBA16F), GL_RGBA, size: dims)
+      print("[akari] fog sim: velocity \(dims.x)x\(dims.y)x\(dims.z) of \(cellSize) m, density \(densDims.x)x\(densDims.y)x\(densDims.z)")
+      return vel.allSatisfy { $0 != 0 } && texture != 0
+    }
+
+    private func grid(_ kernel: Akari.ComputeKernel, zUp: Bool, density: Bool = false)
+    {
+      let d = density ? densDims : dims
+      kernel.set(.grid, SIMD4<Float>(Float(d.x), Float(d.y), Float(d.z), density ? densCell : cellSize))
+      kernel.set(.origin, SIMD4<Float>(boundsMin, zUp ? 1 : 0))
+    }
+
+    private func makeVolume(_ internalFormat: GLint, _ format: GLenum, size: SIMD3<Int>) -> GLuint
+    {
+      var texture: GLuint = 0
       gl.genTextures(count: 1, textures: &texture)
       gl.bindTexture(target: GLenum(GL_TEXTURE_3D), texture: texture)
       for (pname, param) in [(GL_TEXTURE_MIN_FILTER, GL_LINEAR), (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
@@ -228,55 +274,18 @@ public extension Akari
       {
         gl.texParameter(target: GLenum(GL_TEXTURE_3D), pname: GLenum(pname), param: GLint(param))
       }
-      gl.texImage3D(target: GLenum(GL_TEXTURE_3D), level: 0, internalFormat: GLint(GL_R16F),
-                    width: GLsizei(densDims.x), height: GLsizei(densDims.y), depth: GLsizei(densDims.z), border: 0,
-                    format: GLenum(GL_RED), type: GLenum(GL_HALF_FLOAT), pixels: nil)
-      gl.genTextures(count: 1, textures: &visibilityTexture)
-      gl.bindTexture(target: GLenum(GL_TEXTURE_3D), texture: visibilityTexture)
-      for (pname, param) in [(GL_TEXTURE_MIN_FILTER, GL_LINEAR), (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
-                             (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE),
-                             (GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)]
-      {
-        gl.texParameter(target: GLenum(GL_TEXTURE_3D), pname: GLenum(pname), param: GLint(param))
-      }
-      gl.texImage3D(target: GLenum(GL_TEXTURE_3D), level: 0, internalFormat: GLint(GL_R16F),
-                    width: GLsizei(dims.x), height: GLsizei(dims.y), depth: GLsizei(dims.z), border: 0,
-                    format: GLenum(GL_RED), type: GLenum(GL_HALF_FLOAT), pixels: nil)
-      gl.genTextures(count: 1, textures: &velocityTexture)
-      gl.bindTexture(target: GLenum(GL_TEXTURE_3D), texture: velocityTexture)
-      for (pname, param) in [(GL_TEXTURE_MIN_FILTER, GL_LINEAR), (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
-                             (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE),
-                             (GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)]
-      {
-        gl.texParameter(target: GLenum(GL_TEXTURE_3D), pname: GLenum(pname), param: GLint(param))
-      }
-      gl.texImage3D(target: GLenum(GL_TEXTURE_3D), level: 0, internalFormat: GLint(GL_RGBA16F),
-                    width: GLsizei(dims.x), height: GLsizei(dims.y), depth: GLsizei(dims.z), border: 0,
-                    format: GL_RGBA, type: GLenum(GL_HALF_FLOAT), pixels: nil)
-      print("[akari] fog sim: velocity \(dims.x)x\(dims.y)x\(dims.z) of \(cellSize) m, density \(densDims.x)x\(densDims.y)x\(densDims.z)")
-      return vel.allSatisfy { $0 != 0 } && texture != 0
+
+      gl.texImage3D(target: GLenum(GL_TEXTURE_3D), level: 0, internalFormat: internalFormat,
+                    width: GLsizei(size.x), height: GLsizei(size.y), depth: GLsizei(size.z), border: 0,
+                    format: format, type: GLenum(GL_HALF_FLOAT), pixels: nil)
+
+      return texture
     }
 
-    private func grid(_ kernel: GLuint, zUp: Bool, density: Bool = false)
+    private func dispatch(_ kernel: Akari.ComputeKernel, density: Bool = false)
     {
       let d = density ? densDims : dims
-      var g = SIMD4<Float>(Float(d.x), Float(d.y), Float(d.z), density ? densCell : cellSize)
-      var o = SIMD4<Float>(boundsMin, zUp ? 1 : 0)
-      gl.setComputeShaderUniform(kernel, name: "grid", type: GL_FLOAT_VEC4, data: &g)
-      gl.setComputeShaderUniform(kernel, name: "origin", type: GL_FLOAT_VEC4, data: &o)
-    }
-
-    private func vector(_ kernel: GLuint, _ name: String, _ value: SIMD4<Float>)
-    {
-      var v = value
-      gl.setComputeShaderUniform(kernel, name: name, type: GL_FLOAT_VEC4, data: &v)
-    }
-
-    private func dispatch(_ kernel: GLuint, density: Bool = false)
-    {
-      let d = density ? densDims : dims
-      gl.dispatchCompute(kernel, groupsX: GLuint((d.x + 7) / 8), groupsY: GLuint((d.y + 7) / 8),
-                         groupsZ: GLuint((d.z + 3) / 4))
+      kernel.dispatch((d.x + 7) / 8, (d.y + 7) / 8, (d.z + 3) / 4)
     }
 
     private func layer(_ s: Frame) -> SIMD4<Float>
@@ -286,140 +295,131 @@ public extension Akari
 
     private func reset(_ s: Frame, seconds: Double)
     {
-      guard let k = kernels["reset"] else { return }
+      let k = kernels[.reset]
       current = 0
       grid(k, zUp: s.zUp)
-      vector(k, "step", SIMD4(0, Float(seconds), 0, 0))
-      vector(k, "wind", SIMD4(s.wind, 0.3))
-      vector(k, "layer", layer(s))
-      vector(k, "noise", SIMD4(s.noiseAmount, s.noiseScale, 0, 0))
-      gl.setComputeShaderBuffer(k, binding: 0, buffer: vel[0])
-      gl.setComputeShaderBuffer(k, binding: 2, buffer: pressure[0])
+      k.set(.step, SIMD4(0, Float(seconds), 0, 0))
+      k.set(.wind, SIMD4(s.wind, 0.3))
+      k.set(.layer, layer(s))
+      k.set(.noise, SIMD4(s.noiseAmount, s.noiseScale, 0, 0))
+      k.bind(vel[0])
+      k.bind(pressure[0], at: 2)
       dispatch(k)
-      guard let kd = kernels["resetDensity"] else { return }
+      let kd = kernels[.resetDensity]
       grid(kd, zUp: s.zUp, density: true)
-      vector(kd, "step", SIMD4(0, Float(seconds), 0, 0))
-      vector(kd, "wind", SIMD4(s.wind, 0.3))
-      vector(kd, "layer", layer(s))
-      vector(kd, "noise", SIMD4(s.noiseAmount, s.noiseScale, 0, 0))
-      gl.setComputeShaderBuffer(kd, binding: 1, buffer: dens[0])
+      kd.set(.step, SIMD4(0, Float(seconds), 0, 0))
+      kd.set(.wind, SIMD4(s.wind, 0.3))
+      kd.set(.layer, layer(s))
+      kd.set(.noise, SIMD4(s.noiseAmount, s.noiseScale, 0, 0))
+      kd.bind(dens[0], at: 1)
       dispatch(kd, density: true)
       densCurrent = 0
     }
 
     private func step(_ s: Frame, dt: Float, seconds: Double, disturbers: [Float])
     {
-      guard let advect = kernels["advect"], let curlK = kernels["curl"], let confine = kernels["confine"],
-            let div = kernels["divergence"], let jacobi = kernels["jacobi"], let project = kernels["project"]
-      else { return }
+      let advect = kernels[.advect], curlK = kernels[.curl], confine = kernels[.confine]
+      let div = kernels[.divergence], jacobi = kernels[.jacobi], project = kernels[.project]
       let a = current, b = 1 - current
 
       grid(advect, zUp: s.zUp)
       let count = min(disturbers.count / 8, Self.maxDisturbers)
-      vector(advect, "step", SIMD4(dt, Float(seconds), Float(count), 0))
-      vector(advect, "wind", SIMD4(s.wind, 0.3))
-      vector(advect, "layer", layer(s))
-      vector(advect, "noise", SIMD4(s.noiseAmount, s.noiseScale, 0, 0))
-      vector(advect, "sim", SIMD4(s.vorticity, s.dissipation, s.settle, s.damping))
+      advect.set(.step, SIMD4(dt, Float(seconds), Float(count), 0))
+      advect.set(.wind, SIMD4(s.wind, 0.3))
+      advect.set(.layer, layer(s))
+      advect.set(.noise, SIMD4(s.noiseAmount, s.noiseScale, 0, 0))
+      advect.set(.sim, SIMD4(s.vorticity, s.dissipation, s.settle, s.damping))
       // uniforms pack in the order they're first set, so the sixteen slots fill `d[16]`.
       for slot in 0 ..< Self.maxDisturbers * 2
       {
         let o = slot * 4
         let value = o + 3 < count * 8
           ? SIMD4(disturbers[o], disturbers[o + 1], disturbers[o + 2], disturbers[o + 3]) : SIMD4<Float>(repeating: 0)
-        vector(advect, "d\(slot)", value)
+        advect.set(.d, index: slot, value)
       }
-      gl.setComputeShaderBuffer(advect, binding: 0, buffer: vel[a])
-      gl.setComputeShaderBuffer(advect, binding: 2, buffer: vel[b])
+
+      advect.bind(vel[a])
+      advect.bind(vel[b], at: 2)
       dispatch(advect)
 
       grid(curlK, zUp: s.zUp)
-      gl.setComputeShaderBuffer(curlK, binding: 0, buffer: vel[b])
-      gl.setComputeShaderBuffer(curlK, binding: 1, buffer: curl)
+      curlK.bind(vel[b], curl)
       dispatch(curlK)
 
       grid(confine, zUp: s.zUp)
-      vector(confine, "step", SIMD4(dt, s.vorticity, 0, 0))
-      gl.setComputeShaderBuffer(confine, binding: 0, buffer: curl)
-      gl.setComputeShaderBuffer(confine, binding: 1, buffer: vel[b])
+      confine.set(.step, SIMD4(dt, s.vorticity, 0, 0))
+      confine.bind(curl, vel[b])
       dispatch(confine)
 
       grid(div, zUp: s.zUp)
-      gl.setComputeShaderBuffer(div, binding: 0, buffer: vel[b])
-      gl.setComputeShaderBuffer(div, binding: 1, buffer: divergence)
+      div.bind(vel[b], divergence)
       dispatch(div)
 
       grid(jacobi, zUp: s.zUp)
       for i in 0 ..< s.pressureIterations
       {
-        gl.setComputeShaderBuffer(jacobi, binding: 0, buffer: pressure[i % 2])
-        gl.setComputeShaderBuffer(jacobi, binding: 1, buffer: divergence)
-        gl.setComputeShaderBuffer(jacobi, binding: 2, buffer: pressure[1 - i % 2])
+        jacobi.bind(pressure[i % 2], divergence, pressure[1 - i % 2])
         dispatch(jacobi)
       }
 
       grid(project, zUp: s.zUp)
-      gl.setComputeShaderBuffer(project, binding: 0, buffer: pressure[s.pressureIterations % 2])
-      gl.setComputeShaderBuffer(project, binding: 1, buffer: vel[b])
+      project.bind(pressure[s.pressureIterations % 2], vel[b])
       dispatch(project)
       current = b
 
-      guard let predict = kernels["densityPredict"], let correct = kernels["densityCorrect"] else { return }
+      let predict = kernels[.densityPredict], correct = kernels[.densityCorrect]
       let vgrid = SIMD4<Float>(Float(dims.x), Float(dims.y), Float(dims.z), cellSize)
       let da = densCurrent, db = 1 - densCurrent
       grid(predict, zUp: s.zUp, density: true)
-      vector(predict, "vgrid", vgrid)
-      vector(predict, "step", SIMD4(dt, Float(seconds), 0, 0))
-      vector(predict, "sim", SIMD4(s.vorticity, s.dissipation, s.settle, s.damping))
-      gl.setComputeShaderBuffer(predict, binding: 0, buffer: vel[b])
-      gl.setComputeShaderBuffer(predict, binding: 1, buffer: dens[da])
-      gl.setComputeShaderBuffer(predict, binding: 2, buffer: hat)
+      predict.set(.vgrid, vgrid)
+      predict.set(.step, SIMD4(dt, Float(seconds), 0, 0))
+      predict.set(.sim, SIMD4(s.vorticity, s.dissipation, s.settle, s.damping))
+      predict.bind(vel[b], dens[da], hat)
       dispatch(predict, density: true)
 
       grid(correct, zUp: s.zUp, density: true)
-      vector(correct, "vgrid", vgrid)
-      vector(correct, "step", SIMD4(dt, Float(seconds), 0, 0))
-      vector(correct, "sim", SIMD4(s.vorticity, s.dissipation, s.settle, s.damping))
-      vector(correct, "wind", SIMD4(s.wind, 0.3))
-      vector(correct, "layer", layer(s))
-      vector(correct, "noise", SIMD4(s.noiseAmount, s.noiseScale, 0, 0))
-      gl.setComputeShaderBuffer(correct, binding: 0, buffer: vel[b])
-      gl.setComputeShaderBuffer(correct, binding: 1, buffer: dens[da])
-      gl.setComputeShaderBuffer(correct, binding: 2, buffer: hat)
-      gl.setComputeShaderBuffer(correct, binding: 3, buffer: dens[db])
+      correct.set(.vgrid, vgrid)
+      correct.set(.step, SIMD4(dt, Float(seconds), 0, 0))
+      correct.set(.sim, SIMD4(s.vorticity, s.dissipation, s.settle, s.damping))
+      correct.set(.wind, SIMD4(s.wind, 0.3))
+      correct.set(.layer, layer(s))
+      correct.set(.noise, SIMD4(s.noiseAmount, s.noiseScale, 0, 0))
+      correct.bind(vel[b], dens[da], hat, dens[db])
       dispatch(correct, density: true)
       densCurrent = db
     }
 
     private func export()
     {
-      guard let k = kernels["export"] else { return }
+      let k = kernels[.export]
       grid(k, zUp: true, density: true)
-      gl.setComputeShaderBuffer(k, binding: 0, buffer: dens[densCurrent])
-      gl.setComputeShaderImage(k, index: 0, texture: texture, format: GLenum(GL_R16F), level: 0)
+      k.bind(dens[densCurrent])
+      k.image(texture, at: 0, format: GLenum(GL_R16F))
       dispatch(k, density: true)
-      guard let kv = kernels["exportVelocity"] else { return }
+      let kv = kernels[.exportVelocity]
       grid(kv, zUp: layoutKey.last == 1)
-      gl.setComputeShaderBuffer(kv, binding: 0, buffer: vel[current])
-      gl.setComputeShaderImage(kv, index: 0, texture: velocityTexture, format: GLenum(GL_RGBA16F), level: 0)
+      kv.bind(vel[current])
+      kv.image(velocityTexture, at: 0, format: GLenum(GL_RGBA16F))
       dispatch(kv)
     }
 
     /// The fog's shadowing of up to four `lights` at their positions this frame.
     public func computeVisibility(lights: [Akari.Lux.PointLight])
     {
-      guard isActive, visibilityTexture != 0, let k = kernels["visibility"] else { return }
+      guard isActive, visibilityTexture != 0 else { return }
+      let k = kernels[.visibility]
       grid(k, zUp: layoutKey.last == 1)
-      vector(k, "dgrid", SIMD4(Float(densDims.x), Float(densDims.y), Float(densDims.z), densCell))
+      k.set(.dgrid, SIMD4(Float(densDims.x), Float(densDims.y), Float(densDims.z), densCell))
       for slot in 0 ..< 4
       {
         let light = slot < lights.count ? lights[slot] : nil
-        vector(k, "l\(slot * 2)", SIMD4(light?.position ?? .zero, light.map { $0.intensity * $0.color.max() } ?? 0))
-        vector(k, "l\(slot * 2 + 1)", SIMD4(light?.color ?? .zero, light?.radius ?? 1))
+        k.set(.l, index: slot * 2, SIMD4(light?.position ?? .zero, light.map { $0.intensity * $0.color.max() } ?? 0))
+        k.set(.l, index: slot * 2 + 1, SIMD4(light?.color ?? .zero, light?.radius ?? 1))
       }
-      vector(k, "count", SIMD4(Float(min(lights.count, 4)), 0, 0, 0))
-      gl.setComputeShaderBuffer(k, binding: 0, buffer: dens[densCurrent])
-      gl.setComputeShaderImage(k, index: 0, texture: visibilityTexture, format: GLenum(GL_R16F), level: 0)
+
+      k.set(.count, SIMD4(Float(min(lights.count, 4)), 0, 0, 0))
+      k.bind(dens[densCurrent])
+      k.image(visibilityTexture, at: 0, format: GLenum(GL_R16F))
       dispatch(k)
     }
 
@@ -429,6 +429,7 @@ public extension Akari
       {
         gl.deleteBuffer(buffer)
       }
+
       vel = [0, 0]; dens = [0, 0]; pressure = [0, 0]; divergence = 0; curl = 0; hat = 0
       if texture != 0 { gl.deleteTextures(count: 1, textures: &texture); texture = 0 }
       if velocityTexture != 0 { gl.deleteTextures(count: 1, textures: &velocityTexture); velocityTexture = 0 }
@@ -438,8 +439,7 @@ public extension Akari
     public func release()
     {
       releaseBuffers()
-      kernels.values.forEach { gl.deleteComputeShader($0) }
-      kernels = [:]
+      kernels.release()
       layoutKey = []
       frame = nil
       isActive = false

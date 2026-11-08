@@ -125,13 +125,14 @@ extension Akari.ShadowAtlas
                                        constant float4x4* instanceXf [[buffer(1)]],
                                        constant U& u [[buffer(2)]],
                                        constant LabGLBuiltins& B [[buffer(3)]],
+                                       device const uint* instanceIndex [[buffer(10)]],
                                        uint instance [[instance_id]],
                                                  uint base [[base_instance]])
     {
       VertOut out;
       out.uv = in.a_texcoord;
       out.primId = in.a_color.r;
-      out.position = B.u_modelviewProjection * (instanceXf[instance - base] * in.a_position);
+      out.position = B.u_modelviewProjection * (instanceXf[instanceIndex[instance - base]] * in.a_position);
       out.position.z = (out.position.z + out.position.w) * 0.5;
       out.view = uint(u.u_viewBase);
       out.clip[0] = out.clip[1] = out.clip[2] = out.clip[3] = 1.0;
@@ -157,13 +158,15 @@ extension Akari.ShadowAtlas
 
     // Amplified instanced draws read the instance matrices from buffer(1),
     // which instanced draws always bind, and the per view matrices from a
-    // buffer the shadow pass uploads at buffer(4).
+    // buffer the shadow pass uploads at buffer(7). LabGL's culled replay of
+    // the static capture rebinds buffer(4) to its model matrix mid pass.
     vertex VertOut vert_amplified_instanced_main(VertIn in [[stage_in]],
                                                  constant float4x4* instanceXf [[buffer(1)]],
                                                  constant U& u [[buffer(2)]],
                                                  constant LabGLBuiltins& B [[buffer(3)]],
-                                                 const device float4x4* viewsXf [[buffer(4)]],
                                                  const device uint* render_rect [[buffer(5)]],
+                                                 const device float4x4* viewsXf [[buffer(7)]],
+                                                 device const uint* instanceIndex [[buffer(10)]],
                                                  ushort ampId [[amplification_id]],
                                                  uint instance [[instance_id]],
                                                  uint base [[base_instance]])
@@ -172,7 +175,7 @@ extension Akari.ShadowAtlas
       out.uv = in.a_texcoord;
       out.primId = in.a_color.r;
       out.view = uint(u.u_viewBase) + uint(ampId);
-      out.position = viewsXf[out.view] * (instanceXf[instance - base] * in.a_position);
+      out.position = viewsXf[out.view] * (instanceXf[instanceIndex[instance - base]] * in.a_position);
       clipToRect(out, render_rect, out.view);
       out.position.z = (out.position.z + out.position.w) * 0.5;
       return out;

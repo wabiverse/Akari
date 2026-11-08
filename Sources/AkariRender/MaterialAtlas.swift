@@ -127,6 +127,7 @@ public extension Akari
         {
           constantsRows *= 2
         }
+
         gl.genTextures(count: 1, textures: &constantsTexture)
         gl.bindTexture(target: GL_TEXTURE_2D, texture: constantsTexture)
         gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_NEAREST))
@@ -137,6 +138,7 @@ public extension Akari
         range.first = 0
         range.count = Int32(count)
       }
+
       guard range.count > 0 else { return constantsTexture }
 
       // upload full rows if any part changed, pad any extra space with zeros.
@@ -151,6 +153,7 @@ public extension Akari
       {
         atlas.CopyConstants(Int32(lineFirst), Int32(lineRows), $0.baseAddress!)
       }
+
       gl.bindTexture(target: GL_TEXTURE_2D, texture: constantsTexture)
       gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: GLint(firstLine),
                        width: GLsizei(lineTexels), height: GLsizei(lineCount),
@@ -169,6 +172,7 @@ public extension Akari
         gl.deleteTextures(count: 1, textures: &texture)
         texture = 0
       }
+
       if uploadCompressed(&texture, pixels: pixels, width: Int(width), height: Int(height), rects: rects) { return }
       if texture != 0
       {
@@ -184,10 +188,12 @@ public extension Akari
             let start = ((Int(rect.y) + row) * Int(width) + Int(rect.x)) * 4
             region.append(contentsOf: UnsafeBufferPointer(start: pixels + start, count: size * 4))
           }
+
           gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: rect.x, yOffset: rect.y,
                            width: rect.size, height: rect.size, format: GL_RGBA, type: GL_UNSIGNED_BYTE,
                            pixels: region)
         }
+
         gl.generateMipmap(GL_TEXTURE_2D)
         return
       }
@@ -230,6 +236,7 @@ public extension Akari
                    x: Int(rect.x), y: Int(rect.y), size: (Int(rect.size), Int(rect.size)), late: true)
           }
         }
+
         return true
       }
 
@@ -248,6 +255,7 @@ public extension Akari
         gl.deleteTextures(count: 1, textures: &tex)
         return false
       }
+
       texture = tex
       compressedTextures.insert(tex)
       for level in 0 ..< Self.levels
@@ -255,6 +263,7 @@ public extension Akari
         encode(tex, pixels, width: width, height: height, level: level, x: 0, y: 0, size: (width, height),
                late: false)
       }
+
       return true
     }
 
@@ -278,6 +287,7 @@ public extension Akari
           BC7.encode(pixels + (y0 * width + x0) * 4, stride: width, width: w, height: h, into: out.baseAddress!)
           return
         }
+
         var mip = [UInt8](repeating: 0, count: w * h * 4)
         if late
         {
@@ -300,11 +310,13 @@ public extension Akari
                             into: dst.baseAddress!)
           }
         }
+
         mip.withUnsafeBufferPointer
         {
           BC7.encode($0.baseAddress!, stride: w, width: w, height: h, into: out.baseAddress!)
         }
       }
+
       _ = labgl.textureSubImageBC7(texture, level: Int32(level), x: Int32(x0), y: Int32(y0),
                                    width: Int32(w), height: Int32(h), blocks: blocks)
     }
@@ -329,6 +341,7 @@ public extension Akari
           }
         }
       }
+
       let rx0 = max(rect.0, sx), rx1 = min(rect.0 + rect.2, sx + sw)
       let ry0 = max(rect.1, sy), ry1 = min(rect.1 + rect.3, sy + sh)
       guard rx1 > rx0 else { return source }
@@ -340,6 +353,7 @@ public extension Akari
             .update(from: pixels + (row * width + rx0) * 4, count: (rx1 - rx0) * 4)
         }
       }
+
       return source
     }
 
@@ -366,6 +380,7 @@ public extension Akari
               p += 4
             }
           }
+
           let avg = (sum &+ count / 2) / count
           let d = dst + (row * w + col) * 4
           d[0] = UInt8(avg.x)

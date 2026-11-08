@@ -76,7 +76,7 @@ public extension Akari.Color
     /// Drago's logarithmic mapping.
     case drago
 
-    /// Durand–Dorsey contrast-preserving operator.
+    /// Durand and Dorsey's contrast preserving operator.
     case durandDorsey
 
     /// Exponential exposure curve.
@@ -97,7 +97,7 @@ public extension Akari.Color
     /// Hable's updated (linear-gamma) fit.
     case hableUpdated
 
-    /// Hejl–Burgess–Dawson filmic fit.
+    /// Hejl and Burgess Dawson's filmic fit.
     case hejlBurgessDawson
 
     /// Logarithmic exposure curve.
@@ -124,7 +124,7 @@ public extension Akari.Color
     /// Schlick's rational approximation.
     case schlick
 
-    /// Tumblin–Rushmeier operator.
+    /// Tumblin and Rushmeier's operator.
     case tumblinRushmeier
 
     /// Uchimura's tone curve.
@@ -216,6 +216,22 @@ extension Akari.Color.ViewTransform: CustomStringConvertible
       case .tumblinRushmeier: "Tumblin–Rushmeier"
       case .uchimura: "Uchimura"
       case .ward: "Ward"
+    }
+  }
+}
+
+public extension Akari.Color.ViewTransform
+{
+  /// From a view transform name, as a stage's color management carries it.
+  init?(transformName: String)
+  {
+    switch transformName
+    {
+      case "AgX": self = .agx
+      case "Standard": self = .clamping
+      case "Filmic": self = .filmic
+      case "Khronos PBR Neutral": self = .khronosPBRNeutral
+      default: return nil
     }
   }
 }

@@ -79,7 +79,8 @@ PXR_NAMESPACE_OPEN_SCOPE
 class HdRenderIndex;
 
 /// The most instances one prototype draws from one instancer, nested
-/// instancers composed. Past it the instances are sampled evenly.
+/// instancers composed, whatever the triangle budget works out to. It only
+/// bounds the allocation a very small prototype would otherwise ask for.
 inline constexpr size_t HdAkariMaxInstances = size_t(1) << 14;
 
 /// A prototype's instances, the matrices taking its own transformed points to
@@ -126,6 +127,7 @@ private:
     uint64_t generation = 0;
     uint64_t parentKey = 0;
   };
+
   std::unordered_map<SdfPath, Composed, SdfPath::Hash> _sets;
 };
 

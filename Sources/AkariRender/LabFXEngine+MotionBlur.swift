@@ -61,9 +61,9 @@ extension Akari.LabFXEngine
     var lastFrame = 0.0
   }
 
-  static let motionBlurPasses = ["motion tiles 8", "motion tiles", "motion neighbors", "motion blur", "motion blur apply"]
+  static let motionBlurPasses: [Pass] = [.motionTiles8, .motionTiles, .motionNeighbors, .motionBlur, .motionBlurApply]
   /// While a final render integrates the shutter, each sample is blurred over its own slice before the samples average.
-  static let motionBlurSamplePasses = ["motion tiles pre 8", "motion tiles pre", "motion neighbors pre", "motion blur pre", "motion blur pre apply"]
+  static let motionBlurSamplePasses: [Pass] = [.motionTilesPre8, .motionTilesPre, .motionNeighborsPre, .motionBlurPre, .motionBlurPreApply]
 
   /// The widest blur in output pixels, also the size of a tile of the motion search.
   static let motionBlurRadius = 96
@@ -100,15 +100,16 @@ extension Akari.LabFXEngine
   {
     motionBlur.tiles = SIMD2((width + Self.motionBlurRadius - 1) / Self.motionBlurRadius,
                              (height + Self.motionBlurRadius - 1) / Self.motionBlurRadius)
-    for name in ["motionTiles", "motionNeighbors"]
+    for buffer in [.motionTiles, .motionNeighbors] as [Buffer]
     {
-      runtime.stageBufferSize(name, width: Int32(motionBlur.tiles.x), height: Int32(motionBlur.tiles.y))
+      runtime.stageBufferSize(buffer, width: Int32(motionBlur.tiles.x), height: Int32(motionBlur.tiles.y))
     }
-    runtime.stageBufferSize("motionTiles8", width: Int32((width + 7) / 8), height: Int32((height + 7) / 8))
-    runtime.stageBufferSize("dofTiles8", width: Int32((width + 7) / 8), height: Int32((height + 7) / 8))
-    for name in ["dofTiles", "dofNeighbors"]
+
+    runtime.stageBufferSize(.motionTiles8, width: Int32((width + 7) / 8), height: Int32((height + 7) / 8))
+    runtime.stageBufferSize(.dofTiles8, width: Int32((width + 7) / 8), height: Int32((height + 7) / 8))
+    for buffer in [.dofTiles, .dofNeighbors] as [Buffer]
     {
-      runtime.stageBufferSize(name, width: Int32((width + 47) / 48), height: Int32((height + 47) / 48))
+      runtime.stageBufferSize(buffer, width: Int32((width + 47) / 48), height: Int32((height + 47) / 48))
     }
   }
 
@@ -125,8 +126,8 @@ extension Akari.LabFXEngine
     let frames = elapsed > 0 && elapsed < 1 ? max(elapsed * motionBlur.frameRate, 1) : 1
     // each sample reaches a little past its slice, so neighbors overlap rather than leave seams.
     let scale = motionBlur.subframes > 0 ? 1.35 : interval / Float(frames)
-    setVector("u_motionBlur", SIMD4(scale, Float(Self.motionBlurRadius), Float(motionBlur.tiles.x), Float(motionBlur.tiles.y)))
-    setVector("u_motionSize", SIMD4(Float(lastWidth), Float(lastHeight), 1 / Float(max(lastWidth, 1)), 1 / Float(max(lastHeight, 1))))
+    setVector(.motionBlur, SIMD4(scale, Float(Self.motionBlurRadius), Float(motionBlur.tiles.x), Float(motionBlur.tiles.y)))
+    setVector(.motionSize, SIMD4(Float(sizes.target.width), Float(sizes.target.height), 1 / Float(max(sizes.target.width, 1)), 1 / Float(max(sizes.target.height, 1))))
     motionBlur.thisFrame = true
   }
 
@@ -139,11 +140,13 @@ extension Akari.LabFXEngine
       setPasses(Self.motionBlurPasses, active: afterward)
       motionBlur.passesActive = afterward
     }
+
     if perSample != motionBlur.samplePassesActive
     {
       setPasses(Self.motionBlurSamplePasses, active: perSample)
       motionBlur.samplePassesActive = perSample
     }
+
     motionBlur.thisFrame = false
   }
 }

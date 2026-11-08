@@ -64,18 +64,19 @@ extension Akari.LabFXEngine
     let revision = scene.StyleRevision()
     let maxPrimId = Int(geometry.primIds.values.max() ?? 0)
     let capacity = (maxPrimId / Self.stylePrimsPerRow + 1) * Self.stylePrimsPerRow
-    guard revision != styles.revision || capacity > styles.capacity || geometry.transparent != styles.transparent
-      || geometry.emitters != styles.emitters || geometry.opacity != styles.opacity
+    guard revision != styles.revision || capacity > styles.capacity || geometry.flags.transparent != styles.transparent
+      || geometry.flags.emitters != styles.emitters || geometry.flags.opacity != styles.opacity
     else
     {
       bindStyles()
       return styles.assembling
     }
+
     styles.revision = revision
     styles.capacity = capacity
-    styles.transparent = geometry.transparent
-    styles.emitters = geometry.emitters
-    styles.opacity = geometry.opacity
+    styles.transparent = geometry.flags.transparent
+    styles.emitters = geometry.flags.emitters
+    styles.opacity = geometry.flags.opacity
 
     let snapshot = scene.StyleSnapshot()
     let defaults: [Float] = [5, 1, 0, 0.04, 0, 0, 0, -1] + [Float](repeating: 0, count: 24)
@@ -87,18 +88,22 @@ extension Akari.LabFXEngine
         texels[i * 32 + k] = defaults[k]
       }
     }
-    for id in geometry.transparent where id >= 0 && Int(id) < capacity
+
+    for id in geometry.flags.transparent where id >= 0 && Int(id) < capacity
     {
       texels[Int(id) * 32 + 17] = 1
     }
-    for id in geometry.emitters where id >= 0 && Int(id) < capacity
+
+    for id in geometry.flags.emitters where id >= 0 && Int(id) < capacity
     {
       texels[Int(id) * 32 + 18] = 1
     }
-    for (id, opacity) in geometry.opacity where id >= 0 && Int(id) < capacity
+
+    for (id, opacity) in geometry.flags.opacity where id >= 0 && Int(id) < capacity
     {
       texels[Int(id) * 32 + 19] = opacity
     }
+
     var styled = Set<Int32>()
     var assembly: [Int32: SIMD4<Float>] = [:]
     var spacing: [Int32: Float] = [:]
@@ -114,24 +119,28 @@ extension Akari.LabFXEngine
       {
         texels[Int(style.primId) * 32 + k] = values[k]
       }
+
       styled.insert(style.primId)
       assembly[style.primId] = SIMD4(style.assemble, style.centerX, style.centerY, style.centerZ)
       sizes[style.primId] = style.hasCenter ? style.size : -style.size
       if style.wireSpacing > 0 { spacing[style.primId] = style.wireSpacing }
     }
-    if styled != geometry.styled
+
+    if styled != geometry.flags.styled
     {
-      geometry.styled = styled
-      geometry.restyled = true
+      geometry.flags.styled = styled
+      geometry.record.restyled = true
     }
+
     geometry.deformer.assembly = assembly
     geometry.deformer.assemblySize = sizes
     if spacing != geometry.deformer.wireSpacing
     {
       geometry.deformer.wireSpacing = spacing
-      geometry.restyled = true
+      geometry.record.restyled = true
       geometry.deformer.relayout = true
     }
+
     styles.assembling = assembly.values.contains { $0.x < 0.9999 }
 
     if styles.texture == 0 { gl.genTextures(count: 1, textures: &styles.texture) }
@@ -147,7 +156,7 @@ extension Akari.LabFXEngine
 
   private func bindStyles()
   {
-    setSampler("u_primStyle", styles.texture)
+    setSampler(.primStyle, styles.texture)
     shadowAtlas.styles = styles.texture
   }
 }

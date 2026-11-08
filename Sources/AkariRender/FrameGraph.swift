@@ -118,6 +118,7 @@ public extension Akari
         camera.optics.zfar = abs(b / (a + 1))
         camera.optics.focal_length = camera.sensor.focalLength(verticalFOV: lc_radians(2 * atan(1 / projection[1, 1])))
       }
+
       return camera
     }
 
@@ -130,6 +131,7 @@ public extension Akari
         camera.setClippingPlanes(minNear: camera.optics.znear, maxFar: camera.optics.zfar,
                                  bound1: lc_v3f(bounds.min), bound2: lc_v3f(bounds.max))
       }
+
       return (camera.optics.znear, camera.optics.zfar)
     }
 

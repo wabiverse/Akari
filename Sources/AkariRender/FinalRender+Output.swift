@@ -113,6 +113,7 @@ public extension Akari.FinalRender
         case .rgba8Unorm, .rgba8Unorm_srgb, .bgra8Unorm, .bgra8Unorm_srgb: bytesPerPixel = 4
         default: return nil
       }
+
       let bytesPerRow = width * bytesPerPixel
 
       guard
@@ -155,6 +156,7 @@ public extension Akari.FinalRender
               rgb = (Float(p[0]) / 255, Float(p[1]) / 255, Float(p[2]) / 255)
               if swapsRedBlue { rgb = (rgb.2, rgb.1, rgb.0) }
           }
+
           let o = (y * width + x) * 4
           let channels = [rgb.0, rgb.1, rgb.2]
           for c in 0 ..< 3
@@ -286,6 +288,7 @@ public extension Akari.FinalRender
         {
           throw OutputError.movie(writer.error?.localizedDescription ?? "could not start writing")
         }
+
         writer.startSession(atSourceTime: .zero)
         reader?.startReading()
       }
@@ -305,6 +308,7 @@ public extension Akari.FinalRender
           box.track = tracks?.first
           loaded.signal()
         }
+
         loaded.wait()
         guard let track = box.track else { return }
 
@@ -378,6 +382,7 @@ public extension Akari.FinalRender
             }
           }
         }
+
         CVPixelBufferUnlockBaseAddress(pixels, [])
 
         guard adaptor.append(pixels, withPresentationTime: time(of: index))
@@ -385,6 +390,7 @@ public extension Akari.FinalRender
         {
           throw OutputError.movie(writer.error?.localizedDescription ?? "could not append frame \(index)")
         }
+
         frames = index + 1
         pumpAudio(until: time(of: frames))
       }
@@ -401,6 +407,7 @@ public extension Akari.FinalRender
             finishAudio()
             return
           }
+
           pendingAudio = nil
           guard let buffer = Self.trimmed(next, from: audioStart) else { continue }
           let start = CMSampleBufferGetPresentationTimeStamp(buffer) + audioShift
@@ -409,6 +416,7 @@ public extension Akari.FinalRender
             pendingAudio = buffer
             return
           }
+
           if let shifted = Self.retimed(buffer, by: audioShift)
           {
             audio.append(shifted)
@@ -452,6 +460,7 @@ public extension Akari.FinalRender
           timing[i].presentationTimeStamp = timing[i].presentationTimeStamp + shift
           timing[i].decodeTimeStamp = .invalid
         }
+
         var out: CMSampleBuffer?
         CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: buffer, sampleTimingEntryCount: count,
                                               sampleTimingArray: &timing, sampleBufferOut: &out)
@@ -469,6 +478,7 @@ public extension Akari.FinalRender
           if pendingAudio != nil { finishAudio() }
           else if audio != nil { Thread.sleep(forTimeInterval: 0.002) }
         }
+
         writer.endSession(atSourceTime: end)
 
         let done = DispatchSemaphore(value: 0)

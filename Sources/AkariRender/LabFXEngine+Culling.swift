@@ -49,10 +49,7 @@ extension Akari.LabFXEngine
   /// doesn't hide.
   struct CameraCull
   {
-    var kernel: GLuint = 0
-    var lateKernel: GLuint = 0
-    var hzbFirstKernel: GLuint = 0
-    var hzbReduceKernel: GLuint = 0
+    var kernels = Akari.ComputeKernels<CullKernel>()
     var bounds: GLuint = 0
     var visibility: GLuint = 0
     var lateVisibility: GLuint = 0
@@ -71,6 +68,40 @@ extension Akari.LabFXEngine
     var levelSize = SIMD2<Int>(0, 0)
     var viewProjection = Akari.Matrix4.identity
     var perspective = false
+  }
+
+  enum CullKernel: Akari.ComputeKernelName
+  {
+    case early, late, hzbFirst, hzbReduce
+
+    static let label = "camera-cull"
+
+    var glsl: String
+    {
+      switch self
+      {
+        case .early: cameraCullGLSL
+        case .late: lateCullGLSL
+        case .hzbFirst: hzbFirstGLSL
+        case .hzbReduce: hzbReduceGLSL
+      }
+    }
+
+    var msl: String
+    {
+      switch self
+      {
+        case .early: cameraCullMSL
+        case .late: lateCullMSL
+        case .hzbFirst: hzbFirstMSL
+        case .hzbReduce: hzbReduceMSL
+      }
+    }
+
+    var threadgroup: SIMD3<Int>
+    {
+      self == .early || self == .late ? SIMD3(64, 1, 1) : SIMD3(8, 8, 1)
+    }
   }
 
   /// Camera culled replay slots, the shadows take the ones above.
@@ -338,37 +369,47 @@ extension Akari.LabFXEngine
   func cullStaticGeometry(projection: Akari.Matrix4, view: Akari.Matrix4)
   {
     let viewProjection = projection * view
+    labgl.captureInstanceCullReuse(Akari.LiveInstances.isEmpty ? 1 : 0)
     geometry.cameraCull.viewProjection = viewProjection
     geometry.cameraCull.perspective = projection[2, 3] < -0.5
     geometry.cameraCull.encoded = encodeCameraCull(viewProjection)
-    runtime.setMeshCaptureCulledSlot("mesh-static", slot: geometry.cameraCull.encoded ? Self.cameraCullSlot : -1)
-    geometry.instancesCulled = cullInstances(viewProjection, pixelScale: projection[1, 1] * Float(renderHeight) * 0.5)
+    runtime.setMeshCaptureCulledSlot(.meshStatic, slot: geometry.cameraCull.encoded ? Self.cameraCullSlot : -1)
+    // each instance draws the level of detail its size needs from the camera, at the full output's resolution.
+    let eye = view.inverse().transform(.zero)
+    let lodScale = abs(projection[1, 1]) * Float(max(sizes.target.height, 1)) * 0.5 * geometry.instanceLOD.detail
+      * dynamicResolution.geometryScale
+    geometry.instanceLOD.pixelScale = projection[1, 1] * Float(sizes.render.height) * 0.5
+    geometry.instancesCulled = cullInstances(viewProjection, pixelScale: geometry.instanceLOD.pixelScale,
+                                             eye: [eye.x, eye.y, eye.z], lodScale: lodScale)
   }
 
+  /// The instance cull slot taking only each instance's level of detail, for the replays culling none.
+  static let instanceLevelSlot: UInt32 = 100
+  /// The probes, sun map and shadow runs past the culled ones see the scene this much coarser than
+  /// the camera, keeping what's at least a pixel there.
+  static let instanceLevelCoarsening: Float = 16
+
   /// Instances smaller than this, in radius on screen, aren't drawn.
-  static let instanceMinPixels: Float = 0.25
+  static let instanceMinPixels: Float = 1
 
   /// Keeps the instances in front of the camera, inside its sides
   /// and covering some of a pixel, for the instanced gbuffer pass.
-  private func cullInstances(_ viewProjection: Akari.Matrix4, pixelScale: Float) -> Bool
+  private func cullInstances(_ viewProjection: Akari.Matrix4, pixelScale: Float, eye: [Float], lodScale: Float) -> Bool
   {
     guard !geometry.instancedBatch.isEmpty, let capture = geometry.staticInstancedCapture else { return false }
-    return viewProjection.withUnsafeFloats
+    labgl.captureLodView(eye: eye, pixelScale: lodScale / Self.instanceLevelCoarsening)
+    let levels = labgl.captureCullInstances(capture, viewProjections: nil, pixelScales: nil, viewCount: 0, minPixels: 1,
+                                            rects: 0, rectIndices: nil, rectGrids: nil, slot: Self.instanceLevelSlot) != 0
+    labgl.captureInstanceFallbackSlot(levels ? Self.instanceLevelSlot : ~0)
+    labgl.captureLodView(eye: eye, pixelScale: lodScale)
+    let queued = viewProjection.withUnsafeFloats
     {
       labgl.captureCullInstances(capture, viewProjection: $0.baseAddress, pixelScale: pixelScale,
                                  minPixels: Self.instanceMinPixels, slot: 0) != 0
     }
-  }
-
-  private func compile(_ kernel: inout GLuint, _ name: String, _ glsl: String, _ msl: String,
-                       x: GLuint, y: GLuint) -> Bool
-  {
-    if kernel == 0
-    {
-      kernel = gl.precompileComputeShader(name: name, glsl: glsl, msl: msl)
-      if kernel != 0 { gl.setComputeShaderThreadgroupSize(kernel, x: x, y: y, z: 1) }
-    }
-    return kernel != 0 && gl.waitComputeShader(kernel) != 0
+    // the camera's and the levels' culls run as one pass.
+    labgl.captureFlushInstanceCulls(capture)
+    return queued
   }
 
   private func encodeCameraCull(_ viewProjection: Akari.Matrix4) -> Bool
@@ -381,8 +422,13 @@ extension Akari.LabFXEngine
     var cull = geometry.cameraCull
     defer { geometry.cameraCull = cull }
 
-    guard compile(&cull.kernel, "akari-camera-cull", Self.cameraCullGLSL, Self.cameraCullMSL, x: 64, y: 1)
-    else { return false }
+    if cull.kernels.isEmpty
+    {
+      cull.kernels = .precompile()
+      _ = cull.kernels.wait()
+    }
+
+    guard cull.kernels[.early].isBuilt else { return false }
 
     let generation = labgl.captureGeneration(capture)
     if generation != cull.generation
@@ -403,6 +449,7 @@ extension Akari.LabFXEngine
         {
           gl.deleteBuffer(buffer)
         }
+
         let flags = LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE
         let size = GLsizei(count * MemoryLayout<UInt32>.size)
         cull.bounds = gl.createBuffer(usage: LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_MAP_WRITE,
@@ -412,6 +459,7 @@ extension Akari.LabFXEngine
         cull.lastVisible = gl.createBuffer(usage: flags, sizeBytes: size)
         cull.capacity = count
       }
+
       guard
         cull.bounds != 0,
         cull.visibility != 0,
@@ -423,22 +471,14 @@ extension Akari.LabFXEngine
       gl.unmapBuffer(cull.bounds)
       cull.count = count
     }
+
     guard cull.count > 0 else { return false }
 
-    let kernel = cull.kernel
-    viewProjection.withUnsafeFloats
-    { buf in
-      gl.setComputeShaderUniform(kernel, name: "u_viewProj", type: GL_FLOAT_MAT4, data: buf.baseAddress)
-    }
-    var params = SIMD4<Int32>(Int32(cull.count), cull.reset ? 1 : 0, 0, 0)
-    gl.setComputeShaderUniform(kernel, name: "u_params", type: GL_INT_VEC4, data: &params)
-    gl.setComputeShaderBuffer(kernel, binding: 0, buffer: cull.bounds)
-    gl.setComputeShaderBuffer(kernel, binding: 1, buffer: cull.visibility)
-    gl.setComputeShaderBuffer(kernel, binding: 2, buffer: cull.lastVisible)
-    gl.dispatchCompute(kernel,
-                       groupsX: GLuint((cull.count + 63) / 64),
-                       groupsY: 1,
-                       groupsZ: 1)
+    let kernel = cull.kernels[.early]
+    kernel.set(.viewProj, viewProjection)
+    kernel.set(.params, SIMD4<Int32>(Int32(cull.count), cull.reset ? 1 : 0, 0, 0))
+    kernel.bind(cull.bounds, cull.visibility, cull.lastVisible)
+    kernel.dispatch((cull.count + 63) / 64)
 
     return labgl.captureEncodeCulled(capture, visibility: cull.visibility, offset: 0,
                                      slot: UInt32(Self.cameraCullSlot), instanceStride: 0) != 0
@@ -458,58 +498,36 @@ extension Akari.LabFXEngine
     defer { geometry.cameraCull = cull }
 
     guard
-      compile(&cull.lateKernel, "akari-camera-cull-late", Self.lateCullGLSL, Self.lateCullMSL, x: 64, y: 1),
-      compile(&cull.hzbFirstKernel, "akari-hzb-first", Self.hzbFirstGLSL, Self.hzbFirstMSL, x: 8, y: 8),
-      compile(&cull.hzbReduceKernel, "akari-hzb-reduce", Self.hzbReduceGLSL, Self.hzbReduceMSL, x: 8, y: 8),
+      cull.kernels[.late].isBuilt,
+      cull.kernels[.hzbFirst].isBuilt,
+      cull.kernels[.hzbReduce].isBuilt,
       ensureHzb(&cull)
     else { return false }
 
-    let position = runtime.texture("gbuffer", named: "position")
+    let position = runtime.texture(.gbuffer, named: .position)
     guard position != 0 else { return false }
 
     let first = cull.levels[0]
-    var firstParams = SIMD4<Int32>(Int32(renderWidth), Int32(renderHeight), first.y, first.z)
-    gl.setComputeShaderUniform(cull.hzbFirstKernel, name: "u_params", type: GL_INT_VEC4, data: &firstParams)
-    gl.setComputeShaderBuffer(cull.hzbFirstKernel, binding: 0, buffer: cull.hzb)
-    gl.setComputeShaderSampler(cull.hzbFirstKernel, index: 1, texture: position, samplerIndex: 0)
-    gl.dispatchCompute(cull.hzbFirstKernel,
-                       groupsX: GLuint((first.y + 7) / 8),
-                       groupsY: GLuint((first.z + 7) / 8),
-                       groupsZ: 1)
+    let hzbFirst = cull.kernels[.hzbFirst], hzbReduce = cull.kernels[.hzbReduce]
+    hzbFirst.set(.params, SIMD4<Int32>(Int32(sizes.render.width), Int32(sizes.render.height), first.y, first.z))
+    hzbFirst.bind(cull.hzb)
+    hzbFirst.sample(position, at: 1)
+    hzbFirst.dispatch(Int(first.y + 7) / 8, Int(first.z + 7) / 8)
 
     for (src, dst) in zip(cull.levels, cull.levels.dropFirst())
     {
-      var s = src
-      var d = dst
-      gl.setComputeShaderUniform(cull.hzbReduceKernel, name: "u_src", type: GL_INT_VEC4, data: &s)
-      gl.setComputeShaderUniform(cull.hzbReduceKernel, name: "u_dst", type: GL_INT_VEC4, data: &d)
-      gl.setComputeShaderBuffer(cull.hzbReduceKernel, binding: 0, buffer: cull.hzb)
-      gl.dispatchCompute(cull.hzbReduceKernel,
-                         groupsX: GLuint((dst.y + 7) / 8),
-                         groupsY: GLuint((dst.z + 7) / 8),
-                         groupsZ: 1)
+      hzbReduce.set(.src, src)
+      hzbReduce.set(.dst, dst)
+      hzbReduce.bind(cull.hzb)
+      hzbReduce.dispatch(Int(dst.y + 7) / 8, Int(dst.z + 7) / 8)
     }
 
-    let kernel = cull.lateKernel
-    cull.viewProjection.withUnsafeFloats
-    { buf in
-      gl.setComputeShaderUniform(kernel, name: "u_viewProj", type: GL_FLOAT_MAT4, data: buf.baseAddress)
-    }
-    var params = SIMD4<Int32>(Int32(cull.count), Int32(cull.levels.count), cull.perspective ? 1 : 0, 0)
-    gl.setComputeShaderUniform(kernel, name: "u_params", type: GL_INT_VEC4, data: &params)
-
-    var screen = SIMD4<Float>(Float(renderWidth), Float(renderHeight), 0, 0)
-    gl.setComputeShaderUniform(kernel, name: "u_screen", type: GL_FLOAT_VEC4, data: &screen)
-    gl.setComputeShaderBuffer(kernel, binding: 0, buffer: cull.bounds)
-    gl.setComputeShaderBuffer(kernel, binding: 1, buffer: cull.visibility)
-    gl.setComputeShaderBuffer(kernel, binding: 2, buffer: cull.lastVisible)
-    gl.setComputeShaderBuffer(kernel, binding: 3, buffer: cull.lateVisibility)
-    gl.setComputeShaderBuffer(kernel, binding: 4, buffer: cull.hzb)
-    gl.setComputeShaderBuffer(kernel, binding: 5, buffer: cull.levelBuffer)
-    gl.dispatchCompute(kernel,
-                       groupsX: GLuint((cull.count + 63) / 64),
-                       groupsY: 1,
-                       groupsZ: 1)
+    let kernel = cull.kernels[.late]
+    kernel.set(.viewProj, cull.viewProjection)
+    kernel.set(.params, SIMD4<Int32>(Int32(cull.count), Int32(cull.levels.count), cull.perspective ? 1 : 0, 0))
+    kernel.set(.screen, SIMD4<Float>(Float(sizes.render.width), Float(sizes.render.height), 0, 0))
+    kernel.bind(cull.bounds, cull.visibility, cull.lastVisible, cull.lateVisibility, cull.hzb, cull.levelBuffer)
+    kernel.dispatch((cull.count + 63) / 64)
     cull.reset = false
 
     return labgl.captureEncodeCulled(capture, visibility: cull.lateVisibility, offset: 0,
@@ -519,7 +537,7 @@ extension Akari.LabFXEngine
   /// Lays the Hi-Z levels out for the render size, from half of it down to one texel.
   private func ensureHzb(_ cull: inout CameraCull) -> Bool
   {
-    let size = SIMD2(max(renderWidth, 1), max(renderHeight, 1))
+    let size = SIMD2(max(sizes.render.width, 1), max(sizes.render.height, 1))
     if size == cull.levelSize, cull.hzb != 0, cull.levelBuffer != 0 { return true }
 
     var levels: [SIMD4<Int32>] = []
@@ -542,11 +560,13 @@ extension Akari.LabFXEngine
                                  sizeBytes: GLsizei(offset * MemoryLayout<Float>.size))
       cull.hzbCapacity = cull.hzb != 0 ? offset : 0
     }
+
     if cull.levelBuffer == 0
     {
       cull.levelBuffer = gl.createBuffer(usage: LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_MAP_WRITE,
                                          sizeBytes: GLsizei(32 * MemoryLayout<SIMD4<Int32>>.size))
     }
+
     guard
       cull.hzb != 0,
       cull.levelBuffer != 0,

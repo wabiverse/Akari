@@ -73,6 +73,7 @@ struct AkariDemo: App
 
   let driver: any Akari.HydraFrameDriver
   let settings: HUDState
+  let layout: Layout
   let renderJob: RenderJob
   let timeline: Timeline
   let isHeadlessRender: Bool
@@ -97,7 +98,7 @@ struct AkariDemo: App
     engine = Akari.RenderEngine(settings: RenderSettings(quality: render.quality ?? .high))
     registerAkariRenderer(engine: engine)
 
-    let newScene: (stage: UsdStage, fileURL: URL) = AppUtils.openOrCreateStage()
+    let newScene: (stage: UsdStage, fileURL: URL?) = AppUtils.openOrCreateStage()
 
     engine.labfx.setStageUpAxis(isZUp: UsdGeom.getUpAxis(for: newScene.stage) == .z)
     engine.labfx.setStageMetersPerUnit(UsdGeom.getMetersPerUnit(for: newScene.stage))
@@ -107,6 +108,7 @@ struct AkariDemo: App
     hydra = Hydra.RenderEngine(stage: newScene.stage,
                                selectionColor: Pixar.GfVec4f(1.0, Float(0xA0) / 255, Float(0x28) / 255, 1.0),
                                rendererPluginId: Tf.Token(Akari.rendererPluginId))
+    AppUtils.frameStartView(hydra)
     let frameDriver = Akari.FrameDriver(hydra: hydra, akari: engine)
     driver = frameDriver
 
@@ -123,6 +125,7 @@ struct AkariDemo: App
       lattice.time = { (playback.frame - playback.range.lowerBound) / playback.frameRate }
       hydra.frameDelegate = lattice
     }
+
     let newRenderJob = RenderJob(renderer: Akari.FinalRender(hydra: hydra, akari: engine),
                                  cameraView: cameraView,
                                  playback: playback,
@@ -136,7 +139,9 @@ struct AkariDemo: App
       let probeTimes = Akari.Playback.probeBakeTimes(newScene.stage)
       Task { @MainActor in await playback.prebakeProbes(at: probeTimes) }
     }
+
     settings = HUDState(engine: engine, hydra: hydra)
+    layout = Layout(engine: engine, hydra: hydra, driver: frameDriver)
     scene = Kraken.SceneFile(fileURL: newScene.fileURL)
 
     print("[akari] first light - renderer = \(Akari.rendererPluginId)")
@@ -144,15 +149,16 @@ struct AkariDemo: App
 
   var body: some Scene
   {
-    WindowGroup("\(scene.fileURL.lastPathComponent) ∙ Kraken (Akari v\(Akari.version))")
+    WindowGroup("\(scene.title) ∙ Kraken (Akari v\(Akari.version))")
     {
       Workspace(engine: engine,
                 hydra: hydra,
                 driver: driver,
                 settings: settings,
+                layout: layout,
                 renderJob: renderJob,
                 timeline: timeline,
-                sceneName: scene.name)
+                scene: $scene)
         .environment(\.colorScheme, .dark)
     }
     .defaultLaunchBehavior(isHeadlessRender ? .suppressed : .presented)

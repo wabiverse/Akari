@@ -43,128 +43,83 @@ import LabGL
 
 extension Akari.ShadowAtlas
 {
-  struct Kernels
+  enum Kernel: Akari.ComputeKernelName
   {
-    var beginFrame: GLuint = 0
-    var tilemapShift: GLuint = 0
-    var tagUsagePunctual: GLuint = 0
-    var tagUsageDirectional: GLuint = 0
-    var tagUsageVolume: GLuint = 0
-    var dilateUsageDirectional: GLuint = 0
-    var dilateUsagePunctual: GLuint = 0
-    var maskLod: GLuint = 0
-    var free: GLuint = 0
-    var defrag: GLuint = 0
-    var allocate: GLuint = 0
-    var pageTable: GLuint = 0
-    var pageClear: GLuint = 0
-    var pageCopy: GLuint = 0
-    var retireDrawn: GLuint = 0
-    var cull: GLuint = 0
-    var cullPunctual: GLuint = 0
-    var renderMapClear: GLuint = 0
-    var buildClearList: GLuint = 0
-    var clipmapClear: GLuint = 0
-    var tilemapBounds: GLuint = 0
-    var tagUpdate: GLuint = 0
-    var tagUpdatePunctual: GLuint = 0
-    var tagPropagate: GLuint = 0
-    var buildRenderViews: GLuint = 0
-    var countDirty: GLuint = 0
-    var allotBudget: GLuint = 0
+    case beginFrame, tilemapShift
+    case tagUsagePunctual, tagUsageDirectional, tagUsageVolume, dilateUsageDirectional, dilateUsagePunctual
+    case maskLod, free, defrag, allocate, pageTable, pageClear, pageCopy, retireDrawn
+    case cull, cullPunctual, renderMapClear, buildClearList, clipmapClear, tilemapBounds
+    case tagUpdate, tagUpdateStatic, tagUpdatePunctual, tagPropagate, buildRenderViews, countDirty, allotBudget
 
-    var all: [GLuint]
+    static let label = "shadow"
+
+    /// What the pipeline can't run without, the rest are skipped when they fail.
+    static let required: Set<Kernel> = [.beginFrame, .tilemapShift, .tagUsagePunctual, .tagUsageDirectional,
+                                        .dilateUsageDirectional, .dilateUsagePunctual, .maskLod, .free, .defrag,
+                                        .allocate, .pageTable, .pageCopy]
+
+    var glsl: String
     {
-      [beginFrame, tilemapShift, tagUsagePunctual, tagUsageDirectional, tagUsageVolume,
-       dilateUsageDirectional, dilateUsagePunctual, maskLod, free, defrag, allocate,
-       pageTable, pageClear, pageCopy, retireDrawn, cull, cullPunctual, renderMapClear, buildClearList,
-       clipmapClear, tilemapBounds, tagUpdate, tagUpdatePunctual, tagPropagate, buildRenderViews,
-       countDirty, allotBudget]
+      source.glsl
     }
 
-    /// Waits for the kernels the pipeline can't run without, false if any failed.
-    func waitForRequired() -> Bool
+    var msl: String
     {
-      [beginFrame, tilemapShift, tagUsagePunctual, tagUsageDirectional, dilateUsageDirectional,
-       dilateUsagePunctual, maskLod, free, defrag, allocate, pageTable, pageCopy].allSatisfy
+      source.msl
+    }
+
+    private var source: (glsl: String, msl: String)
+    {
+      switch self
       {
-        $0 != 0 && gl.waitComputeShader($0) != 0
+        case .beginFrame: (beginFrameGLSL, beginFrameMSL)
+        case .tilemapShift: (tilemapShiftGLSL, tilemapShiftMSL)
+        case .tagUsagePunctual: (tagUsagePunctualGLSL, tagUsagePunctualMSL)
+        case .tagUsageDirectional: (tagUsageDirectionalGLSL, tagUsageDirectionalMSL)
+        case .tagUsageVolume: (tagUsageVolumeGLSL, tagUsageVolumeMSL)
+        case .dilateUsageDirectional: (dilateUsageDirectionalGLSL, dilateUsageDirectionalMSL)
+        case .dilateUsagePunctual: (dilateUsagePunctualGLSL, dilateUsagePunctualMSL)
+        case .maskLod: (maskLodGLSL, maskLodMSL)
+        case .free: (freeGLSL, freeMSL)
+        case .defrag: (defragGLSL, defragMSL)
+        case .allocate: (allocateGLSL, allocateMSL)
+        case .pageTable: (pageTableGLSL, pageTableMSL)
+        case .pageClear: (pageClearGLSL, pageClearMSL)
+        case .pageCopy: (pageCopyGLSL, pageCopyMSL)
+        case .retireDrawn: (retireDrawnGLSL, retireDrawnMSL)
+        case .cull: (cullGLSL, cullMSL)
+        case .cullPunctual: (cullPunctualGLSL, cullPunctualMSL)
+        case .renderMapClear: (renderMapClearGLSL, renderMapClearMSL)
+        case .buildClearList: (buildClearListGLSL, buildClearListMSL)
+        case .clipmapClear: (clipmapClearGLSL, clipmapClearMSL)
+        case .tilemapBounds: (tilemapBoundsGLSL, tilemapBoundsMSL)
+        case .tagUpdate: (tagUpdateGLSL(flagDynamicUpdate), tagUpdateMSL(flagDynamicUpdate))
+        case .tagUpdateStatic: (tagUpdateGLSL(flagDoUpdate), tagUpdateMSL(flagDoUpdate))
+        case .tagUpdatePunctual: (tagUpdatePunctualGLSL, tagUpdatePunctualMSL)
+        case .tagPropagate: (tagPropagateGLSL, tagPropagateMSL)
+        case .buildRenderViews: (buildRenderViewsGLSL, buildRenderViewsMSL)
+        case .countDirty: (countDirtyGLSL, countDirtyMSL)
+        case .allotBudget: (allotBudgetGLSL, allotBudgetMSL)
       }
     }
 
-    func setThreadgroupSizes()
+    var threadgroup: SIMD3<Int>
     {
-      let res = GLuint(tilemapRes)
-      gl.setComputeShaderThreadgroupSize(beginFrame, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(tilemapShift, x: res, y: res, z: 1)
-      gl.setComputeShaderThreadgroupSize(dilateUsageDirectional, x: res, y: res, z: 1)
-      gl.setComputeShaderThreadgroupSize(dilateUsagePunctual, x: res, y: res, z: 1)
-      gl.setComputeShaderThreadgroupSize(tagUsagePunctual, x: 8, y: 8, z: 1)
-      gl.setComputeShaderThreadgroupSize(tagUsageDirectional, x: 8, y: 8, z: 1)
-      if tagUsageVolume != 0
+      switch self
       {
-        gl.setComputeShaderThreadgroupSize(tagUsageVolume, x: 8, y: 8, z: 1)
+        case .tilemapShift, .dilateUsageDirectional, .dilateUsagePunctual, .maskLod, .tagPropagate:
+          SIMD3(tilemapRes, tilemapRes, 1)
+        case .free, .allocate:
+          SIMD3(tilemapRes * tilemapRes, 1, 1)
+        case .tagUsagePunctual, .tagUsageDirectional, .tagUsageVolume:
+          SIMD3(8, 8, 1)
+        case .pageClear, .pageCopy:
+          SIMD3(16, 16, 1)
+        case .defrag, .allotBudget:
+          SIMD3(1, 1, 1)
+        default:
+          SIMD3(64, 1, 1)
       }
-      gl.setComputeShaderThreadgroupSize(maskLod, x: res, y: res, z: 1)
-      gl.setComputeShaderThreadgroupSize(free, x: res * res, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(allocate, x: res * res, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(defrag, x: 1, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(pageTable, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(pageClear, x: 16, y: 16, z: 1)
-      gl.setComputeShaderThreadgroupSize(pageCopy, x: 16, y: 16, z: 1)
-      gl.setComputeShaderThreadgroupSize(retireDrawn, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(cull, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(cullPunctual, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(buildClearList, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(renderMapClear, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(clipmapClear, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(tilemapBounds, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(tagUpdate, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(tagUpdatePunctual, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(tagPropagate, x: res, y: res, z: 1)
-      gl.setComputeShaderThreadgroupSize(buildRenderViews, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(countDirty, x: 64, y: 1, z: 1)
-      gl.setComputeShaderThreadgroupSize(allotBudget, x: 1, y: 1, z: 1)
     }
-  }
-
-  static func precompileKernels() -> Kernels
-  {
-    func compile(_ name: String, _ glsl: String, _ msl: String) -> GLuint
-    {
-      gl.precompileComputeShader(name: "akari-shadow-\(name)", glsl: glsl, msl: msl)
-    }
-
-    var k = Kernels()
-    k.beginFrame = compile("begin-frame", beginFrameGLSL, beginFrameMSL)
-    k.tilemapShift = compile("tilemap-shift", tilemapShiftGLSL, tilemapShiftMSL)
-    k.tagUsagePunctual = compile("tag-usage-punctual", tagUsagePunctualGLSL, tagUsagePunctualMSL)
-    k.tagUsageDirectional = compile("tag-usage-directional", tagUsageDirectionalGLSL, tagUsageDirectionalMSL)
-    k.tagUsageVolume = compile("tag-usage-volume", tagUsageVolumeGLSL, tagUsageVolumeMSL)
-    k.dilateUsageDirectional = compile("dilate-usage-directional", dilateUsageDirectionalGLSL, dilateUsageDirectionalMSL)
-    k.dilateUsagePunctual = compile("dilate-usage-punctual", dilateUsagePunctualGLSL, dilateUsagePunctualMSL)
-    k.maskLod = compile("mask-lod", maskLodGLSL, maskLodMSL)
-    k.free = compile("free", freeGLSL, freeMSL)
-    k.defrag = compile("defrag", defragGLSL, defragMSL)
-    k.allocate = compile("allocate", allocateGLSL, allocateMSL)
-    k.pageTable = compile("page-table", pageTableGLSL, pageTableMSL)
-    k.pageClear = compile("page-clear", pageClearGLSL, pageClearMSL)
-    k.pageCopy = compile("page-copy", pageCopyGLSL, pageCopyMSL)
-    k.retireDrawn = compile("retire-drawn", retireDrawnGLSL, retireDrawnMSL)
-    k.cull = compile("cull", cullGLSL, cullMSL)
-    k.cullPunctual = compile("cull-punctual", cullPunctualGLSL, cullPunctualMSL)
-    k.renderMapClear = compile("render-map-clear", renderMapClearGLSL, renderMapClearMSL)
-    k.buildClearList = compile("build-clear-list", buildClearListGLSL, buildClearListMSL)
-    k.clipmapClear = compile("clipmap-clear", clipmapClearGLSL, clipmapClearMSL)
-    k.tilemapBounds = compile("tilemap-bounds", tilemapBoundsGLSL, tilemapBoundsMSL)
-    k.tagUpdate = compile("tag-update", tagUpdateGLSL, tagUpdateMSL)
-    k.tagUpdatePunctual = compile("tag-update-punctual", tagUpdatePunctualGLSL, tagUpdatePunctualMSL)
-    k.tagPropagate = compile("tag-propagate", tagPropagateGLSL, tagPropagateMSL)
-    k.buildRenderViews = compile("build-render-views", buildRenderViewsGLSL, buildRenderViewsMSL)
-    k.countDirty = compile("count-dirty", countDirtyGLSL, countDirtyMSL)
-    k.allotBudget = compile("allot-budget", allotBudgetGLSL, allotBudgetMSL)
-    k.setThreadgroupSizes()
-
-    return k
   }
 }

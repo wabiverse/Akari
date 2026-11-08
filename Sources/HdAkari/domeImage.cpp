@@ -112,6 +112,7 @@ HdAkariLoadDomeImage(std::string const &path, int smallWidth, float sunThreshold
       prefetch = {};
     }
   }
+
   return image.valid() ? image.get() : Load(path, smallWidth, sunThreshold, progress);
 }
 
@@ -155,7 +156,7 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
   const int sw = std::max(1, smallWidth);
   const int sh = std::max(1, sw / 2);
 
-  double sunDir[3] = {0, 0, 0}, sunE[3] = {0, 0, 0};
+  double sunDir[3] = {0, 0, 0}, sunE[3] = {0, 0, 0}, sunWeight = 0;
   const double pi = 3.14159265358979;
   const size_t texelBytes = size_t(comps) * compBytes;
   for (int y = 0; y < h; ++y)
@@ -186,9 +187,11 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
             sunE[c] += rgb[c] * k;
             sunDir[c] += d[c] * (lum - sunThreshold) * omega;
           }
+          sunWeight += (lum - sunThreshold) * omega;
         }
       }
     }
+
     if (y % f == f - 1 && y / f < oh)
     {
       const float n = float(f * f);
@@ -198,9 +201,11 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
         for (int c = 0; c < 3; ++c) dst[c] = GfHalf(row[size_t(ox) * 3 + c] / n).bits();
         dst[3] = GfHalf(1.0f).bits();
       }
+
       std::fill(row.begin(), row.end(), 0.0f);
     }
   }
+
   raw = std::vector<uint8_t>();
 
   const double len = std::sqrt(sunDir[0] * sunDir[0] + sunDir[1] * sunDir[1] + sunDir[2] * sunDir[2]);
@@ -209,18 +214,21 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
     out->hasSun = true;
     out->sunX = float(sunDir[0] / len); out->sunY = float(sunDir[1] / len); out->sunZ = float(sunDir[2] / len);
     out->sunR = float(sunE[0]); out->sunG = float(sunE[1]); out->sunB = float(sunE[2]);
+    // the disk that spreads its energy as far, its mean cosine is (1 + cos radius) / 2.
+    out->sunAngle = float(2.0 * std::acos(std::clamp(2.0 * len / sunWeight - 1.0, -1.0, 1.0)));
   }
 
   out->smallWidth = sw;
   out->smallHeight = sh;
   out->small.resize(size_t(sw) * size_t(sh) * 4);
+  out->smallFull.resize(size_t(sw) * size_t(sh) * 4);
   for (int sy = 0; sy < sh; ++sy)
   {
     const int y0 = sy * oh / sh, y1 = std::max(y0 + 1, (sy + 1) * oh / sh);
     for (int sx = 0; sx < sw; ++sx)
     {
       const int x0 = sx * ow / sw, x1 = std::max(x0 + 1, (sx + 1) * ow / sw);
-      float sum[3] = {0, 0, 0};
+      float sum[3] = {0, 0, 0}, full[3] = {0, 0, 0};
       for (int y = y0; y < y1; ++y)
       {
         for (int x = x0; x < x1; ++x)
@@ -230,15 +238,18 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
           for (int c = 0; c < 3; ++c) { GfHalf v; v.setBits(p[c]); rgb[c] = float(v); }
           const float lum = 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2];
           const float k = sunThreshold > 0.0f && lum > sunThreshold ? sunThreshold / lum : 1.0f;
-          for (int c = 0; c < 3; ++c) sum[c] += rgb[c] * k;
+          for (int c = 0; c < 3; ++c) { sum[c] += rgb[c] * k; full[c] += rgb[c]; }
         }
       }
+
       const float n = float((y1 - y0) * (x1 - x0));
       uint16_t *d = out->small.data() + (size_t(sy) * sw + sx) * 4;
-      for (int c = 0; c < 3; ++c) d[c] = GfHalf(sum[c] / n).bits();
-      d[3] = GfHalf(1.0f).bits();
+      uint16_t *e = out->smallFull.data() + (size_t(sy) * sw + sx) * 4;
+      for (int c = 0; c < 3; ++c) { d[c] = GfHalf(sum[c] / n).bits(); e[c] = GfHalf(full[c] / n).bits(); }
+      d[3] = e[3] = GfHalf(1.0f).bits();
     }
   }
+
   return out;
 }
 

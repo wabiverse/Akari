@@ -124,13 +124,14 @@ public extension Akari
         defer { self.request = nil }
         return (self.request, _aspect)
       }
+
       let view = hydra.viewCamera
       let now = ProcessInfo.processInfo.systemUptime
 
       if let request
       {
         let next = request.map { UsdGeom.Camera(hydra.stage.getPrim(at: $0)) }
-        if let next, next.GetPrim().IsValid()
+        if let next, next.GetPrim().isValid
         {
           if saved == nil { saved = FinalRender.ViewState(view, timeCode: hydra.currentTimeCode) }
           transition = (Shot(view), now)
@@ -141,6 +142,7 @@ public extension Akari
           transition = (Shot(view), now)
           camera = nil
         }
+
         posed = nil
       }
 
@@ -198,9 +200,11 @@ public extension Akari
             leave(notify: false)
             return
           }
+
           if let onArrive { Task { @MainActor in onArrive() } }
         }
       }
+
       posed = Self.placement(view)
     }
 

@@ -44,9 +44,11 @@ import Foundation
 public struct LightSettings: Sendable
 {
   /// Sun height, for day/night approximation.
-  public var sunHeight: Float = 0
+  public var sunHeight: Float = 0.6
   /// Angular diameter of the sun disk in radians.
   public var sunAngle: Float = 4 * .pi / 180
+  /// Sun Height and Sun Angle replace the stage's own dome and sun, otherwise they light it as authored.
+  public var overridesStageSun = false
   /// Shadow atlas configuration.
   public var shadow = ShadowSettings()
 

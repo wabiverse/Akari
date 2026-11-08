@@ -42,15 +42,21 @@ import Foundation
 
 public enum Kraken
 {
+  /// The scene's file, none for a new scene that's only in memory until it's saved.
   public struct SceneFile
   {
-    public var fileURL: URL
+    public var fileURL: URL?
     public var name: String
 
-    public init(fileURL: URL)
+    public init(fileURL: URL?)
     {
       self.fileURL = fileURL
-      name = fileURL.pathComponents.suffix(2).joined(separator: "/")
+      name = fileURL.map { $0.pathComponents.suffix(2).joined(separator: "/") } ?? "untitled.usda"
+    }
+
+    public var title: String
+    {
+      fileURL?.lastPathComponent ?? "untitled.usda"
     }
   }
 }

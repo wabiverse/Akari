@@ -49,9 +49,10 @@ import ImageFormats
 
 extension AkariDemo.RenderJob
 {
-  /// `<scene folder>/render/<scene>_####`, next to the stage.
-  nonisolated static func defaultOutputPath(for sceneURL: URL) -> String
+  /// `<scene folder>/render/<scene>_####`, next to the stage, in the home folder for a scene not saved yet.
+  nonisolated static func defaultOutputPath(for sceneFile: URL?) -> String
   {
+    let sceneURL = sceneFile ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("untitled.usda")
     let name = sceneURL.deletingPathExtension().lastPathComponent
     return sceneURL.deletingLastPathComponent()
       .appendingPathComponent("render", isDirectory: true)
@@ -82,6 +83,7 @@ extension AkariDemo.RenderJob
     {
       result = ImageFormats.Image<RGBA>(width: image.width, height: image.height, bytes: image.rgba)
     }
+
     self.progress = progress
     switch progress.status
     {
@@ -128,8 +130,10 @@ extension AkariDemo.RenderJob
         let frame = Double(max(progress.frameNumber - 1, 0)) + Double(progress.sample) / Double(progress.samples)
         print("[akari-progress] \(min(frame / Double(progress.frameCount), 1))")
       }
+
       Self.logBackgroundProgress(progress, output: output, renderer: renderer)
     }
+
     return status
   }
 
@@ -161,6 +165,7 @@ extension AkariDemo.RenderJob
         {
           print("Saved: '\(url.path)'")
         }
+
         print("[akari] finished in \(Self.clock(progress.elapsed))")
       case .cancelled:
         print("[akari] render cancelled")

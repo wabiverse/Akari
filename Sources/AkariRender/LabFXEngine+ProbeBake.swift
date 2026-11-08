@@ -80,6 +80,7 @@ extension Akari.LabFXEngine
         gl.deleteShader(shader)
         shader = 0
       }
+
       probes = nil
       enabled = false
     }
@@ -208,6 +209,7 @@ extension Akari.LabFXEngine
           gl.vertex(x: center.0 + r * u, y: center.1 + r * v, z: Float(0))
         }
       }
+
       gl.vertex(x: x1 - r, y: y0, z: Float(0))
       gl.end()
     }
@@ -231,6 +233,7 @@ extension Akari.LabFXEngine
           gl.vertex(x: center.0 + (r + outX) * u, y: center.1 + (r + outY) * v, z: Float(0))
         }
       }
+
       let (u0, v0) = Self.cornerArcs[0][0]
       gl.vertex(x: centers[0].0 + r * u0, y: centers[0].1 + r * v0, z: Float(0))
       gl.vertex(x: centers[0].0 + (r + outX) * u0, y: centers[0].1 + (r + outY) * v0, z: Float(0))

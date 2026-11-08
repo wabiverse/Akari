@@ -54,6 +54,7 @@ extension Akari.ShadowAtlas
     {
       total += size * size; size >>= 1
     }
+
     return total
   }()
 
@@ -97,7 +98,7 @@ extension Akari.ShadowAtlas
   /// Tiles only dynamic casters moved over always draw, deferring those flickers.
   static let renderTileBudget = 64
   /// Moved caster boxes tracked per frame, past this neighbors are merged.
-  static let maxMovedCasters = 256
+  static let maxMovedCasters = 4096
 
   /// Pages per atlas layer, one per amplified view.
   static let pagesPerLayer = maxAmplificationViews
@@ -126,9 +127,9 @@ extension Akari.ShadowAtlas
   /// Texels per row of `data`.
   static let dataTextureWidth = 6
 
-  static func punctualUniforms(_ name: String) -> String
+  static func punctualUniforms(_ uniform: Akari.ComputeUniform) -> String
   {
-    (0 ..< maxPunctualLights).map { "uniform vec4 \(name)\($0);" }.joined(separator: "\n")
+    (0 ..< maxPunctualLights).map { "uniform vec4 \(uniform.name($0));" }.joined(separator: "\n")
   }
 
   static func punctualCalls(_ call: (Int) -> String) -> String
@@ -143,6 +144,7 @@ extension Akari.ShadowAtlas
     {
       base += size * size; size >>= 1
     }
+
     return base + tileY * size + tileX
   }
 
@@ -155,6 +157,7 @@ extension Akari.ShadowAtlas
       size >>= 1
       lod += 1
     }
+
     return (lod, remaining % size, remaining / size)
   }
 }

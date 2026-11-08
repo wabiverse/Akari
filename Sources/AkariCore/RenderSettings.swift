@@ -67,6 +67,26 @@ public enum Upscaler: String, Sendable, CaseIterable
   case metalFX
 }
 
+/// How the viewport draws the scene, four shading modes.
+public enum ViewportShading: Int, Sendable, CaseIterable
+{
+  case wireframe
+  case solid
+  case materialPreview
+  case rendered
+
+  /// The features a mode keeps of the ones turned on.
+  public var features: RenderFeatures
+  {
+    switch self
+    {
+      case .wireframe, .solid: [.temporalAA, .dynamicResolution]
+      case .materialPreview: [.imageBasedLighting, .temporalAA, .dynamicResolution, .screenSpaceReflections]
+      case .rendered: RenderFeatures(rawValue: ~0)
+    }
+  }
+}
+
 /// The complete description of how Akari should render a frame.
 public struct RenderSettings: Sendable
 {
@@ -104,6 +124,10 @@ public struct RenderSettings: Sendable
   public var upscaler: Upscaler = .metalFX
   /// Resolution multiplier and downsamples, 1 is off.
   public var supersampling: Float = 1
+  /// The viewport's shading mode, a final render is always `.rendered`.
+  public var shading: ViewportShading = .rendered
+  /// Draws the viewport's floor grid and axes.
+  public var overlays = false
 
   /// The supersampling factors, per axis: 1.78x, 2.25x and 4x the pixels.
   public static let supersamplingSteps: [Float] = [1, 4 / 3, 1.5, 2]

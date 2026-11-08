@@ -118,6 +118,7 @@ size_t CurveVertexBudget(HdSceneDelegate *delegate, SdfPath const &id)
     if (const char *env = std::getenv("AKARI_CURVE_VERTEX_BUDGET")) {
       budget = std::max<size_t>(1, std::strtoull(env, nullptr, 10));
     }
+
     std::vector<std::pair<SdfPath, size_t>> counts;
     size_t total = 0;
     for (SdfPath const &rprimId : index.GetRprimIds()) {
@@ -129,6 +130,7 @@ size_t CurveVertexBudget(HdSceneDelegate *delegate, SdfPath const &id)
       counts.emplace_back(rprimId, weight);
       total += weight;
     }
+
     const size_t cap = std::max(minimum, std::min(budget, HdAkariMaxCurveVertices));
     fallback = std::clamp(budget / std::max<size_t>(1, counts.size()), std::min(minimum, cap), cap);
     for (auto const &[path, weight] : counts) {
@@ -136,6 +138,7 @@ size_t CurveVertexBudget(HdSceneDelegate *delegate, SdfPath const &id)
       shares[path] = std::clamp(share, std::min(minimum, cap), cap);
     }
   }
+
   const auto found = shares.find(id);
   return found == shares.end() ? fallback : found->second;
 }
@@ -178,11 +181,13 @@ CurvePoint Cubic(TfToken const &basis, CurvePoint const *c, float t)
     w[2] = (-3.0f * t3 + 3.0f * t2 + 3.0f * t + 1.0f) / 6.0f;
     w[3] = t3 / 6.0f;
   }
+
   CurvePoint out{GfVec3f(0.0f), 0.0f};
   for (int k = 0; k < 4; ++k) {
     out.p += c[k].p * w[k];
     out.width += c[k].width * w[k];
   }
+
   return out;
 }
 
@@ -213,6 +218,7 @@ std::vector<CurvePoint> Evaluate(std::vector<CurvePoint> const &cv, TfToken cons
     if (periodic && !cv.empty()) out.push_back(cv.front());
     return out;
   }
+
   std::vector<CurvePoint> ctrl = cv;
   const bool bezier = basis == HdTokens->bezier;
   if (periodic) {
@@ -222,6 +228,7 @@ std::vector<CurvePoint> Evaluate(std::vector<CurvePoint> const &cv, TfToken cons
     ctrl.insert(ctrl.begin(), cv.front());
     ctrl.push_back(cv.back());
   }
+
   const size_t step = bezier ? 3 : 1;
   std::vector<CurvePoint> out;
   out.reserve(EvaluatedPointCount(int(cv.size()), type, basis, periodic, samples));
@@ -230,6 +237,7 @@ std::vector<CurvePoint> Evaluate(std::vector<CurvePoint> const &cv, TfToken cons
       out.push_back(Cubic(basis, &ctrl[s], float(i) / samples));
     }
   }
+
   return out;
 }
 
@@ -248,6 +256,7 @@ void Ribbon(std::vector<CurvePoint> const &line, VtVec3fArray &points, VtVec3iAr
     points.push_back(line[i].p + across);
     points.push_back(line[i].p - across);
   }
+
   for (size_t i = 0; i + 1 < line.size(); ++i) {
     const int a = int(base + i * 2);
     tris.push_back(GfVec3i(a, a + 1, a + 3));
@@ -262,6 +271,7 @@ void Tube(std::vector<CurvePoint> const &line, int sides, VtVec3fArray &points, 
     Ribbon(line, points, tris);
     return;
   }
+
   const size_t base = points.size();
   const size_t triBase = tris.size();
   const size_t ringVerts = line.size() * size_t(sides);
@@ -291,6 +301,7 @@ void Tube(std::vector<CurvePoint> const &line, int sides, VtVec3fArray &points, 
       ring[k] = line[i].p + (normal * std::cos(a) + binormal * std::sin(a)) * r;
     }
   }
+
   for (size_t i = 0; i + 1 < line.size(); ++i) {
     GfVec3i *quads = dstTris + i * size_t(sides) * 2;
     for (int k = 0; k < sides; ++k) {
@@ -346,6 +357,7 @@ HdAkariBasisCurves::Sync(HdSceneDelegate *sceneDelegate,
     *dirtyBits = HdChangeTracker::Clean;
     return;
   }
+
   HdAkariSyncStyle(sceneDelegate, id, GetPrimId(), scene);
 
   HdAkariMeshData data;
@@ -393,8 +405,10 @@ HdAkariBasisCurves::Sync(HdSceneDelegate *sceneDelegate,
         totalVertices += n * size_t(sides);
         totalTriangles += (n - 1) * size_t(sides == 2 ? 1 : sides) * 2;
       }
+
       offset += size_t(count);
     }
+
     const size_t stride = std::max<size_t>(
         {1, (totalVertices + vertexBudget - 1) / vertexBudget,
          (totalTriangles + triangleBudget - 1) / triangleBudget});
@@ -415,8 +429,10 @@ HdAkariBasisCurves::Sync(HdSceneDelegate *sceneDelegate,
           reserveTriangles += (n - 1) * size_t(sides == 2 ? 1 : sides) * 2;
         }
       }
+
       offset += size_t(count);
     }
+
     data.points.reserve(reserveVertices);
     data.triangleIndices.reserve(reserveTriangles);
 
@@ -433,8 +449,10 @@ HdAkariBasisCurves::Sync(HdSceneDelegate *sceneDelegate,
                         : widths.size() == counts.size() ? widths[c] : widths[0];
           line[size_t(i)] = CurvePoint{cv[v], w};
         }
+
         Tube(Evaluate(line, type, basis, periodic, samples), sides, data.points, data.triangleIndices);
       }
+
       offset += size_t(count);
     }
 
@@ -456,6 +474,7 @@ HdAkariBasisCurves::Sync(HdSceneDelegate *sceneDelegate,
   for (size_t t = 0; t < data.triangleIndices.size(); ++t) {
     for (int k = 0; k < 3; ++k) faceIndices[t * 3 + k] = data.triangleIndices.cdata()[t][k];
   }
+
   HdMeshTopology mesh(PxOsdOpenSubdivTokens->none, HdTokens->rightHanded, faceCounts, faceIndices);
   HdMeshUtil meshUtil(&mesh, id);
   HdAkariTextureAtlas *atlas = param->GetTextureAtlas();
@@ -472,6 +491,7 @@ HdAkariBasisCurves::Sync(HdSceneDelegate *sceneDelegate,
     data.instances = std::move(set.transforms);
     data.instancesKey = set.key;
   }
+
   if (data.triangleIndices.empty() || (!instancerId.IsEmpty() && data.instances.empty())) {
     scene->RemoveMesh(id);
   } else {
@@ -487,7 +507,7 @@ HdAkariBasisCurves::Finalize(HdRenderParam *renderParam)
 {
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
     if (HdAkariScene *scene = param->GetScene()) {
-      scene->RemoveMesh(GetId());
+      scene->RemoveMesh(GetId(), GetPrimId());
       scene->RemoveStyle(GetPrimId());
     }
   }

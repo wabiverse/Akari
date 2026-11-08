@@ -121,12 +121,14 @@ bool Vec3At(VtValue const &value, int i, GfVec3d &out)
     out = GfVec3d(a[i]);
     return true;
   }
+
   if (value.IsHolding<VtVec3dArray>()) {
     VtVec3dArray const &a = value.UncheckedGet<VtVec3dArray>();
     if (i < 0 || size_t(i) >= a.size()) return false;
     out = a[i];
     return true;
   }
+
   return false;
 }
 
@@ -138,18 +140,21 @@ bool QuatAt(VtValue const &value, int i, GfQuatd &out)
     out = GfQuatd(a[i]);
     return true;
   }
+
   if (value.IsHolding<VtQuatfArray>()) {
     VtQuatfArray const &a = value.UncheckedGet<VtQuatfArray>();
     if (i < 0 || size_t(i) >= a.size()) return false;
     out = GfQuatd(a[i]);
     return true;
   }
+
   if (value.IsHolding<VtVec4fArray>()) {
     VtVec4fArray const &a = value.UncheckedGet<VtVec4fArray>();
     if (i < 0 || size_t(i) >= a.size()) return false;
     out = GfQuatd(a[i][0], a[i][1], a[i][2], a[i][3]);
     return true;
   }
+
   return false;
 }
 
@@ -165,6 +170,7 @@ GfMatrix4d LocalInstanceMatrix(VtValue const &transforms,
     VtMatrix4dArray const &matrices = transforms.UncheckedGet<VtMatrix4dArray>();
     if (index >= 0 && size_t(index) < matrices.size()) m = matrices[index];
   }
+
   GfVec3d v;
   if (Vec3At(scales, index, v)) m = m * GfMatrix4d(1.0).SetScale(v);
   GfQuatd q;
@@ -219,6 +225,7 @@ void HdAkariInstancer::Sync(HdSceneDelegate *sceneDelegate,
     scales = sceneDelegate->Get(id, HdInstancerTokens->instanceScales);
     transforms = sceneDelegate->Get(id, HdInstancerTokens->instanceTransforms);
   }
+
   if (topologyDirty) prototypes = sceneDelegate->GetInstancerPrototypes(id);
 
   std::lock_guard<std::mutex> lock(_mutex);
@@ -229,10 +236,12 @@ void HdAkariInstancer::Sync(HdSceneDelegate *sceneDelegate,
     _scales = std::move(scales);
     _transforms = std::move(transforms);
   }
+
   if (topologyDirty) {
     _prototypes = std::move(prototypes);
     _prototypeSet = std::unordered_set<SdfPath, SdfPath::Hash>(_prototypes.begin(), _prototypes.end());
   }
+
   _sets.clear();
   ++_generation;
 }
@@ -242,6 +251,7 @@ SdfPath HdAkariInstancer::_PrototypeOf(SdfPath const &path) const
   for (SdfPath p = path; !p.IsEmpty() && !p.IsAbsoluteRootPath(); p = p.GetParentPath()) {
     if (_prototypeSet.count(p)) return p;
   }
+
   return path;
 }
 

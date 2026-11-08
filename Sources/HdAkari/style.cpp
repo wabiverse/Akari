@@ -40,6 +40,7 @@
 
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
+# include <Tf/staticTokens.h>
 # include <Hd/sceneDelegate.h>
 # include <Gf/vec3d.h>
 # include <Gf/vec3f.h>
@@ -49,6 +50,7 @@
 # include <Vt/value.h>
 #else
 # include <pxr/pxr.h>
+# include <pxr/base/tf/staticTokens.h>
 # include <pxr/imaging/hd/sceneDelegate.h>
 # include <pxr/base/gf/vec3d.h>
 # include <pxr/base/gf/vec3f.h>
@@ -63,6 +65,22 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
+TF_DEFINE_PRIVATE_TOKENS(_tokens,
+  ((assemble, "akari:assemble"))
+  ((assembleCenter, "akari:assembleCenter"))
+  ((assembleSize, "akari:assembleSize"))
+  ((color, "akari:color"))
+  ((shadingModel, "akari:shadingModel"))
+  ((shadingModelFront, "akari:shadingModelFront"))
+  ((shadingModelFrontBand, "akari:shadingModelFrontBand"))
+  ((shadingModelFrontColor, "akari:shadingModelFrontColor"))
+  ((shadingModelFrontGlow, "akari:shadingModelFrontGlow"))
+  ((unlit, "akari:unlit"))
+  ((wireColor, "akari:wireColor"))
+  ((wireGlow, "akari:wireGlow"))
+  ((wireSpacing, "akari:wireSpacing"))
+);
+
 namespace {
 
 template <typename T>
@@ -75,6 +93,7 @@ bool First(VtValue const &value, T &out)
     out = values[0];
     return true;
   }
+
   return false;
 }
 
@@ -112,27 +131,28 @@ bool ReadVec4(VtValue const &value, float &x, float &y, float &z, float &w)
 
 void HdAkariSyncStyle(HdSceneDelegate *sceneDelegate, SdfPath const &id, int32_t primId, HdAkariScene *scene)
 {
-  auto get = [&](char const *name) { return sceneDelegate->Get(id, TfToken(name)); };
+  auto get = [&](TfToken const &name) { return sceneDelegate->Get(id, name); };
   HdAkariStyleData data;
   data.primId = primId;
   bool styled = false;
-  styled |= ReadFloat(get("akari:shadingModel"), data.shadingModel);
-  styled |= ReadFloat(get("akari:color"), data.color);
-  styled |= ReadFloat(get("akari:unlit"), data.unlit);
-  styled |= ReadFloat(get("akari:assemble"), data.assemble);
-  styled |= ReadVec4(get("akari:shadingModelFront"), data.frontX, data.frontY, data.frontZ, data.frontRadius);
+  styled |= ReadFloat(get(_tokens->shadingModel), data.shadingModel);
+  styled |= ReadFloat(get(_tokens->color), data.color);
+  styled |= ReadFloat(get(_tokens->unlit), data.unlit);
+  styled |= ReadFloat(get(_tokens->assemble), data.assemble);
+  styled |= ReadVec4(get(_tokens->shadingModelFront), data.frontX, data.frontY, data.frontZ, data.frontRadius);
   if (!styled) {
     scene->RemoveStyle(primId);
     return;
   }
-  ReadFloat(get("akari:shadingModelFrontBand"), data.frontBand);
-  ReadVec3(get("akari:shadingModelFrontColor"), data.frontGlowR, data.frontGlowG, data.frontGlowB);
-  ReadFloat(get("akari:shadingModelFrontGlow"), data.frontGlow);
-  ReadVec3(get("akari:wireColor"), data.wireR, data.wireG, data.wireB);
-  ReadFloat(get("akari:wireGlow"), data.wireGlow);
-  ReadFloat(get("akari:wireSpacing"), data.wireSpacing);
-  data.hasCenter = ReadVec3(get("akari:assembleCenter"), data.centerX, data.centerY, data.centerZ);
-  ReadFloat(get("akari:assembleSize"), data.size);
+
+  ReadFloat(get(_tokens->shadingModelFrontBand), data.frontBand);
+  ReadVec3(get(_tokens->shadingModelFrontColor), data.frontGlowR, data.frontGlowG, data.frontGlowB);
+  ReadFloat(get(_tokens->shadingModelFrontGlow), data.frontGlow);
+  ReadVec3(get(_tokens->wireColor), data.wireR, data.wireG, data.wireB);
+  ReadFloat(get(_tokens->wireGlow), data.wireGlow);
+  ReadFloat(get(_tokens->wireSpacing), data.wireSpacing);
+  data.hasCenter = ReadVec3(get(_tokens->assembleCenter), data.centerX, data.centerY, data.centerZ);
+  ReadFloat(get(_tokens->assembleSize), data.size);
   scene->UpdateStyle(data);
 }
 

@@ -72,10 +72,8 @@ public:
   HdDirtyBits GetInitialDirtyBitsMask() const override;
 
 private:
-  // the preview surface's emission and opacity, sampled straight
-  // each sync once found, instead of rebuilding the whole network.
-  HdSampledDataSourceHandle _emissive;
-  HdSampledDataSourceHandle _opacity;
+  // the meshes bake a material on their first sync, its later syncs are edits.
+  bool _baked = false;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

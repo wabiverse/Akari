@@ -46,19 +46,45 @@ import simd
 
 extension Akari.LabFXEngine
 {
+  /// The stage's sun and image based lighting, and what they were last baked from.
+  struct Environment
+  {
+    /// The stage's brightest distant light, shading as the sun in place of the dome's or the sky's.
+    var distantSun: (direction: SIMD3<Float>, irradiance: SIMD3<Float>, angle: Float)?
+    /// How much of the stage's dome and sun show through Sun Height's sky, all of it by day, none from sunset on.
+    var domeWeight: Float = 1
+    /// The stage sun the HUD's sun sliders were last started at.
+    var authoredSun = StageSun.none
+    /// The rect light shading as `distantSun`, out of the local lights.
+    var rectSunKey: LightKey?
+    /// Every bounds the chosen geometry has had, which a rect light far outside of is the sun.
+    var sunSceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
+    var domeRevision: UInt64 = .max
+    /// What the image based lighting was last baked from, the dome's file, frame and banded color.
+    var domeBakeKey: (file: String, values: [Float]) = ("\u{0}", [])
+    /// Bumped when the environment changes, the light probes relight from it.
+    var revision: UInt64 = 0
+    /// IBL is expensive, this sets a flag to bake it once.
+    var iblNeedsBake = true
+    /// The DFG table only depends on the BRDF, it bakes again only after the buffers are rebuilt.
+    var dfgNeedsBake = true
+  }
+
   /// A dome light's environment, uploaded when it changes.
   struct Dome
   {
     var file: String
     var map: GLuint
-    /// The box filtered copy the environment cube bakes from.
+    /// The box filtered copy the environment cube bakes from, its sun taken out to shade as the sun.
     var small: [UInt16]
+    /// The same with the sun left in, baked while a distant light shades as the sun instead.
+    var smallFull: [UInt16]
     var smallSize: SIMD2<Int>
     var fromWorld: Akari.Matrix4
     var fromSky: Akari.Matrix4
     var color: SIMD3<Float>
-    /// The sun extracted from it, in dome space, and its irradiance before `color`.
-    var sun: (direction: SIMD3<Float>, irradiance: SIMD3<Float>)?
+    /// The sun extracted from it, in dome space, its irradiance before `color` and the angle it spreads over.
+    var sun: (direction: SIMD3<Float>, irradiance: SIMD3<Float>, angle: Float)?
     var sunDirection: SIMD3<Float>?
   }
 
@@ -75,15 +101,17 @@ extension Akari.LabFXEngine
       reloadProgress = 1
       reloadPending = false
     }
+
     if forceDomeReload
     {
       forceDomeReload = false
-      domeRevision = .max
+      environment.domeRevision = .max
       dome?.file = "\u{0}"
     }
+
     let revision = scene.DomeRevision()
-    guard revision != domeRevision else { return }
-    domeRevision = revision
+    guard revision != environment.domeRevision else { return }
+    environment.domeRevision = revision
 
     var data = Pixar.HdAkariDomeData()
     guard scene.DomeSnapshot(&data)
@@ -96,11 +124,12 @@ extension Akari.LabFXEngine
         self.dome = nil
         domeChanged()
       }
+
       return
     }
 
     let file = String(data.textureFile)
-    var next = dome ?? Dome(file: "\u{0}", map: 0, small: [], smallSize: .zero, fromWorld: Akari.Matrix4(matrix_identity_float4x4),
+    var next = dome ?? Dome(file: "\u{0}", map: 0, small: [], smallFull: [], smallSize: .zero, fromWorld: Akari.Matrix4(matrix_identity_float4x4),
                             fromSky: Akari.Matrix4(matrix_identity_float4x4), color: .one, sun: nil, sunDirection: nil)
     if file != next.file
     {
@@ -108,6 +137,7 @@ extension Akari.LabFXEngine
       if next.map != 0 { gl.deleteTextures(count: 1, textures: &next.map); next.map = 0 }
       var width = 2, height = 1, pixels = [UInt16](repeating: Self.halfOne, count: 8)
       next.small = [UInt16](repeating: Self.halfOne, count: Self.domeSmallWidth * Self.domeSmallWidth / 2 * 4)
+      next.smallFull = next.small
       next.smallSize = SIMD2(Self.domeSmallWidth, Self.domeSmallWidth / 2)
       next.sun = nil
       if !file.isEmpty, let image = Pixar.HdAkariLoadDomeImage(std.string(file),
@@ -121,11 +151,12 @@ extension Akari.LabFXEngine
         pixels = Array(UnsafeBufferPointer(start: Pixar.HdAkariDomeImagePixels(image), count: width * height * 4))
         let sw = Int(Pixar.HdAkariDomeImageSmallWidth(image)), sh = Int(Pixar.HdAkariDomeImageSmallHeight(image))
         next.small = Array(UnsafeBufferPointer(start: Pixar.HdAkariDomeImageSmall(image), count: sw * sh * 4))
+        next.smallFull = Array(UnsafeBufferPointer(start: Pixar.HdAkariDomeImageSmallFull(image), count: sw * sh * 4))
         next.smallSize = SIMD2(sw, sh)
         if Pixar.HdAkariDomeImageHasSun(image)
         {
-          let v = (0 ..< 6).map { Pixar.HdAkariDomeImageSun(image, Int32($0)) }
-          next.sun = (SIMD3(v[0], v[1], v[2]), SIMD3(v[3], v[4], v[5]))
+          let v = (0 ..< 7).map { Pixar.HdAkariDomeImageSun(image, Int32($0)) }
+          next.sun = (SIMD3(v[0], v[1], v[2]), SIMD3(v[3], v[4], v[5]), v[6])
         }
       }
       // the full size image it was read from is freed, but the allocator would keep it.
@@ -150,6 +181,7 @@ extension Akari.LabFXEngine
       next.fromSky = Akari.Matrix4(Self.expand(fromWorld * skyToWorld))
       next.sunDirection = next.sun.map { Akari.Math.normalize(fromWorld.transpose * $0.direction) }
     }
+
     next.color = SIMD3(data.colorR, data.colorG, data.colorB) * data.intensity * exp2(data.exposure)
     dome = next
     // the dome draws at its exact color, but the lighting baked from it (and the probes relit from
@@ -157,9 +189,9 @@ extension Akari.LabFXEngine
     var values = (0 ..< 3).map { Self.band(next.color[$0]) }
     next.fromWorld.withUnsafeFloats { values += $0.map { ($0 * 1000).rounded() } }
     let key = (file: next.file, values: values)
-    if key.file != domeBakeKey.file || key.values != domeBakeKey.values
+    if key.file != environment.domeBakeKey.file || key.values != environment.domeBakeKey.values
     {
-      domeBakeKey = key
+      environment.domeBakeKey = key
       domeChanged()
     }
   }
@@ -174,7 +206,7 @@ extension Akari.LabFXEngine
   /// sun, or nothing at all without IBL, or under a dome with no sun to extract.
   func sunColor(iblEnabled: Bool) -> SIMD4<Float>
   {
-    if let distantSun { return SIMD4(distantSun.irradiance * atmosphere.sunTransmittance, 2) }
+    if let distantSun = environment.distantSun { return SIMD4(distantSun.irradiance * atmosphere.sunTransmittance, 2) }
     if atmosphere.planet != nil { return SIMD4(Self.atmosphereDefaultSun * atmosphere.sunTransmittance, 2) }
     guard iblEnabled else { return .zero }
     guard let dome else { return SIMD4(0, 0, 0, 1) }
@@ -186,16 +218,18 @@ extension Akari.LabFXEngine
   {
     var data = Pixar.HdAkariDistantData()
     var next: (direction: SIMD3<Float>, irradiance: SIMD3<Float>, angle: Float)?
-    rectSunKey = nil
+    environment.rectSunKey = nil
     if scene.DistantSnapshot(&data), let p = Pixar.GfMatrix4f(data.transform).GetArray()
     {
       next = (Akari.Math.normalize(SIMD3(p[8], p[9], p[10])),
               SIMD3(data.colorR, data.colorG, data.colorB) * data.intensity * exp2(data.exposure),
               data.angle * .pi / 180)
     }
-    else if let bounds = sceneBounds
+    else if let chosen = sceneBounds
     {
-      // a rect light aimed in from far outside the scene is a sun.
+      let bounds = environment.sunSceneBounds.map { (min: pointwiseMin($0.min, chosen.min), max: pointwiseMax($0.max, chosen.max)) } ?? chosen
+      environment.sunSceneBounds = bounds
+      // a rect light aimed in from far outside the scene is a sun, shining down its own axis.
       let center = (bounds.min + bounds.max) * 0.5, radius = simd_length(bounds.max - bounds.min) * 0.5
       var best: Float = 0
       for light in scene.LightSnapshot() where light.visible && light.width > 0 && light.height > 0
@@ -206,27 +240,37 @@ extension Akari.LabFXEngine
         guard d > radius * 2 else { continue }
         let toward = offset / d
         let area = light.width * light.height * simd_length(SIMD3(p[0], p[1], p[2])) * simd_length(SIMD3(p[4], p[5], p[6]))
-        let facing = simd_dot(Akari.Math.normalize(SIMD3(p[8], p[9], p[10])), toward)
+        let axis = Akari.Math.normalize(SIMD3(p[8], p[9], p[10]))
+        let facing = simd_dot(axis, toward)
         guard facing > 0.5 else { continue }
         let irradiance = SIMD3(light.colorR, light.colorG, light.colorB) * light.intensity * exp2(light.exposure)
           * area * facing / (d * d)
         guard irradiance.max() > best else { continue }
         best = irradiance.max()
-        next = (toward, irradiance, 2 * atan((area / .pi).squareRoot() / d))
-        rectSunKey = light.id.string
+        next = (axis, irradiance, 2 * atan((area / .pi).squareRoot() / d))
+        environment.rectSunKey = Pixar.HdAkariPathKey(light.id)
       }
     }
+
     let bandOf: ((direction: SIMD3<Float>, irradiance: SIMD3<Float>, angle: Float)?) -> [Float] =
     {
       guard let sun = $0 else { return [] }
       return [(sun.direction.x * 1000).rounded(), (sun.direction.y * 1000).rounded(), (sun.direction.z * 1000).rounded(),
               Self.band(sun.irradiance.x), Self.band(sun.irradiance.y), Self.band(sun.irradiance.z)]
     }
-    if bandOf(next) != bandOf(distantSun)
+
+    if bandOf(next) != bandOf(environment.distantSun)
     {
-      environmentRevision += 1
+      environment.revision += 1
     }
-    distantSun = next
+
+    // the dome bakes with its own sun in while a distant light takes the sun's place.
+    if (next == nil) != (environment.distantSun == nil), dome?.sun != nil
+    {
+      environment.iblNeedsBake = true
+    }
+
+    environment.distantSun = next
   }
 
   /// Rereads the dome's image on the next sync, after it changed on disk.
@@ -238,36 +282,46 @@ extension Akari.LabFXEngine
   }
 
   /// Binds the dome for the frame, or turns it off.
-  func applyDome()
+  func applyDome(_ light: LightSettings)
   {
-    setFloat("u_domeEnabled", dome == nil ? 0 : 1)
+    setFloat(.domeEnabled, dome == nil ? 0 : environment.domeWeight)
     guard let dome else { return }
-    setSampler("u_domeMap", dome.map)
-    setMatrix("u_domeFromWorld", dome.fromWorld)
-    setMatrix("u_domeFromSky", dome.fromSky)
-    setVector("u_domeColor", SIMD4(dome.color, 1))
-    setVector("u_domeSun", SIMD4((dome.sun?.irradiance ?? .zero) * dome.color, 0))
+    // turned so the sun it was shot with stands where Sun Height puts it.
+    var fromWorld = dome.fromWorld
+    if let authored = authoredSunDirection, let swung = swungSun(light)
+    {
+      let turn = Akari.Matrix4(simd_float4x4(simd_quatf(from: authored, to: swung.sun)))
+      fromWorld = dome.fromWorld * turn.inverse()
+    }
+
+    setSampler(.domeMap, dome.map)
+    setMatrix(.domeFromWorld, fromWorld)
+    setMatrix(.domeFromSky, fromWorld * (dome.fromWorld.inverse() * dome.fromSky))
+    setVector(.domeColor, SIMD4(dome.color, 1))
+    setVector(.domeSun, SIMD4((dome.sun?.irradiance ?? .zero) * dome.color, 0))
   }
 
   /// The passes an IBL bake runs, the dome's in place of the procedural sky.
   func setIBLPasses(active: Bool)
   {
-    setPasses(["prefilter", "irradiance"], active: active)
-    runtime.setPassActive("dfg", active: active && dfgNeedsBake)
-    runtime.setPassActive("sky", active: active && dome == nil && atmosphere.planet == nil)
-    runtime.setPassActive("dome", active: active && dome != nil && atmosphere.planet == nil)
-    runtime.setPassActive("atmosphere env", active: active && atmosphere.planet != nil)
-    guard active, let dome else { return }
-    gl.bindTexture(target: GL_TEXTURE_2D, texture: runtime.texture("dome", named: "dome"))
+    setPasses([.prefilter, .irradiance], active: active)
+    runtime.setPassActive(.dfg, active: active && environment.dfgNeedsBake)
+    // the environment bakes from the procedural sky while the dome is handing over to it.
+    let bakesDome = dome != nil && environment.domeWeight >= 1
+    runtime.setPassActive(.sky, active: active && !bakesDome && atmosphere.planet == nil)
+    runtime.setPassActive(.dome, active: active && bakesDome && atmosphere.planet == nil)
+    runtime.setPassActive(.atmosphereEnv, active: active && atmosphere.planet != nil)
+    guard active, bakesDome, let dome else { return }
+    gl.bindTexture(target: GL_TEXTURE_2D, texture: runtime.texture(.dome, named: .dome))
     gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: 0,
                      width: GLsizei(dome.smallSize.x), height: GLsizei(dome.smallSize.y),
-                     format: GL_RGBA, type: GLenum(GL_HALF_FLOAT), pixels: dome.small)
+                     format: GL_RGBA, type: GLenum(GL_HALF_FLOAT), pixels: environment.distantSun == nil ? dome.small : dome.smallFull)
   }
 
   private func domeChanged()
   {
-    iblNeedsBake = true
-    environmentRevision += 1
+    environment.iblNeedsBake = true
+    environment.revision += 1
   }
 
   private static let halfOne: UInt16 = 0x3C00

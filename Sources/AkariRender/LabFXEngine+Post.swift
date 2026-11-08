@@ -58,9 +58,11 @@ extension Akari.LabFXEngine
     var dofActive = true
   }
 
-  static let bloomPasses = (0 ..< 6).map { "bloom down \($0)" } + (0 ..< 5).map { "bloom up \($0)" } + ["bloom composite"]
-  static let lensPasses = ["lens streak", "lens streak wide", "lens streak long", "lens ghosts"]
-  static let dofPasses = ["depth of field depth", "depth of field tiles 8", "depth of field tiles", "depth of field neighbors", "depth of field downsample", "depth of field half", "depth of field", "depth of field apply"]
+  static let bloomPasses: [Pass] = [.bloomDown0, .bloomDown1, .bloomDown2, .bloomDown3, .bloomDown4, .bloomDown5,
+                                     .bloomUp0, .bloomUp1, .bloomUp2, .bloomUp3, .bloomUp4,
+                                     .bloomComposite]
+  static let lensPasses: [Pass] = [.lensStreak, .lensStreakWide, .lensStreakLong, .lensGhosts]
+  static let dofPasses: [Pass] = [.depthOfFieldDepth, .depthOfFieldTiles8, .depthOfFieldTiles, .depthOfFieldNeighbors, .depthOfFieldDownsample, .depthOfFieldHalf, .depthOfField, .depthOfFieldApply]
 
   /// The lens of the USD camera a render or the viewport looks through, nil for a free camera.
   public var usdCameraLens: Pixar.HdAkariCameraLens?
@@ -90,9 +92,9 @@ extension Akari.LabFXEngine
     let strength = Float(lens.bloom) * settings.strength
     let streaks = Float(lens.streak) + settings.streaks
     let ghosts = Float(lens.flare) + settings.ghosts
-    setVector("u_bloom", SIMD4(strength, streaks, ghosts, 0))
-    setVector("u_bloomFilter", SIMD4(settings.threshold, settings.smoothness, settings.maximum > 0 ? settings.maximum : 60000, 0))
-    setVector("u_bloomTint", SIMD4(settings.tint, settings.saturation))
+    setVector(.bloom, SIMD4(strength, streaks, ghosts, 0))
+    setVector(.bloomFilter, SIMD4(settings.threshold, settings.smoothness, settings.maximum > 0 ? settings.maximum : 60000, 0))
+    setVector(.bloomTint, SIMD4(settings.tint, settings.saturation))
     post.bloomThisFrame = strength > 0 || streaks > 0 || ghosts > 0
     post.lensThisFrame = streaks > 0 || ghosts > 0
   }
@@ -108,14 +110,15 @@ extension Akari.LabFXEngine
       lens.fStop = Double(settings.fStop)
       lens.focusDistance = post.focusObjectDistance ?? Double(settings.focusDistance) / Double(stageMetersPerUnit)
     }
+
     guard lens.fStop > 0, lens.focusDistance > 0, lens.horizontalAperture > 0 else { return }
     let f = lens.focalLength
     let focus = lens.focusDistance * Double(stageMetersPerUnit) * 1000
     guard focus > f else { return }
     let coc = f * f / (lens.fStop * (focus - f)) / lens.horizontalAperture * Double(width)
     let maxRadius = min(Double(settings.maxSize) * Double(width) / 1920, 48)
-    setVector("u_dof", SIMD4(Float(coc), Float(lens.focusDistance), Float(max(maxRadius, 4)), geometry.transparent.isEmpty ? 0 : 1))
-    setVector("u_dofSampling", SIMD4(exact ? 0.375 : 1.5, 0, 0, 0))
+    setVector(.dof, SIMD4(Float(coc), Float(lens.focusDistance), Float(max(maxRadius, 4)), geometry.flags.transparent.isEmpty ? 0 : 1))
+    setVector(.dofSampling, SIMD4(exact ? 0.375 : 1.5, 0, 0, 0))
     post.dofThisFrame = true
   }
 
@@ -126,16 +129,19 @@ extension Akari.LabFXEngine
       setPasses(Self.bloomPasses, active: post.bloomThisFrame)
       post.bloomActive = post.bloomThisFrame
     }
+
     if post.lensThisFrame != post.lensActive
     {
       setPasses(Self.lensPasses, active: post.lensThisFrame)
       post.lensActive = post.lensThisFrame
     }
+
     if post.dofThisFrame != post.dofActive
     {
       setPasses(Self.dofPasses, active: post.dofThisFrame)
       post.dofActive = post.dofThisFrame
     }
+
     post.bloomThisFrame = false
     post.lensThisFrame = false
     post.dofThisFrame = false

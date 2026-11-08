@@ -144,6 +144,7 @@ SdfPath GpuSkinComputation(HdSceneDelegate *sceneDelegate, SdfPath const &id)
     if (comp->GetGpuKernelSource().find(_skinTokens->skinningDualQuats.GetString()) != std::string::npos) return SdfPath();
     return pv.sourceComputationId;
   }
+
   return SdfPath();
 }
 
@@ -153,6 +154,7 @@ VtValue SkinInput(HdSceneDelegate *sceneDelegate, SdfPath const &comp, TfToken c
   for (HdExtComputationInputDescriptor const &in : sceneDelegate->GetExtComputationInputDescriptors(comp)) {
     if (in.name == name) return sceneDelegate->GetExtComputationInput(in.sourceComputationId, in.sourceComputationOutputName);
   }
+
   return sceneDelegate->GetExtComputationInput(comp, name);
 }
 
@@ -190,6 +192,7 @@ bool ReadSkinRest(HdSceneDelegate *sceneDelegate, SdfPath const &comp, size_t jo
   for (size_t j = 0; j < jointCount; ++j) {
     for (int a = 0; a < 3; ++a) { jointBounds[j * 6 + a] = 3.4e38f; jointBounds[j * 6 + 3 + a] = -3.4e38f; }
   }
+
   for (size_t i = 0; i < n; ++i) {
     const GfVec3f p = bind.Transform(rest[i]);
     points[i] = p;
@@ -204,6 +207,7 @@ bool ReadSkinRest(HdSceneDelegate *sceneDelegate, SdfPath const &comp, size_t jo
       }
     }
   }
+
   data.points = std::move(points);
   data.skinInfluences = std::move(perPoint);
   data.skinInfluencesPerPoint = k;
@@ -236,6 +240,7 @@ bool ReadSkinXforms(HdSceneDelegate *sceneDelegate, SdfPath const &comp, std::ve
       for (int a = 0; a < 3; ++a) { lo[a] = std::min(lo[a], p[a]); hi[a] = std::max(hi[a], p[a]); }
     }
   }
+
   if (lo[0] > hi[0]) lo = hi = GfVec3f(0.0f);
   return true;
 }
@@ -254,6 +259,7 @@ void PackCornerColors(HdSceneDelegate *sceneDelegate, SdfPath const &id, HdMeshU
       if (pv.name == HdTokens->displayColor) { interp = HdInterpolation(i); found = true; break; }
     }
   }
+
   if (!found || interp == HdInterpolationConstant) return;
   const VtValue value = sceneDelegate->Get(id, HdTokens->displayColor);
   if (!value.IsHolding<VtVec3fArray>()) return;
@@ -283,6 +289,7 @@ void PackCornerColors(HdSceneDelegate *sceneDelegate, SdfPath const &id, HdMeshU
   } else {
     return;
   }
+
   for (size_t i = 0; i < corners; ++i) {
     if (uvs[i][0] >= 0.0f) continue;
     auto channel = [&](int k) { return uint32_t(std::clamp(perCorner[i][k], 0.0f, 1.0f) * 255.0f + 0.5f); };
@@ -371,6 +378,7 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
       *dirtyBits = HdChangeTracker::Clean;
       return;
     }
+
     GfVec3f color(0.8f, 0.8f, 0.8f);
     float opacity = 1.0f;
     float roughness = 0.5f;
@@ -397,6 +405,7 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
                            textures.normalPath,
                            textures.emissivePath, textures.emissiveColor, textures.sources);
     }
+
     scene->UpdateMeshDisplay(id, xf, color, opacity, roughness, metallic, vis);
     *dirtyBits = HdChangeTracker::Clean;
     return;
@@ -418,6 +427,7 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
       return;
     }
   }
+
   if (pointsOnly && _skinComputation.IsEmpty()) {
     const VtValue pointsVal = ::PXR_NS::GetPoints(sceneDelegate, id);
     if (pointsVal.IsHolding<VtVec3fArray>() &&
@@ -459,6 +469,7 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
       data.skinInfluencesPerPoint = 0;
     }
   }
+
   if (_skinComputation.IsEmpty()) {
     const VtValue pointsVal = ::PXR_NS::GetPoints(sceneDelegate, id);
     if (pointsVal.IsHolding<VtVec3fArray>()) {
@@ -496,6 +507,7 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
     _topologyUvs = data.uvs;
     _topologyRevision = data.dataRevision;
   }
+
   data.topologyRevision = _topologyRevision;
 
   // one prototype mesh carries its prototype's shared instance set.
@@ -504,6 +516,7 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
     data.instances = std::move(set.transforms);
     data.instancesKey = set.key;
   }
+
   if (instanced && data.instances.empty()) scene->RemoveMesh(id);
   else scene->UpdateMesh(std::move(data));
 
@@ -515,7 +528,7 @@ HdAkariMesh::Finalize(HdRenderParam *renderParam)
 {
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
     if (HdAkariScene *scene = param->GetScene()) {
-      scene->RemoveMesh(GetId());
+      scene->RemoveMesh(GetId(), GetPrimId());
       scene->RemoveProbe(GetId());
       scene->RemoveStyle(GetPrimId());
     }

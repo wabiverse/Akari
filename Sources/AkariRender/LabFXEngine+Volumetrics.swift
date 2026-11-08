@@ -75,9 +75,9 @@ extension Akari.LabFXEngine
     var previousViewProjection: Akari.Matrix4?
   }
 
-  private static let volumePassNames = [
-    "volume scatter",
-    "volume integrate"
+  private static let volumePassNames: [Pass] = [
+    .volumeScatter,
+    .volumeIntegrate
   ]
 
   /// The froxel grid is 8x8 depth slices packed into the half resolution volume atlas.
@@ -85,10 +85,6 @@ extension Akari.LabFXEngine
   private static let volumeAtlasScale = 2
 
   /// Turns on froxel volumetrics for this frame.
-  ///
-  /// - Parameters:
-  ///   - camera: the (jittered) camera the resolve's `u_invProj` inverts.
-  ///   - volume: density, phase anisotropy, reach and self shadowing of the fog.
   public func setVolumetrics(camera: Akari.Camera, volume settings: VolumeSettings)
   {
     volumetrics.simRequest?()
@@ -99,6 +95,7 @@ extension Akari.LabFXEngine
       if stage.hasAnisotropy { volume.anisotropy = Float(stage.anisotropy) }
       if stage.hasMaxDistance { volume.maxDistance = Float(stage.maxDistance) }
     }
+
     guard camera.projection[2, 3] < -0.5 else { return }
     let a = camera.projection[2, 2]
     let b = camera.projection[3, 2]
@@ -110,8 +107,8 @@ extension Akari.LabFXEngine
     guard clipNear.isFinite, far.isFinite, far > clipNear else { return }
 
     let tileDivisor = Self.volumeAtlasScale * Self.volumeSliceColumns
-    let grid = SIMD2<Float>(Float(max(halfWidth * 2 / tileDivisor, 1)),
-                            Float(max(halfHeight * 2 / tileDivisor, 1)))
+    let grid = SIMD2<Float>(Float(max(sizes.half.width * 2 / tileDivisor, 1)),
+                            Float(max(sizes.half.height * 2 / tileDivisor, 1)))
 
     let unitsPerMeter = camera.world(meters: 1)
     let density = max(volume.density, 0) / unitsPerMeter
@@ -120,17 +117,17 @@ extension Akari.LabFXEngine
     applyFogShape(unitsPerMeter: unitsPerMeter, haze: haze)
 
     let gridSize = SIMD2<Int>(Int(grid.x), Int(grid.y))
-    let gbufferPosition = runtime.texture("gbuffer", named: "position")
+    let gbufferPosition = runtime.texture(.gbuffer, named: .position)
     guard froxelVolume.reduceDepth(gbufferPosition: gbufferPosition,
                                    gridWidth: gridSize.x,
                                    gridHeight: gridSize.y,
-                                   screenWidth: renderWidth,
-                                   screenHeight: renderHeight)
+                                   screenWidth: sizes.render.width,
+                                   screenHeight: sizes.render.height)
     else { return }
     if froxelVolume.depthTexture != volumetrics.boundFroxelDepth
     {
       volumetrics.boundFroxelDepth = froxelVolume.depthTexture
-      setSampler("u_froxelDepth", volumetrics.boundFroxelDepth)
+      setSampler(.froxelDepth, volumetrics.boundFroxelDepth)
     }
 
     let sunLevelBias = max(volume.sunShadowLevelBias, 0)
@@ -164,11 +161,11 @@ extension Akari.LabFXEngine
     let wind = SIMD3(Float(stage?.windX ?? 0), Float(stage?.windY ?? 0), Float(stage?.windZ ?? 0)) * unitsPerMeter
     let falloff = Float(max(stage?.heightFalloff ?? 0, 0)) * unitsPerMeter
     let count = min(volumetrics.disturbers.count / 8, Self.maxFogDisturbers)
-    setVector("u_volumeNoise", SIMD4(amount, scale, octaves, swirl))
-    setVector("u_volumeFlow", SIMD4(wind, Float(stage?.seconds ?? 0)))
-    setVector("u_volumeLayer", SIMD4(Float(stage?.floorHeight ?? 0), falloff, haze, Float(count)))
-    setVector("u_volumeLook", SIMD4(Float(max(stage?.ambient ?? 1, 0)), Float(max(stage?.sunScatter ?? 1, 0)), 0, 0))
-    fogSim.computeVisibility(lights: Array(litPointLights.prefix(4)))
+    setVector(.volumeNoise, SIMD4(amount, scale, octaves, swirl))
+    setVector(.volumeFlow, SIMD4(wind, Float(stage?.seconds ?? 0)))
+    setVector(.volumeLayer, SIMD4(Float(stage?.floorHeight ?? 0), falloff, haze, Float(count)))
+    setVector(.volumeLook, SIMD4(Float(max(stage?.ambient ?? 1, 0)), Float(max(stage?.sunScatter ?? 1, 0)), 0, 0))
+    fogSim.computeVisibility(lights: Array(pointLights.lit.prefix(4)))
 
     if volumetrics.disturberTexture == 0
     {
@@ -180,6 +177,7 @@ extension Akari.LabFXEngine
                     width: 2, height: GLsizei(Self.maxFogDisturbers), border: 0,
                     format: GL_RGBA, type: GL_FLOAT, pixels: nil)
     }
+
     if count > 0
     {
       var texels = Array(volumetrics.disturbers.prefix(count * 8))
@@ -188,11 +186,13 @@ extension Akari.LabFXEngine
       {
         texels[i * 8 + 3] *= unitsPerMeter
       }
+
       gl.bindTexture(target: GL_TEXTURE_2D, texture: volumetrics.disturberTexture)
       gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: 0, width: 2, height: GLsizei(count),
                        format: GL_RGBA, type: GL_FLOAT, pixels: texels)
     }
-    setSampler("u_fogDisturbers", volumetrics.disturberTexture)
+
+    setSampler(.fogDisturbers, volumetrics.disturberTexture)
 
     var simTexture = fogSim.isActive ? fogSim.texture : 0
     if simTexture == 0
@@ -205,19 +205,21 @@ extension Akari.LabFXEngine
                       width: 1, height: 1, depth: 1, border: 0, format: GLenum(GL_RED), type: GLenum(GL_HALF_FLOAT),
                       pixels: [UInt16(0)])
       }
+
       simTexture = volumetrics.emptySim
     }
-    runtime.setUniform("u_fogSim", type: GLenum(GL_SAMPLER_3D), data: &simTexture)
+
+    runtime.setUniform(.fogSim, type: GLenum(GL_SAMPLER_3D), data: &simTexture)
     var simVelocity = fogSim.isActive && fogSim.velocityTexture != 0 ? fogSim.velocityTexture : volumetrics.emptySim
-    runtime.setUniform("u_fogSimVelocity", type: GLenum(GL_SAMPLER_3D), data: &simVelocity)
+    runtime.setUniform(.fogSimVelocity, type: GLenum(GL_SAMPLER_3D), data: &simVelocity)
     var simVisibility = fogSim.isActive && fogSim.visibilityTexture != 0 ? fogSim.visibilityTexture : volumetrics.emptySim
-    runtime.setUniform("u_fogSimVisibility", type: GLenum(GL_SAMPLER_3D), data: &simVisibility)
-    setVector("u_fogSimMin", SIMD4(fogSim.boundsMin, fogSim.isActive ? 1 : 0))
-    setVector("u_fogSimMax", SIMD4(fogSim.boundsMax, fogSim.densityCellSize))
+    runtime.setUniform(.fogSimVisibility, type: GLenum(GL_SAMPLER_3D), data: &simVisibility)
+    setVector(.fogSimMin, SIMD4(fogSim.boundsMin, fogSim.isActive ? 1 : 0))
+    setVector(.fogSimMax, SIMD4(fogSim.boundsMax, fogSim.densityCellSize))
     if fogSim.isActive != volumetrics.simPassActive
     {
-      runtime.setPassActive("fog sim march", active: fogSim.isActive)
-      runtime.setPassActive("fog sim composite", active: fogSim.isActive)
+      runtime.setPassActive(.fogSimMarch, active: fogSim.isActive)
+      runtime.setPassActive(.fogSimComposite, active: fogSim.isActive)
       volumetrics.simPassActive = fogSim.isActive
     }
   }
@@ -247,7 +249,7 @@ extension Akari.LabFXEngine
 
   func attachVolumetrics()
   {
-    runtime.setPassCallback("volume-integrate", callback: akariVolumeIntegrateCallback,
+    runtime.setPassCallback(.volumeIntegrate, callback: akariVolumeIntegrateCallback,
                             userdata: Unmanaged.passUnretained(self).toOpaque())
   }
 
@@ -261,31 +263,35 @@ extension Akari.LabFXEngine
       volumetrics.passesActive = thisFrame
       volumetrics.previousViewProjection = nil
     }
+
     let volume = thisFrame ? volumetrics.pending : .zero
     if volume != volumetrics.uploaded
     {
-      setVector("u_volume", volume)
+      setVector(.volume, volume)
       volumetrics.uploaded = volume
     }
+
     if thisFrame
     {
       if volumetrics.pendingRange != volumetrics.uploadedRange
       {
-        setVector("u_volumeRange", volumetrics.pendingRange)
+        setVector(.volumeRange, volumetrics.pendingRange)
         volumetrics.uploadedRange = volumetrics.pendingRange
       }
+
       if volumetrics.pendingSunLevelBias != volumetrics.uploadedSunLevelBias
       {
-        setFloat("u_volumeSunLevelBias", volumetrics.pendingSunLevelBias)
+        setFloat(.volumeSunLevelBias, volumetrics.pendingSunLevelBias)
         volumetrics.uploadedSunLevelBias = volumetrics.pendingSunLevelBias
       }
+
       let previous = froxelVolume.hasHistory ? volumetrics.previousViewProjection : nil
-      setSampler("u_froxelHistory", froxelVolume.historyTexture)
-      setMatrix("u_volumePrevViewProj", previous ?? volumetrics.viewProjection)
-      setFloat("u_volumeHistory", previous == nil ? 0 : 1)
+      setSampler(.froxelHistory, froxelVolume.historyTexture)
+      setMatrix(.volumePrevViewProj, previous ?? volumetrics.viewProjection)
+      setFloat(.volumeHistory, previous == nil ? 0 : 1)
       volumetrics.previousViewProjection = volumetrics.viewProjection
-      volumetrics.scatterTexture = runtime.texture("volumeScatter", named: "volumeScatter")
-      volumetrics.integratedTexture = runtime.texture("volumeIntegrated", named: "volumeIntegrated")
+      volumetrics.scatterTexture = runtime.texture(.volumeScatter, named: .volumeScatter)
+      volumetrics.integratedTexture = runtime.texture(.volumeIntegrated, named: .volumeIntegrated)
     }
   }
 

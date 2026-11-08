@@ -160,11 +160,11 @@ extension AkariDemo
     @Published var lookingThrough = false
     @Published var showsPassepartout = false
 
-    let cameras: [CameraChoice]
+    @Published var cameras: [CameraChoice]
     let renderer: Akari.FinalRender
     let cameraView: Akari.CameraView
     let playback: Akari.Playback
-    let soundtrack: String?
+    var soundtrack: String?
     var savesSingleFrameOnCompletion: Bool
 
     var pendingJob: Akari.FinalRender.Job?
@@ -207,8 +207,9 @@ extension AkariDemo
       }
       else
       {
-        camera = stageCameras.first ?? .viewport
+        camera = Self.renderCamera(info) ?? stageCameras.first ?? .viewport
       }
+
       path = arguments.path ?? defaultPath
       format = arguments.format ?? defaults.format
       colorMode = defaults.colorMode
@@ -232,7 +233,38 @@ extension AkariDemo
         self?.lookingThrough = false
         self?.showsPassepartout = false
       }
-      if arguments.camera != nil, !arguments.background { lookThrough(camera) }
+
+      if arguments.camera != nil || Self.renderCamera(info) != nil, !arguments.background { lookThrough(camera) }
+    }
+
+    private static func renderCamera(_ info: Pixar.HdAkariStageInfo) -> CameraChoice?
+    {
+      let path = String(info.renderCamera)
+      return path.isEmpty ? nil : CameraChoice(path: path)
+    }
+
+    /// A newly opened scene's cameras, frame range and rate, looking through its render camera.
+    func adoptStage()
+    {
+      renderer.adoptStage()
+      let info = renderer.stageInfo
+      let stageCameras = info.cameras.map { CameraChoice(path: String($0)) }
+      cameras = [.viewport] + stageCameras
+      let track = String(info.soundtrack)
+      soundtrack = track.isEmpty ? nil : track
+      let defaults = OutputSettings()
+      let animated = renderer.hasAuthoredTimeCodeRange
+      frameStart = animated ? Int(info.startTimeCode.rounded()) : defaults.frameStart
+      frameEnd = animated ? Int(info.endTimeCode.rounded()) : defaults.frameEnd
+      let rate = info.timeCodesPerSecond > 0 ? info.timeCodesPerSecond : defaults.frameRate
+      let rounded = max(Int(rate.rounded()), 1)
+      let base = abs(Double(rounded) / rate - 1) < 1e-6 ? 1 : Double(rounded) / rate
+      fps = rounded
+      fpsBase = base
+      customFrameRate = FrameRate.preset(fps: rounded, base: base) == nil
+      let render = Self.renderCamera(info)
+      camera = render ?? stageCameras.first ?? .viewport
+      lookThrough(render ?? .viewport)
     }
 
     /// The output properties as the renderer takes them.
@@ -304,6 +336,7 @@ extension AkariDemo
       { [weak self] progress in
         self?.show(progress)
       }
+
       if !started { message = "a render is already running" }
     }
 

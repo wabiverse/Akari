@@ -72,18 +72,28 @@ public extension Akari
       Prim.Bprim.allCases.map(\.rawValue)
     }
 
+    /// The AOVs Akari renders, by their Hydra names.
+    enum Aov: String
+    {
+      case color
+      case depth
+      case primId
+      case instanceId
+      case elementId
+    }
+
     /// Returns Akari's raw default AOV descriptor for a given `name`.
     public func defaultAovDescriptor(forName name: String) -> Int32
     {
-      switch name
+      switch Aov(rawValue: name)
       {
-        case "color":
+        case .color:
           AK_AOV_FORMAT_COLOR.rawValue
-        case "depth":
+        case .depth:
           AK_AOV_FORMAT_DEPTH.rawValue
-        case "primId", "instanceId", "elementId":
+        case .primId, .instanceId, .elementId:
           AK_AOV_FORMAT_ID.rawValue
-        default:
+        case nil:
           AK_AOV_FORMAT_INVALID.rawValue
       }
     }
@@ -160,6 +170,7 @@ public func AKRenderDelegateDefaultAovDescriptor(_ delegate: UnsafeMutableRawPoi
   {
     return AK_AOV_FORMAT_INVALID.rawValue
   }
+
   return delegate.defaultAovDescriptor(forName: String(cString: name))
 }
 

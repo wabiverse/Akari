@@ -67,6 +67,14 @@ public extension Akari
       lock.unlock()
     }
 
+    /// Whether any prototype's instances move without a rerecord.
+    static var isEmpty: Bool
+    {
+      lock.lock()
+      defer { lock.unlock() }
+      return slots.isEmpty
+    }
+
     public static func slot(_ path: String) -> Slot?
     {
       lock.lock()
@@ -91,6 +99,7 @@ public extension Akari
         slot.version += 1
         slots[path] = slot
       }
+
       lock.unlock()
     }
   }

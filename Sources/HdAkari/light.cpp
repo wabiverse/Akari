@@ -39,6 +39,7 @@
  * ----------------------------------------------------------------- */
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
+# include <Tf/staticTokens.h>
 # include <Hd/changeTracker.h>
 # include <Hd/light.h>
 # include <Hd/sceneDelegate.h>
@@ -48,6 +49,7 @@
 # include <Vt/value.h>
 #else
 # include <pxr/pxr.h>
+# include <pxr/base/tf/staticTokens.h>
 # include <pxr/imaging/hd/changeTracker.h>
 # include <pxr/imaging/hd/light.h>
 # include <pxr/imaging/hd/sceneDelegate.h>
@@ -66,6 +68,15 @@
 #include "HdAkari/scene.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
+
+TF_DEFINE_PRIVATE_TOKENS(_tokens,
+  ((hero, "akari:hero"))
+  ((lightCameraVisible, "akari:light:cameraVisible"))
+  ((lightProbes, "akari:light:probes"))
+  ((primvarsLightCameraVisible, "primvars:akari:light:cameraVisible"))
+  ((primvarsLightProbes, "primvars:akari:light:probes"))
+  ((userPropertiesAkariHero, "userProperties:akari_hero"))
+);
 
 HdAkariLight::HdAkariLight(SdfPath const &id, TfToken const &type)
   : HdLight(id),
@@ -151,14 +162,14 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
       const GfVec3f c = color.UncheckedGet<GfVec3f>();
       distant.colorR = c[0]; distant.colorG = c[1]; distant.colorB = c[2];
     }
-    // normalized, intensity is the illuminance it delivers, otherwise the luminance of its disk.
-    const VtValue normalize = sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize);
+    // intensity is the luminance of its disk, normalized or not, as RenderMan's distant light has no normalize.
     const float halfAngle = std::clamp(distant.angle * float(M_PI) / 360.0f, 0.0f, float(M_PI));
-    if (!(normalize.IsHolding<bool>() && normalize.UncheckedGet<bool>()) && halfAngle > 0.0f)
+    if (halfAngle > 0.0f)
     {
       const float s = std::sin(halfAngle);
       distant.intensity *= float(M_PI) * (halfAngle <= float(M_PI) / 2 ? s * s : 2.0f - s * s);
     }
+
     scene->UpdateDistant(std::move(distant));
     *dirtyBits = HdChangeTracker::Clean;
     return;
@@ -249,8 +260,8 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
     data.intensity /= area;
   }
 
-  // a hero light always keeps full quality shadows, `akari:hero` in USD or `akari_hero` set on a Blender light.
-  for (TfToken const &name : {TfToken("akari:hero"), TfToken("userProperties:akari_hero")})
+  // a hero light always keeps full quality shadows, `akari:hero` in USD or an `akari_hero` user property.
+  for (TfToken const &name : {_tokens->hero, _tokens->userPropertiesAkariHero})
   {
     const VtValue heroVal = sceneDelegate->GetLightParamValue(id, name);
     if (heroVal.IsHolding<bool>()) data.hero = heroVal.UncheckedGet<bool>();
@@ -259,7 +270,7 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
     if (data.hero) break;
   }
 
-  for (TfToken const &name : {TfToken("primvars:akari:light:cameraVisible"), TfToken("akari:light:cameraVisible")})
+  for (TfToken const &name : {_tokens->primvarsLightCameraVisible, _tokens->lightCameraVisible})
   {
     const VtValue v = sceneDelegate->GetLightParamValue(id, name);
     if (v.IsHolding<bool>()) { data.cameraVisible = v.UncheckedGet<bool>(); break; }
@@ -267,7 +278,7 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
     if (v.IsHolding<VtArray<bool>>() && !v.UncheckedGet<VtArray<bool>>().empty()) { data.cameraVisible = v.UncheckedGet<VtArray<bool>>()[0]; break; }
   }
 
-  for (TfToken const &name : {TfToken("primvars:akari:light:probes"), TfToken("akari:light:probes")})
+  for (TfToken const &name : {_tokens->primvarsLightProbes, _tokens->lightProbes})
   {
     const VtValue v = sceneDelegate->GetLightParamValue(id, name);
     if (v.IsHolding<bool>()) { data.probes = v.UncheckedGet<bool>(); break; }

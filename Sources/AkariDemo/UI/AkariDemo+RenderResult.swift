@@ -98,6 +98,7 @@ extension AkariDemo
             .foregroundColor(Properties.label)
           ProgressBar(fraction: Self.fraction(progress))
         }
+
         Spacer()
         if let message = job.message
         {
@@ -105,6 +106,7 @@ extension AkariDemo
             .font(.system(size: 10))
             .foregroundColor(Color(white: 0.6))
         }
+
         if job.isRendering
         {
           PropertiesButton("Cancel  Esc") { job.cancel() }
@@ -115,6 +117,7 @@ extension AkariDemo
           {
             PropertiesButton("Save Image") { job.saveImage() }
           }
+
           PropertiesButton("Close  Esc") { job.closeResult() }
         }
       }
@@ -135,6 +138,7 @@ extension AkariDemo
         case .cancelled: parts.append("Cancelled")
         case .failed: parts.append("Failed")
       }
+
       parts.append("Time \(RenderJob.clock(p.elapsed))")
       if p.lastFrameTime > 0, p.frameCount > 1 { parts.append("Last \(RenderJob.clock(p.lastFrameTime))") }
       if let remaining = p.remaining, p.status == .rendering { parts.append("Remaining \(RenderJob.clock(remaining))") }

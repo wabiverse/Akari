@@ -99,6 +99,7 @@ HdAkariRenderPass::_Execute(HdRenderPassStateSharedPtr const &renderPassState,
     if (!rb) {
       continue;
     }
+
     if (aov.aovName == HdAovTokens->color) {
       colorBuffer = rb;
       width = static_cast<int>(rb->GetWidth());

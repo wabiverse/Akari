@@ -44,6 +44,27 @@ import LabGL
 
 extension Akari.LabFXEngine
 {
+  /// A buffer size in pixels.
+  struct PixelSize: Equatable
+  {
+    var width: Int
+    var height: Int
+  }
+
+  /// The sizes a frame renders at, from the target down.
+  struct FrameSizes
+  {
+    var target = PixelSize(width: 0, height: 0)
+    /// The G-buffer's size, `renderScale` of the target's.
+    var render = PixelSize(width: 0, height: 0)
+    /// The half res effect buffers size, half of the smaller of the G-buffer and target.
+    var half = PixelSize(width: 1, height: 1)
+    var supersample = PixelSize(width: 1, height: 1)
+    /// What the scene buffers were last staged at.
+    var stagedRenderScale: Float = 1
+    var stagedSupersampleScale: Float = 1
+  }
+
   /// Steps the render scale down if the GPU cant keep up with the fps,
   /// and back up, into supersampling as far as it's allowed, once the
   /// next step up fits it again.
@@ -65,6 +86,13 @@ extension Akari.LabFXEngine
     var underBudget: Double = 0
     var sinceChange: Double = 0
     var lastUpdate: Double?
+    /// How much finer or coarser than the record's fitted detail the instances pick their levels at,
+    /// following the frames shown toward the frame budget.
+    var geometryScale: Float = 1
+    /// The scale it heads for, `geometryScale` taking it in eighth octave steps so a settled frame culls the same.
+    var geometryTarget: Float = 1
+    /// Smoothed seconds between the frames shown.
+    var frameTime: Double = 0
   }
 
   /// Picks this frame's render scale, the supersampling ceiling while `.dynamicResolution` is off.
@@ -78,25 +106,64 @@ extension Akari.LabFXEngine
     let dt = res.lastUpdate.map { min(now - $0, 0.25) } ?? 0
     res.lastUpdate = now
 
+    let sample = labgl.lastFrameGPUTime()
+    if sample > 0
+    {
+      res.gpuTime = res.gpuTime == 0 ? sample : res.gpuTime + (sample - res.gpuTime) * 0.1
+    }
+
+    // the instances' detail follows the frames the viewport shows, everything a frame costs counted:
+    // coarser while they come late, finer only while they come well early, held in between so a
+    // settled view stays as it is.
+    let frameBudget = 1 / Double(max(settings.targetFrameRate, 1))
+    if dt > 0, dt < 0.25
+    {
+      res.frameTime = res.frameTime == 0 ? dt : res.frameTime + (dt - res.frameTime) * 0.1
+    }
+
+    if res.frameTime > 0
+    {
+      let frame = Float(min(dt, 0.033))
+      // a display synced frame never comes early, so on time with the GPU well under budget is room too,
+      // or the slow frames of a launch would hold the detail down until something reframes it.
+      let room = res.frameTime < frameBudget * 0.8
+        || (res.frameTime < frameBudget * 1.1 && res.gpuTime > 0 && res.gpuTime < frameBudget * 0.6)
+      let clampedStepFactor: Float = res.frameTime > frameBudget * 1.1
+        ? max(Float(frameBudget / res.frameTime), 1 - 3 * frame)
+        : room ? 1 + 0.5 * frame : 1
+      res.geometryTarget = res.geometryTarget * clampedStepFactor
+
+      let minFloor: Float = 0.15
+      let maxHeadroom: Float = 2.0
+      res.geometryTarget = min(max(res.geometryTarget, minFloor), maxHeadroom / max(geometry.instanceLOD.detail, 1e-4))
+
+      let octave = log2(res.geometryTarget / res.geometryScale)
+      if abs(octave) > 0.125
+      {
+        res.geometryScale = exp2((log2(res.geometryTarget) * 8).rounded() / 8)
+      }
+    }
+
     let step = RenderSettings.supersamplingStep(settings.supersampling)
     let chained = step > 1 &&
       settings.upscaler == .metalFX &&
       settings.features.contains(.temporalAA) &&
-      !upscaleFailed && labgl.upscaleSupported() != 0
+      !upscaling.failed && labgl.upscaleSupported() != 0
 
     supersampleScale = chained ? step : 1
     let ceiling = chained ? 1 : step
     guard settings.features.contains(.dynamicResolution)
     else
     {
-      res = DynamicResolution(lastUpdate: now)
+      res = DynamicResolution(gpuTime: res.gpuTime, lastUpdate: now, geometryScale: res.geometryScale,
+                              geometryTarget: res.geometryTarget, frameTime: res.frameTime)
       renderScale = ceiling
       return
     }
 
     // metalfx upscales by 3x at most, the rest no further than from half the target.
     let temporal = settings.upscaler == .metalFX && settings.features.contains(.temporalAA) &&
-      !upscaleFailed && labgl.upscaleSupported() != 0 && Date() >= neuralUpscaleHeldUntil
+      !upscaling.failed && labgl.upscaleSupported() != 0 && Date() >= upscaling.neuralHeldUntil
     let scales = DynamicResolution.scales(upTo: ceiling, downTo: temporal ? supersampleScale / 3 : max(supersampleScale / 3, 0.5))
     if scales != res.scales
     {
@@ -104,11 +171,6 @@ extension Akari.LabFXEngine
       res.scales = scales
     }
 
-    let sample = labgl.lastFrameGPUTime()
-    if sample > 0
-    {
-      res.gpuTime = res.gpuTime == 0 ? sample : res.gpuTime + (sample - res.gpuTime) * 0.1
-    }
     res.sinceChange += dt
 
     let budget = 1 / Double(max(settings.targetFrameRate, 1))
@@ -130,6 +192,7 @@ extension Akari.LabFXEngine
     {
       next = res.step - 1
     }
+
     if next != res.step
     {
       // the smoothed time was measured at the old scale.
@@ -139,6 +202,7 @@ extension Akari.LabFXEngine
       res.underBudget = 0
       res.sinceChange = 0
     }
+
     renderScale = scales[res.step]
   }
 }

@@ -84,6 +84,7 @@ public class Atlas
         count += 1
       }
     }
+
     return count > 0 ? Float(accum / Double(count)) : 0
   }
 
@@ -207,6 +208,7 @@ public class Atlas
         }
       }
     }
+
     fill(pixels)
     fill(colorPixels)
   }

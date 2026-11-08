@@ -15,12 +15,12 @@ let package = Package(
     .executable(name: "AkariDemo", targets: ["AkariDemo"])
   ],
   dependencies: [
-    .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.9.4"),
+    .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.11.1"),
     .package(url: "https://github.com/wabiverse/MetaOneTBB.git", from: "1.0.0"),
     .package(url: "https://github.com/wabiverse/MetaOpenVDB.git", from: "1.0.0"),
     .package(url: "https://github.com/wabiverse/MetaPtex.git", from: "1.0.0"),
     .package(url: "https://github.com/wabiverse/Lattice.git", from: "1.0.0"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.2.4"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.2.6"),
     .package(url: "https://codeberg.org/furbytm/LabCamera.git", from: "1.0.0"),
     .package(url: "https://github.com/furbytm/Nanocolor.git", from: "1.0.0"),
   ],

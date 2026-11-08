@@ -114,32 +114,37 @@ float postCoc(float z, float4 lens)
   return min(lens.x * abs(1.0 - lens.y / z), lens.z);
 }
 
-float3 postBokeh(texture2d<float> color, sampler smp, texture2d<float> depth, float2 center, float4 lens, float reach,
-                 float scale, float density)
+/// Gathers the bokeh around `center`, reading `coarse`'s prefiltered color and depth past `split` pixels, where only blur that wide reaches.
+float3 postBokehSplit(texture2d<float> color, sampler smp, texture2d<float> depth, texture2d<float> coarse, float2 center,
+                      float4 lens, float reach, float density, float split)
 {
   float2 size = float2(color.get_width(), color.get_height());
   uint2 last = uint2(size) - 1;
+  uint2 coarseLast = uint2(coarse.get_width(), coarse.get_height()) - 1;
   float zc = depth.read(uint2(center)).r;
-  float cc = postCoc(zc, lens) / scale;
+  float cc = postCoc(zc, lens);
   float3 sum = color.sample(smp, center / size, level(0.0)).rgb;
   float count = 1.0;
   float radius = 0.75;
   // only what's in front of the focus and nearer spreads past twice this pixel's own blur.
-  float limit = min(lens.z, max(reach, cc * scale * 2.0) + 0.5) / scale;
+  float limit = min(lens.z, max(reach, cc * 2.0) + 0.5);
   for (float angle = 0.0; radius < limit && count < 300.0; angle += 2.39996323) {
-    float2 p = center + float2(cos(angle), sin(angle)) * radius * scale;
-    float zs = depth.read(min(uint2(max(p, 0.0)), last)).r;
-    float cs = postCoc(zs, lens) / scale;
-    if (zs > zc) cs = min(cs, cc * 2.0);
+    float2 p = center + float2(cos(angle), sin(angle)) * radius;
+    bool fine = radius < split;
+    float4 s = fine ? float4(0.0, 0.0, 0.0, depth.read(min(uint2(max(p, 0.0)), last)).r)
+                    : coarse.read(min(uint2(max(p * 0.5, 0.0)), coarseLast));
+    float cs = postCoc(s.a, lens);
+    if (s.a > zc) cs = min(cs, cc * 2.0);
     float m = smoothstep(radius - 0.5, radius + 0.5, cs);
-    sum += m > 0.0 ? mix(sum / count, color.sample(smp, p / size, level(0.0)).rgb, m) : sum / count;
+    if (m > 0.0 && fine) s.rgb = color.sample(smp, p / size, level(0.0)).rgb;
+    sum += m > 0.0 ? mix(sum / count, s.rgb, m) : sum / count;
     count += 1.0;
     radius += density / radius;
   }
   return sum / count;
 }
 
-/// `postBokeh` over `source`'s half resolution color and depth at its `pixel`, `reach` in full resolution pixels.
+/// `postBokehSplit` over `source`'s half resolution color and depth at its `pixel`, `reach` in full resolution pixels.
 float3 postBokehHalf(texture2d<float> source, float2 pixel, float4 lens, float reach, float density)
 {
   uint2 last = uint2(source.get_width(), source.get_height()) - 1;

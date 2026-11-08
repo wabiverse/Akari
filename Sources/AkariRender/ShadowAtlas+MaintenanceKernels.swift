@@ -202,7 +202,10 @@ extension Akari.ShadowAtlas
       int base = (\(directionalTilemapBase) + level) * \(tilesPerTilemap);
     """
 
-  static let tagUpdateGLSL = """
+  /// Tags the tiles under the moved casters boxes with `flag`.
+  static func tagUpdateGLSL(_ flag: UInt32) -> String
+  {
+    """
     #version 430
     layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
     layout(std430, binding = 0) buffer Bounds { float caster_bounds[]; };
@@ -221,13 +224,16 @@ extension Akari.ShadowAtlas
       {
         for (int x = lo_tile.x; x <= hi_tile.x; ++x)
         {
-          atomicOr(tiles_buf[base + y * \(tilemapRes) + x], \(flagDynamicUpdate)u);
+          atomicOr(tiles_buf[base + y * \(tilemapRes) + x], \(flag)u);
         }
       }
     }
     """
+  }
 
-  static let tagUpdateMSL = """
+  static func tagUpdateMSL(_ flag: UInt32) -> String
+  {
+    """
     #include <metal_stdlib>
     using namespace metal;
     #define vec2 float2
@@ -258,11 +264,12 @@ extension Akari.ShadowAtlas
         for (int x = lo_tile.x; x <= hi_tile.x; ++x)
         {
           atomic_fetch_or_explicit(&tiles_buf[base + y * \(tilemapRes) + x],
-                                   \(flagDynamicUpdate)u, memory_order_relaxed);
+                                   \(flag)u, memory_order_relaxed);
         }
       }
     }
     """
+  }
 
   /// Marks the point light tiles a moved box covers in every LOD, one thread
   /// per box, light and cube face. A box straddling a face's plane covers all of it.
@@ -319,7 +326,7 @@ extension Akari.ShadowAtlas
     layout(std430, binding = 1) buffer Tiles { uint tiles_buf[]; };
     uniform int u_boxCount;
     uniform int u_lightCount;
-    \(punctualUniforms("u_lightPos"))
+    \(punctualUniforms(.lightPos))
     \(tagUsagePunctualCommon)
     vec3 lightPosition(int i)
     {
@@ -483,7 +490,7 @@ extension Akari.ShadowAtlas
         if (slot_of_view[v] >= 0) directional = v + 1;
       }
       for (int v = 0; v < \(maxViews); ++v) allowance[v] = 0u;
-      uint remaining = \(renderTileBudget)u;
+      uint remaining = uint(u_budget);
       int ranks = max(directional, \(lodCount));
       for (int r = 0; r < ranks; ++r)
       {
@@ -511,6 +518,7 @@ extension Akari.ShadowAtlas
     layout(std430, binding = 0) buffer SlotOfView { int slot_of_view[]; };
     layout(std430, binding = 1) buffer DirtyCount { uint dirty_count[]; };
     layout(std430, binding = 2) buffer Allowance { uint allowance[]; };
+    uniform int u_budget;
     void main()
     {
       uint gid = gl_GlobalInvocationID.x;
@@ -521,12 +529,15 @@ extension Akari.ShadowAtlas
   static let allotBudgetMSL = """
     #include <metal_stdlib>
     using namespace metal;
-    kernel void compute_main(device int* slot_of_view [[buffer(1)]],
+    struct U { int u_budget; };
+    kernel void compute_main(constant U& u [[buffer(0)]],
+                             device int* slot_of_view [[buffer(1)]],
                              device uint* dirty_count [[buffer(2)]],
                              device uint* allowance [[buffer(3)]],
                              uint3 gid3 [[thread_position_in_grid]])
     {
       uint gid = gid3.x;
+      int u_budget = u.u_budget;
       \(allotBudgetBody)
     }
     """

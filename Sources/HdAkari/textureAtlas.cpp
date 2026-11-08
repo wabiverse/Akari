@@ -132,6 +132,7 @@ std::vector<std::pair<int, int>> DiscoverUdimTiles(std::string const &templatePa
     if (tileNum < 1001) continue;
     tiles.push_back({(tileNum - 1001) % 10, (tileNum - 1001) / 10});
   }
+
   return tiles;
 }
 
@@ -150,8 +151,10 @@ void ConvertTexelToFloat(uint8_t const *raw, HioType type, int nComp, bool decod
         if (decodeSRGB && c < 3) {
           v = v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f);
         }
+
         out[c] = v;
       }
+
       return;
     case HioTypeSignedByte:
       for (int c = 0; c < nComp; ++c)
@@ -201,10 +204,12 @@ void ConvertTexelToFloat(uint8_t const *raw, HioType type, int nComp, bool decod
         } else {
           bits = sign | ((exp - 15 + 127) << 23) | (mant << 13);
         }
+
         float f;
         std::memcpy(&f, &bits, sizeof(f));
         out[c] = f;
       }
+
       return;
     }
     case HioTypeFloat:
@@ -243,6 +248,7 @@ bool DecodeTile(std::string const &tilePath, bool decodeSRGB, std::vector<float>
   if (nComp <= 0) {
     return false;
   }
+
   HioType srcType = HioGetHioType(srcFormat);
   size_t compBytes = HioGetDataSizeOfType(srcType);
   if (compBytes == 0) {
@@ -268,6 +274,7 @@ bool DecodeTile(std::string const &tilePath, bool decodeSRGB, std::vector<float>
     ConvertTexelToFloat(rawPixels.data() + t * texelBytes, srcType, nComp, decodeSRGB,
                         outPixels.data() + t * size_t(nComp));
   }
+
   outW = srcW; outH = srcH; outComp = nComp;
   return true;
 }
@@ -296,6 +303,7 @@ HdAkariTextureAtlas::EnsureGridSized(HdSceneDelegate *sceneDelegate)
     });
     if (textures.hasAny) ++_sizeTextured;
   }
+
   std::unique_lock<std::mutex> lock(_sizeMutex);
   _sizeFinished += finished;
   if (_sized) return;
@@ -303,6 +311,7 @@ HdAkariTextureAtlas::EnsureGridSized(HdSceneDelegate *sceneDelegate)
     _sizeDone.wait(lock, [&] { return _sized.load(); });
     return;
   }
+
   const size_t texturedCount = _sizeTextured.load();
   size_t withHeadroom = texturedCount + texturedCount / 4 + 1;
   int grid = 1;
@@ -316,6 +325,7 @@ HdAkariTextureAtlas::EnsureGridSized(HdSceneDelegate *sceneDelegate)
   } else {
     while (cellPixels < kMaxCellPixels && grid * cellPixels * 2 <= kMaxAtlasPixels) cellPixels *= 2;
   }
+
   _cellPixels.store(cellPixels, std::memory_order_relaxed);
   _gridSize.store(grid, std::memory_order_relaxed);
   _sized.store(true, std::memory_order_release);
@@ -377,12 +387,15 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
     if (_pixels.empty()) {
       AssignMaterialPixels(_pixels, size_t(width) * size_t(width) * 4);
     }
+
     if (_colorPixels.empty()) {
       _colorPixels.assign(size_t(width) * size_t(width) * 4, uint8_t(0));
     }
+
     if (_normalPixels.empty()) {
       _normalPixels.assign(size_t(width) * size_t(width) * 4, uint8_t(0));
     }
+
     if (_emissivePixels.empty()) {
       _emissivePixels.assign(size_t(width) * size_t(width) * 4, uint8_t(0));
     }
@@ -413,6 +426,7 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
         tileMaxV = std::max(tileMaxV, t.second);
       }
     };
+
     scanTiles(roughnessPath);
     scanTiles(metallicPath);
     scanTiles(opacityPath);
@@ -457,6 +471,7 @@ HdAkariTextureAtlas::GetOrBakeCell(std::string const &materialKey,
     _pending.erase(materialKey);
     _dirtyRects.push_back({px0, py0, regionSize});
   }
+
   _dirty.store(true, std::memory_order_release);
   promise.set_value(cell);
   return cell;
@@ -487,6 +502,7 @@ HdAkariTextureAtlas::BakeRegion(BakeInputs const &in)
     emissiveAlpha = uint8_t(std::clamp(std::lround(255.0f / peak), 1L, 255L));
     emissive *= float(emissiveAlpha) / 255.0f;
   }
+
   BakeColorChannel(_emissivePixels, true, in.contentPx0, in.contentPy0, in.contentSize, in.emissivePath, emissive,
                    in.tileMinU, in.tileMinV, in.tileMaxU, in.tileMaxV);
   if (emissiveAlpha != 255) {
@@ -528,6 +544,40 @@ HdAkariTextureAtlas::UpdateConstants(std::string const &materialKey, GfVec3f con
   _constantsDirtyLo = std::min(_constantsDirtyLo, it->second);
   _constantsDirtyHi = std::max(_constantsDirtyHi, it->second + 1);
   return true;
+}
+
+bool
+HdAkariTextureAtlas::UpdateConstantMaterial(std::string const &materialKey, GfVec3f const &color, float opacity,
+                                            float roughness, float metallic, float opacityThreshold,
+                                            GfVec3f const &emissive)
+{
+  std::lock_guard<std::mutex> lock(_mutex);
+  auto it = _constantIndex.find(materialKey);
+  if (it == _constantIndex.end()) return false;
+  const float ptexMap = _constants[size_t(it->second) * kConstantTexels * 4 + 11];
+  WriteConstants(it->second, color, opacity, roughness, metallic, opacityThreshold, emissive);
+  _constants[size_t(it->second) * kConstantTexels * 4 + 11] = ptexMap;
+  auto cell = _cells.find(materialKey);
+  if (cell != _cells.end()) cell->second.opacityThreshold = opacityThreshold;
+  return true;
+}
+
+bool
+HdAkariTextureAtlas::GetConstants(std::string const &materialKey, float *out)
+{
+  std::lock_guard<std::mutex> lock(_mutex);
+  auto it = _constantIndex.find(materialKey);
+  if (it == _constantIndex.end()) return false;
+  const float *row = _constants.data() + size_t(it->second) * kConstantTexels * 4;
+  std::copy(row, row + kConstantTexels * 4, out);
+  return true;
+}
+
+void
+HdAkariTextureAtlas::ForgetCell(std::string const &materialKey)
+{
+  std::lock_guard<std::mutex> lock(_mutex);
+  if (_constantIndex.count(materialKey) == 0) _cells.erase(materialKey);
 }
 
 void

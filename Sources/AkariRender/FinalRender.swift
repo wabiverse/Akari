@@ -112,8 +112,8 @@ public extension Akari
 
     public weak var hydra: Hydra.RenderEngine?
     public weak var akari: Akari.RenderEngine?
-    public let stageInfo: Pixar.HdAkariStageInfo
-    public let hasAuthoredTimeCodeRange: Bool
+    public private(set) var stageInfo: Pixar.HdAkariStageInfo
+    public private(set) var hasAuthoredTimeCodeRange: Bool
 
     private let lock = NSLock()
     private var _cancelled = false
@@ -130,6 +130,14 @@ public extension Akari
     {
       self.hydra = hydra
       self.akari = akari
+      stageInfo = Pixar.HdAkariInspectStage(hydra.stage)
+      hasAuthoredTimeCodeRange = hydra.stage.HasAuthoredTimeCodeRange()
+    }
+
+    /// Reads the cameras, frame range and soundtrack of the stage hydra now shows.
+    public func adoptStage()
+    {
+      guard let hydra else { return }
       stageInfo = Pixar.HdAkariInspectStage(hydra.stage)
       hasAuthoredTimeCodeRange = hydra.stage.HasAuthoredTimeCodeRange()
     }
@@ -164,6 +172,7 @@ public extension Akari
         _cancelled = false
         return true
       }
+
       guard began, let hydra else { lock.withLock { _running = false }; return false }
 
       hydra.performOnFrameQueue
@@ -171,6 +180,7 @@ public extension Akari
         run(job, output: output) { progress in Task { @MainActor in onProgress(progress) } }
         lock.withLock { _running = false }
       }
+
       return true
     }
 
@@ -184,10 +194,12 @@ public extension Akari
         _running = true
         _cancelled = false
       }
+
       hydra.frameQueue.sync
       {
         run(job, output: output, report: onProgress)
       }
+
       lock.withLock { _running = false }
     }
 
@@ -198,6 +210,7 @@ public extension Akari
         case let .image(frame): [frame]
         case .animation: output.frames
       }
+
       let samples = max(akari?.settings.renderSamples ?? 1, 1)
       var progress = Progress(job: job, frame: frames.first ?? 0, frameCount: frames.count, samples: samples)
 
@@ -210,31 +223,21 @@ public extension Akari
       #if canImport(Metal)
         let size = output.pixelSize
         let camera = output.cameraPath.map { UsdGeom.Camera(hydra.stage.getPrim(at: $0)) }
-        if let path = output.cameraPath, camera?.GetPrim().IsValid() != true
+        if let path = output.cameraPath, camera?.GetPrim().isValid != true
         {
           progress.status = .failed("no camera at \(path)")
           return report(progress)
         }
 
         let movie: MovieWriter?
-        if job == .animation, output.format == .mpeg4
+        do
         {
-          do
-          {
-            movie = try MovieWriter(url: output.movieURL, width: size.width, height: size.height,
-                                    frameRate: output.frameRate,
-                                    soundtrack: output.audio ? soundtrack(frameStart: output.frameStart,
-                                                                          frameRate: output.frameRate) : nil)
-          }
-          catch
-          {
-            progress.status = .failed("\(error)")
-            return report(progress)
-          }
+          movie = try makeMovie(job, output: output)
         }
-        else
+        catch
         {
-          movie = nil
+          progress.status = .failed("\(error)")
+          return report(progress)
         }
 
         let saved = ViewState(hydra.viewCamera, timeCode: hydra.currentTimeCode)
@@ -242,12 +245,7 @@ public extension Akari
         let began = Date()
         defer
         {
-          akari.finalRenderSample = nil
-          akari.labfx.usdCameraShutter = nil
-          akari.labfx.usdCameraLens = nil
-          akari.labfx.usdVolume = nil
-          akari.labfx.usdFogDisturbers = []
-          akari.labfx.fogSimRequest = nil
+          Self.clearStageOverrides(akari)
           saved.restore(hydra)
         }
 
@@ -268,6 +266,7 @@ public extension Akari
           {
             continue
           }
+
           if movie == nil, job == .animation, output.placeholders
           {
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -282,18 +281,9 @@ public extension Akari
             Self.pose(hydra.viewCamera, from: camera.GetCamera(Usd.TimeCode(time)),
                       aspect: Double(size.width) / Double(size.height), isZUp: isZUp)
           }
+
           pose(timeCode)
-          akari.labfx.usdCameraShutter = output.cameraPath.map
-          {
-            let shutter = Pixar.HdAkariCameraShutter(hydra.stage, std.string($0), timeCode)
-            return SIMD2(Float(shutter.open), Float(shutter.close))
-          }
-          akari.labfx.usdCameraLens = output.cameraPath.map { Pixar.HdAkariCameraLensAt(hydra.stage, std.string($0), timeCode) }
-          akari.labfx.usdVolume = Pixar.HdAkariStageVolumeAt(hydra.stage, timeCode)
-          akari.labfx.usdFogDisturbers = Self.fogDisturbers(hydra.stage, timeCode)
-          let fogSim = akari.labfx.fogSim, fps = stageInfo.timeCodesPerSecond > 0 ? stageInfo.timeCodesPerSecond : 24
-          akari.labfx.waterTime = timeCode / fps
-          akari.labfx.fogSimRequest = { [hydra] in Self.advanceFogSim(fogSim, stage: hydra.stage, to: timeCode, zUp: isZUp, framesPerSecond: fps) }
+          applyStageOverrides(at: timeCode, cameraPath: output.cameraPath, hydra: hydra, akari: akari, isZUp: isZUp)
 
           guard let texture = accumulate(at: timeCode, size: size, samples: samples,
                                          hydra: hydra, akari: akari, pose: pose,
@@ -303,6 +293,7 @@ public extension Akari
             progress.status = isCancelled ? .cancelled : .failed("frame \(frame) did not render")
             break
           }
+
           guard let image = autoreleasepool(invoking: { Self.readback(texture, queue: Self.queue(hydra), depth: output.colorDepth) })
           else
           {
@@ -313,16 +304,11 @@ public extension Akari
           lock.withLock { _lastFrame = image }
           do
           {
-            if let movie
+            if let written = try Self.write(image, index: index, to: movie, url: url, animation: job == .animation,
+                                            output: output)
             {
-              try movie.append(image.display, index: index)
-              progress.output = output.movieURL
-            }
-            else if job == .animation
-            {
-              try Self.writePNG(image, to: url, color: output.colorMode)
               placeholder = nil
-              progress.output = url
+              progress.output = written
             }
           }
           catch
@@ -349,10 +335,12 @@ public extension Akari
         {
           movie.finish()
         }
+
         if let placeholder
         {
           try? FileManager.default.removeItem(at: placeholder)
         }
+
         if progress.status == .rendering { progress.status = .finished }
         progress.elapsed = Date().timeIntervalSince(began)
         progress.remaining = nil
@@ -364,6 +352,59 @@ public extension Akari
     }
 
     #if canImport(Metal)
+
+      private func makeMovie(_ job: Job, output: OutputSettings) throws -> MovieWriter?
+      {
+        guard job == .animation, output.format == .mpeg4 else { return nil }
+        let size = output.pixelSize
+        return try MovieWriter(url: output.movieURL, width: size.width, height: size.height,
+                               frameRate: output.frameRate,
+                               soundtrack: output.audio ? soundtrack(frameStart: output.frameStart,
+                                                                     frameRate: output.frameRate) : nil)
+      }
+
+      /// The camera, volume and fog the stage gives the frame at `timeCode`.
+      private func applyStageOverrides(at timeCode: Double, cameraPath: String?, hydra: Hydra.RenderEngine,
+                                       akari: Akari.RenderEngine, isZUp: Bool)
+      {
+        akari.labfx.usdCameraShutter = cameraPath.map
+        {
+          let shutter = Pixar.HdAkariCameraShutter(hydra.stage, std.string($0), timeCode)
+          return SIMD2(Float(shutter.open), Float(shutter.close))
+        }
+
+        akari.labfx.usdCameraLens = cameraPath.map { Pixar.HdAkariCameraLensAt(hydra.stage, std.string($0), timeCode) }
+        akari.labfx.usdVolume = Pixar.HdAkariStageVolumeAt(hydra.stage, timeCode)
+        akari.labfx.usdFogDisturbers = Self.fogDisturbers(hydra.stage, timeCode)
+        let fogSim = akari.labfx.fogSim, fps = stageInfo.timeCodesPerSecond > 0 ? stageInfo.timeCodesPerSecond : 24
+        akari.labfx.waterTime = timeCode / fps
+        akari.labfx.fogSimRequest = { [hydra] in Self.advanceFogSim(fogSim, stage: hydra.stage, to: timeCode, zUp: isZUp, framesPerSecond: fps) }
+      }
+
+      private static func clearStageOverrides(_ akari: Akari.RenderEngine)
+      {
+        akari.finalRenderSample = nil
+        akari.labfx.usdCameraShutter = nil
+        akari.labfx.usdCameraLens = nil
+        akari.labfx.usdVolume = nil
+        akari.labfx.usdFogDisturbers = []
+        akari.labfx.fogSimRequest = nil
+      }
+
+      /// Appends the frame to the movie, or writes its PNG for an animation, returning where it went.
+      private static func write(_ image: Frame, index: Int, to movie: MovieWriter?, url: URL, animation: Bool,
+                                output: OutputSettings) throws -> URL?
+      {
+        if let movie
+        {
+          try movie.append(image.display, index: index)
+          return output.movieURL
+        }
+
+        guard animation else { return nil }
+        try writePNG(image, to: url, color: output.colorMode)
+        return url
+      }
 
       /// Where the stage's soundtrack starts, relative to the first frame.
       private func soundtrack(frameStart: Int, frameRate: Double) -> MovieWriter.Soundtrack?
@@ -418,11 +459,13 @@ public extension Akari
           _ = autoreleasepool { Self.render(hydra, at: timeCode + shutter.x - 0.5 * slice, size: viewSize) }
           akari.labfx.restartAccumulation()
         }
+
         defer
         {
           akari.labfx.motionBlurSubframes = 0
           if blur { pose(timeCode) }
         }
+
         var texture: MTLTexture?
         for sample in 0 ..< samples
         {
@@ -434,9 +477,11 @@ public extension Akari
           {
             Self.render(hydra, at: blur ? timeCode + shutter.x + (Double(sample) + 0.5) * slice : timeCode, size: viewSize)
           }
+
           progress.sample = sample + 1
           if sample + 1 == samples || (sample + 1) % 8 == 0 { report(progress) }
         }
+
         return texture
       }
 
@@ -478,6 +523,7 @@ public extension Akari
       {
         Int(Pixar.HdAkariFogDisturbersAt(stage, timeCode, $0.baseAddress!, Int32(Akari.LabFXEngine.maxFogDisturbers), window))
       }
+
       return Array(out.prefix(count * 8))
     }
 
@@ -541,6 +587,7 @@ public extension Akari
         // undo the quarter turn about x the orbit camera appends for z up stages.
         w = w.map { [$0[0], $0[2], -$0[1]] }
       }
+
       let r = (0 ..< 3).map { i in (0 ..< 3).map { j in w[j][i] } }
       let degrees = 180 / Double.pi
       view.rotation = Pixar.GfVec3d(asin(min(max(-r[1][2], -1), 1)) * degrees,

@@ -53,6 +53,16 @@ public func registerAkariRenderer(engine: Akari.RenderEngine)
   AkariHydraSetRenderDelegate(Unmanaged.passRetained(Akari.RenderDelegate()).toOpaque())
 }
 
+/// Runs `body` with `engine` as the one Akari render delegates made meanwhile draw with, so a second
+/// Hydra engine gets an Akari engine of its own. `engine` has to outlive what `body` makes.
+public func withAkariRenderer<T>(_ engine: Akari.RenderEngine, _ body: () -> T) -> T
+{
+  let registered = AkariHydraGetRenderEngine()
+  AkariHydraSetRenderEngine(Unmanaged.passUnretained(engine).toOpaque())
+  defer { AkariHydraSetRenderEngine(registered) }
+  return body()
+}
+
 /// Clears and releases the registered engine + delegate.
 public func unregisterAkariRenderer()
 {
@@ -61,6 +71,7 @@ public func unregisterAkariRenderer()
     Unmanaged<Akari.RenderEngine>.fromOpaque(raw).release()
     AkariHydraSetRenderEngine(nil)
   }
+
   if let raw = AkariHydraGetRenderDelegate()
   {
     Unmanaged<Akari.RenderDelegate>.fromOpaque(raw).release()

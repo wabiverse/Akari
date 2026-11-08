@@ -110,7 +110,7 @@ extension Akari.LabFXEngine
     var sunTransmittance = SIMD3<Float>(repeating: 1)
   }
 
-  static let atmosphereLUTPasses = ["atmosphere transmittance", "atmosphere multiscatter"]
+  static let atmosphereLUTPasses: [Pass] = [.atmosphereTransmittance, .atmosphereMultiscatter]
 
   /// The sun's illuminance when the stage has an atmosphere but no distant light.
   static let atmosphereDefaultSun = SIMD3<Float>(repeating: 3)
@@ -119,7 +119,7 @@ extension Akari.LabFXEngine
   func syncAtmosphere(_ scene: Pixar.HdAkariScene, eye: SIMD3<Float>, cloudMarchSteps: Int)
   {
     atmosphere.eye = eye
-    setFloat("u_planetCloudMarchSteps", Float(min(max(cloudMarchSteps, 1), 128)))
+    setFloat(.planetCloudMarchSteps, Float(min(max(cloudMarchSteps, 1), 128)))
     let revision = scene.AtmosphereRevision()
     guard revision != atmosphere.revision else { return }
     atmosphere.revision = revision
@@ -131,6 +131,7 @@ extension Akari.LabFXEngine
       atmosphere.planet = nil
       return
     }
+
     let rows = (0 ..< 3).map { SIMD3(p[$0 * 4], p[$0 * 4 + 1], p[$0 * 4 + 2]) }
     let scale = Akari.Math.length(rows[0])
     let fromWorld = simd_float3x3(rows: rows.map { SIMD3<Float>(Akari.Math.normalize($0)) })
@@ -187,7 +188,7 @@ extension Akari.LabFXEngine
     guard let planet = atmosphere.planet
     else
     {
-      setVector("u_atmosphere", .zero)
+      setVector(.atmosphere, .zero)
       setAtmospherePasses(luts: false, skyView: false, aerial: false)
       atmosphere.bakedLUTs = []
       return
@@ -205,7 +206,7 @@ extension Akari.LabFXEngine
     let shape = SIMD4(1, bottom, top, planet.aerialDistance)
     let lutKey = [bottom, top, planet.ozone.w, planet.ground.w]
       + [planet.rayleigh, planet.mie, planet.mieExtra, planet.ozone, planet.ground].flatMap { [$0.x, $0.y, $0.z, $0.w] }
-    if iblNeedsBake { atmosphere.bakedLUTs = [] }
+    if environment.iblNeedsBake { atmosphere.bakedLUTs = [] }
     let luts = Self.moved(lutKey, from: atmosphere.bakedLUTs)
     if luts { atmosphere.bakedLUTs = lutKey }
     // the cloud cover only changes with the clouds' own settings, not with the camera.
@@ -214,40 +215,40 @@ extension Akari.LabFXEngine
     if cloudMap { atmosphere.bakedCloudMap = cloudKey }
     if cloudMap != atmosphere.cloudMapThisFrame
     {
-      runtime.setPassActive("planet cloud map", active: cloudMap)
+      runtime.setPassActive(.planetCloudMap, active: cloudMap)
       atmosphere.cloudMapThisFrame = cloudMap
     }
 
-    setVector("u_atmosphere", shape)
-    setVector("u_atmosRayleigh", planet.rayleigh)
-    setVector("u_atmosMie", planet.mie)
-    setVector("u_atmosMieExtra", planet.mieExtra)
-    setVector("u_atmosOzone", planet.ozone)
-    setVector("u_atmosGround", planet.ground)
-    setVector("u_planet", planet.procedural)
-    setVector("u_planetTerrain", planet.terrain)
-    setVector("u_planetOcean", planet.ocean)
-    setVector("u_planetClouds", planet.clouds)
-    setVector("u_planetCity", planet.cities)
-    setVector("u_planetCloudShape", planet.cloudShape)
-    setMatrix("u_planetPaletteA", Akari.Matrix4(planet.paletteA))
-    setMatrix("u_planetPaletteB", Akari.Matrix4(planet.paletteB))
-    setMatrix("u_planetLook", Akari.Matrix4(planet.look))
-    setVector("u_planetStyle", planet.style)
-    setVector("u_atmosCamera", SIMD4(up * (bottom + Float(height)), Float(altitude)))
+    setVector(.atmosphere, shape)
+    setVector(.atmosRayleigh, planet.rayleigh)
+    setVector(.atmosMie, planet.mie)
+    setVector(.atmosMieExtra, planet.mieExtra)
+    setVector(.atmosOzone, planet.ozone)
+    setVector(.atmosGround, planet.ground)
+    setVector(.planet, planet.procedural)
+    setVector(.planetTerrain, planet.terrain)
+    setVector(.planetOcean, planet.ocean)
+    setVector(.planetClouds, planet.clouds)
+    setVector(.planetCity, planet.cities)
+    setVector(.planetCloudShape, planet.cloudShape)
+    setMatrix(.planetPaletteA, Akari.Matrix4(planet.paletteA))
+    setMatrix(.planetPaletteB, Akari.Matrix4(planet.paletteB))
+    setMatrix(.planetLook, Akari.Matrix4(planet.look))
+    setVector(.planetStyle, planet.style)
+    setVector(.atmosCamera, SIMD4(up * (bottom + Float(height)), Float(altitude)))
 
-    let sunE = distantSun?.irradiance ?? Self.atmosphereDefaultSun
-    setVector("u_atmosSun", SIMD4(sunE, planet.skyIntensity))
+    let sunE = environment.distantSun?.irradiance ?? Self.atmosphereDefaultSun
+    setVector(.atmosSun, SIMD4(sunE, planet.skyIntensity))
 
     atmosphere.ground = loadAtmosphereMap(planet.groundTexture, into: atmosphere.ground)
     atmosphere.night = loadAtmosphereMap(planet.nightTexture, into: atmosphere.night)
-    setSampler("u_atmosGroundMap", atmosphere.ground.texture != 0 ? atmosphere.ground.texture : atmospherePlaceholder())
-    setSampler("u_atmosNightMap", atmosphere.night.texture != 0 ? atmosphere.night.texture : atmospherePlaceholder())
-    setVector("u_atmosFrame", SIMD4(Float(kmPerUnit),
+    setSampler(.atmosGroundMap, atmosphere.ground.texture != 0 ? atmosphere.ground.texture : atmospherePlaceholder())
+    setSampler(.atmosNightMap, atmosphere.night.texture != 0 ? atmosphere.night.texture : atmospherePlaceholder())
+    setVector(.atmosFrame, SIMD4(Float(kmPerUnit),
                                     atmosphere.ground.texture != 0 ? 1 : 0,
                                     atmosphere.night.texture != 0 ? 1 : 0,
                                     planet.nightIntensity))
-    setMatrix("u_atmosPlanetFromWorld", Akari.Matrix4(simd_float4x4(columns: (SIMD4(planet.fromWorld.columns.0, 0),
+    setMatrix(.atmosPlanetFromWorld, Akari.Matrix4(simd_float4x4(columns: (SIMD4(planet.fromWorld.columns.0, 0),
                                                                               SIMD4(planet.fromWorld.columns.1, 0),
                                                                               SIMD4(planet.fromWorld.columns.2, 0),
                                                                               SIMD4(0, 0, 0, 1)))))
@@ -257,7 +258,7 @@ extension Akari.LabFXEngine
                                                                   top: top,
                                                                   r: bottom + Float(height),
                                                                   mu: Akari.Math.dot(up, Akari.Math.normalize(sun)))
-    setVector("u_sunOverride", SIMD4(sunE * atmosphere.sunTransmittance, 1))
+    setVector(.sunOverride, SIMD4(sunE * atmosphere.sunTransmittance, 1))
 
     setAtmospherePasses(luts: luts, skyView: bottom + Float(height) < top, aerial: true)
 
@@ -274,8 +275,8 @@ extension Akari.LabFXEngine
     {
       atmosphere.bakedAltitude = band
       atmosphere.bakedSun = sunBand
-      iblNeedsBake = true
-      environmentRevision += 1
+      environment.iblNeedsBake = true
+      environment.revision += 1
     }
   }
 
@@ -284,17 +285,19 @@ extension Akari.LabFXEngine
   {
     if volumes.shadowThisFrame
     {
-      runtime.setPassActive("volume shadow", active: false)
+      runtime.setPassActive(.volumeShadow, active: false)
       volumes.shadowThisFrame = false
     }
+
     if atmosphere.lutsThisFrame
     {
       setPasses(Self.atmosphereLUTPasses, active: false)
       atmosphere.lutsThisFrame = false
     }
+
     if atmosphere.cloudMapThisFrame
     {
-      runtime.setPassActive("planet cloud map", active: false)
+      runtime.setPassActive(.planetCloudMap, active: false)
       atmosphere.cloudMapThisFrame = false
     }
   }
@@ -306,15 +309,17 @@ extension Akari.LabFXEngine
       setPasses(Self.atmosphereLUTPasses, active: luts)
       atmosphere.lutsThisFrame = luts
     }
+
     if skyView != atmosphere.skyViewActive
     {
-      runtime.setPassActive("atmosphere sky view", active: skyView)
+      runtime.setPassActive(.atmosphereSkyView, active: skyView)
       atmosphere.skyViewActive = skyView
     }
+
     if aerial != atmosphere.aerialActive
     {
-      runtime.setPassActive("atmosphere aerial", active: aerial)
-      runtime.setPassActive("atmosphere background", active: aerial)
+      runtime.setPassActive(.atmosphereAerial, active: aerial)
+      runtime.setPassActive(.atmosphereBackground, active: aerial)
       atmosphere.aerialActive = aerial
     }
   }
@@ -332,6 +337,7 @@ extension Akari.LabFXEngine
                     width: 1, height: 1, border: 0,
                     format: GL_RGBA, type: GL_UNSIGNED_BYTE, pixels: pixels)
     }
+
     return atmosphere.placeholder
   }
 
@@ -379,6 +385,7 @@ extension Akari.LabFXEngine
         + SIMD3(planet.ozone.x, planet.ozone.y, planet.ozone.z) * ozone
       depth += extinction * dt
     }
+
     return SIMD3(exp(-depth.x), exp(-depth.y), exp(-depth.z))
   }
 }

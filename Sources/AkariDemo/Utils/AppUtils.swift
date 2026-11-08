@@ -40,6 +40,7 @@
 
 import AkariCore
 import AkariRender
+import CxxStdlib
 import Foundation
 import HdAkari
 import HydraKit
@@ -101,66 +102,42 @@ public enum AppUtils
     print("[akari] registered plugInfo -> \(url.path)")
   }
 
-  public static func buildStage() -> (stage: UsdStage, fileURL: URL)
+  /// Frames the stage from the front right and above, back far enough to see around it.
+  public static func frameStartView(_ hydra: Hydra.RenderEngine)
   {
-    let usda = """
-      #usda 1.0
-      (
-          upAxis = "Y"
-          metersPerUnit = 1
-      )
+    hydra.setupCamera()
+    hydra.viewCamera.rotation = Pixar.GfVec3d(-30, 45, 0)
+    hydra.viewCamera.distance *= 2
+  }
 
-      def Xform "World"
-      {
-          def Sphere "Ball" (
-              prepend apiSchemas = ["MaterialBindingAPI"]
-          )
-          {
-              rel material:binding = </Materials/DefaultMaterial>
-              double radius = 1
-          }
+  /// A new default cube scene, only in memory until it's saved.
+  public static func newStage() -> UsdStage
+  {
+    let stage = UsdStage.createInMemory("untitled.usda")
+    UsdGeom.setUpAxis(for: stage, to: .y)
+    UsdGeom.setMetersPerUnit(for: stage, to: 1)
+    UsdGeom.Xform.define(stage, path: Sdf.Path("/World"))
 
-          def Cube "Cube" (
-              prepend apiSchemas = ["MaterialBindingAPI"]
-          )
-          {
-              rel material:binding = </Materials/DefaultMaterial>
-              double size = 2
-              double3 xformOp:translate = (3, 0, 0)
-              uniform token[] xformOpOrder = ["xformOp:translate"]
-          }
+    stage.definePrim("/Materials", type: .scope)
+    let material = UsdShade.Material.define(stage, path: Sdf.Path("/Materials/DefaultMaterial"))
+    var shader = UsdShade.Shader.define(stage, path: Sdf.Path("/Materials/DefaultMaterial/PxrSurface"))
+    shader.createIdAttr(.pxrSurface)
+    shader.createInput(for: .diffuseGain, type: .float).set(Float(1))
+    shader.createInput(for: .diffuseColor, type: .color3f).set(Pixar.GfVec3f(0.8, 0.8, 0.8))
+    shader.createInput(for: .specularFaceColor, type: .color3f).set(Pixar.GfVec3f(0.04, 0.04, 0.04))
+    shader.createInput(for: .specularEdgeColor, type: .color3f).set(Pixar.GfVec3f(1, 1, 1))
+    shader.createInput(for: .specularRoughness, type: .float).set(Float(0.2))
+    material.createSurfaceOutput(renderContext: .riRenderContext).connectTo(source: shader.createOutput(for: .out, type: .token))
 
-          def DistantLight "Sun"
-          {
-              float inputs:intensity = 3
-              float inputs:angle = 0.53
-          }
-      }
+    let cube = UsdGeom.Cube.define(stage, path: Sdf.Path("/World/Cube"))
+    UsdShade.MaterialBindingAPI.apply(cube).bind(material)
 
-      def "Materials"
-      {
-          def Material "DefaultMaterial"
-          {
-              token outputs:surface.connect = </Materials/DefaultMaterial/PBRShader.outputs:surface>
+    return stage
+  }
 
-              def Shader "PBRShader"
-              {
-                  uniform token info:id = "UsdPreviewSurface"
-                  color3f inputs:diffuseColor = (0.8, 0.8, 0.8)
-                  float inputs:metallic = 0
-                  float inputs:roughness = 0.2
-                  token outputs:surface
-              }
-          }
-      }
-      """
-
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("akari-demo-\(UUID().uuidString).usda")
-    try? usda.write(to: url, atomically: true, encoding: .utf8)
-    defer { try? FileManager.default.removeItem(at: url) }
-
-    return (stage: UsdStage.open(url.path), fileURL: url)
+  public static func buildStage() -> (stage: UsdStage, fileURL: URL?)
+  {
+    (newStage(), nil)
   }
 
   public static func usdScenePathFromArguments() -> String?
@@ -170,14 +147,16 @@ public enum AppUtils
     {
       return arguments[index + 1]
     }
+
     if let path = ProcessInfo.processInfo.environment["LATTICE_USD_SCENE"], !path.isEmpty
     {
       return path
     }
+
     return nil
   }
 
-  public static func openOrCreateStage() -> (stage: UsdStage, fileURL: URL)
+  public static func openOrCreateStage() -> (stage: UsdStage, fileURL: URL?)
   {
     if let path = usdScenePathFromArguments()
     {
@@ -260,8 +239,10 @@ public enum AppUtils
         case "--quality": options.quality = next().flatMap(RenderQuality.init)
         default: break
       }
+
       i += 1
     }
+
     return options
   }
 }
