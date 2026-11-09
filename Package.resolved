@@ -1,5 +1,5 @@
 {
-  "originHash" : "a2851b0678cdaed3a687f702db7eaa9d9b448d3def62fc074d8fbe1de492c2f9",
+  "originHash" : "980d96262e04b9408eaa6ad2a34d11dca1c989d6598708656bc712b7c5b4f097",
   "pins" : [
     {
       "identity" : "androidkit",
@@ -510,8 +510,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/furbytm/SwiftLabGL.git",
       "state" : {
-        "revision" : "7d25b20d174c971cf946e02dd593b8f932c8760a",
-        "version" : "0.2.6"
+        "revision" : "facde9f040df575972eef6e1a592aca23f1a43aa",
+        "version" : "0.2.8"
       }
     },
     {
