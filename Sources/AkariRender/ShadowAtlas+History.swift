@@ -53,6 +53,10 @@ extension Akari.ShadowAtlas
     /// Frames the fine levels stay forced after the bias drops.
     static let settleDuration = 5
 
+    /// On an initial scene load, the default y: 1 for the sun's direction causes
+    /// a pretty "fly in" animated effect of the shadows, which is more of a happy
+    /// little accident that i'd like to keep in for now (unless it becomes an issue
+    /// then we can gate it with a toggle or remove it completely).
     public private(set) var smoothDirection: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
 
     private var movingFrames = 0
@@ -63,14 +67,35 @@ extension Akari.ShadowAtlas
       movingFrames > 0 ? Self.movingLodBias : 0
     }
 
-    /// Returns true when the directional pages must be redrawn this frame.
-    mutating func advance(to direction: SIMD3<Float>) -> Bool
+    /// Fraction of the way to the sun each viewport frame glides.
+    static let blendFactor: Float = 0.08
+    /// Within this (about 0.03 degrees) the glide lands on the sun,
+    /// used for a minor optimization so that it doesn't spend many
+    /// extra shadow redraws for the scene.
+    static let arrivalDistance: Float = 5e-4
+
+    /// Returns true when the directional pages must be redrawn this frame, set `snap`
+    /// to `true` for final renders, so the frame shows its own time code's shadows at
+    /// full detail.
+    mutating func advance(to direction: SIMD3<Float>, snap: Bool = false) -> Bool
     {
-      let blendFactor: Float = 0.08
-      let continuousGlide = simd_mix(smoothDirection, direction, SIMD3<Float>(repeating: blendFactor))
-      
-      let nextSmooth = Akari.ShadowAtlas.quantize(Akari.Math.normalize(continuousGlide))
-      
+      let target = Akari.ShadowAtlas.quantize(Akari.Math.normalize(direction))
+      if snap
+      {
+        let changed = target != smoothDirection || movingFrames > 0 || settleFrames > 0
+        smoothDirection = target
+        movingFrames = 0
+        settleFrames = 0
+        return changed
+      }
+
+      let continuousGlide = simd_mix(smoothDirection, direction, SIMD3<Float>(repeating: Self.blendFactor))
+      var nextSmooth = Akari.ShadowAtlas.quantize(Akari.Math.normalize(continuousGlide))
+      if simd_distance_squared(nextSmooth, target) < Self.arrivalDistance * Self.arrivalDistance
+      {
+        nextSmooth = target
+      }
+
       let stepped = nextSmooth != smoothDirection
       
       let biasDropping = !stepped && movingFrames == 1

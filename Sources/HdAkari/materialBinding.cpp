@@ -562,6 +562,12 @@ void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, H
   }
 }
 
+/// Whether a material can cut holes in a mesh's shadow.
+static bool HdAkariShadowCutout(HdAkariMaterialTextures const &textures, float opacity, float opacityThreshold)
+{
+  return !textures.opacityPath.empty() || !textures.ptexPath.empty() || opacityThreshold > 0.0f || opacity < 0.98f;
+}
+
 void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
                          HdAkariTextureAtlas *atlas, HdMeshUtil &meshUtil,
                          HdAkariMeshData &data,
@@ -574,6 +580,7 @@ void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
   HdAkariApplyMaterial(sceneDelegate, id, data.displayColor, data.opacity,
                        data.roughness, data.metallic, opacityThreshold, textures, materialId);
   data.transparent = opacityThreshold <= 0.0f && textures.opacityPath.empty() && data.opacity < 0.98f;
+  data.shadowCutout = HdAkariShadowCutout(textures, data.opacity, opacityThreshold);
   const GfVec3f &e = textures.emissiveColor;
   data.emitter = textures.colorPath.empty()
               && std::max({data.displayColor[0], data.displayColor[1], data.displayColor[2]}) < 0.02f
@@ -657,6 +664,8 @@ void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
       SdfPath resolved;
       HdAkariApplyMaterialId(sceneDelegate, materialId, color, opacity, roughness, metallic,
                              opacityThreshold, textures, resolved);
+      // if any subset's material cuts holes, the whole mesh keeps the alpha test.
+      data.shadowCutout = data.shadowCutout || HdAkariShadowCutout(textures, opacity, opacityThreshold);
       noteUser(materialId.GetString(), id);
       HdAkariAtlasCell cell = atlas->GetOrBakeCell(materialId.GetString(),
                                                    textures.roughnessPath, roughness,

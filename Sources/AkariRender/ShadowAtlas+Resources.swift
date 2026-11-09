@@ -137,7 +137,7 @@ extension Akari.ShadowAtlas
         case .clearList, .clearListStatic: maxPage
         case .runViews: maxRuns * maxAmplificationViews
         case .runXf: maxRuns * maxAmplificationViews * 16
-        case .punctualViews: maxPunctualViews
+        case .punctualViews: maxViews
         case .viewXf: maxViews * 16
         case .movedBoxes, .movedStaticBoxes: maxMovedCasters * 6
       }

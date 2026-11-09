@@ -83,17 +83,28 @@ extension Akari.ShadowAtlas
 
     ensureCulling(count: captures.count)
     let punctualSelected = views.filter { $0 >= Self.punctualViewBase }
-    var runs = Self.buildRuns(views.filter { $0 < Self.punctualViewBase })
-    var culled = cullRuns(captures: captures, rects: rects, drawBounds: drawBounds, runs: runs, viewProjection: viewProjection)
-    let instanced = culled.allSatisfy(\.self) &&
-      !punctualSelected.isEmpty &&
-      cullPunctual(captures: captures, rects: rects, views: punctualSelected, slot: runs.count,
-                   viewProjection: viewProjection)
-    if !instanced, !punctualSelected.isEmpty
+    // Draw each mesh once per shadow view it lands in, so it isn't drawn into views it misses.
+    // If that isn't possible, fall back to drawing each mesh into every view of a group.
+    let bounded = captures.indices.map { ensureDrawBounds(capture: captures[$0], culling: $0, bounds: drawBounds[$0]) }
+    var runs: [[Int]] = []
+    var culled = [Bool](repeating: true, count: captures.count)
+    var instanced = bounded.allSatisfy(\.self)
+      && cullPerView(captures: captures, rects: rects, views: views, slot: 0, viewProjection: viewProjection)
+    if !instanced
     {
-      runs += Self.buildRuns(punctualSelected)
+      runs = Self.buildRuns(views.filter { $0 < Self.punctualViewBase })
       culled = cullRuns(captures: captures, rects: rects, drawBounds: drawBounds, runs: runs, viewProjection: viewProjection)
+      instanced = culled.allSatisfy(\.self) &&
+        !punctualSelected.isEmpty &&
+        cullPerView(captures: captures, rects: rects, views: punctualSelected, slot: runs.count,
+                    viewProjection: viewProjection)
+      if !instanced, !punctualSelected.isEmpty
+      {
+        runs += Self.buildRuns(punctualSelected)
+        culled = cullRuns(captures: captures, rects: rects, drawBounds: drawBounds, runs: runs, viewProjection: viewProjection)
+      }
     }
+
 
     let instancesCulled = cullInstances(captures: captures, rects: rects, runs: runs, culled: culled,
                                         viewProjection: viewProjection)
@@ -265,7 +276,7 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// The punctual faces culled per instance, each instance drawing to the view it picked.
+  /// Views culled per instance, each instance drawing to its own view.
   private func drawInstanced(_ plan: DrawPlan, _ indices: Range<Int>, res: GLsizei)
   {
     var identity: [Float] = []
@@ -390,8 +401,9 @@ extension Akari.ShadowAtlas
     return culled
   }
 
-  private func cullPunctual(captures: [OpaquePointer], rects: [GLuint], views: [Int], slot: Int,
-                            viewProjection: (Int) -> Akari.Matrix4) -> Bool
+  /// Culls each draw against `views`, writing its instance count and the view for each instance.
+  private func cullPerView(captures: [OpaquePointer], rects: [GLuint], views: [Int], slot: Int,
+                           viewProjection: (Int) -> Akari.Matrix4) -> Bool
   {
     guard
       kernels[.cullPunctual].isBuilt,
@@ -427,7 +439,7 @@ extension Akari.ShadowAtlas
                                       visibility: entry.visibility,
                                       offset: Int32(slot * entry.count * MemoryLayout<UInt32>.size),
                                       slot: UInt32(slot + Self.cullSlotBase),
-                                      instanceStride: UInt32(Self.maxPunctualViews)) != 0
+                                      instanceStride: UInt32(Self.maxViews)) != 0
       else { return false }
     }
 
@@ -482,7 +494,7 @@ extension Akari.ShadowAtlas
         entry.visibility = makeBuffer(LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE, UInt32.self,
                                       count: Self.maxRuns * count)
         entry.instanceView = makeBuffer(LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE, UInt32.self,
-                                        count: Self.maxPunctualViews * count)
+                                        count: Self.maxViews * count)
         entry.capacity = count
       }
 

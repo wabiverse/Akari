@@ -12,7 +12,7 @@ let package = Package(
   products: [
     .library(name: "Akari", targets: ["AkariCore", "AkariRender", "AkariHydra", "HdAkari"]),
     .library(name: "AkariCore", targets: ["AkariCore"]),
-    .executable(name: "AkariDemo", targets: ["AkariDemo"])
+    .executable(name: "Kraken", targets: ["Kraken"])
   ],
   dependencies: [
     .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.11.1"),
@@ -20,7 +20,7 @@ let package = Package(
     .package(url: "https://github.com/wabiverse/MetaOpenVDB.git", from: "1.0.0"),
     .package(url: "https://github.com/wabiverse/MetaPtex.git", from: "1.0.0"),
     .package(url: "https://github.com/wabiverse/Lattice.git", from: "1.0.0"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.2.8"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.2.9"),
     .package(url: "https://codeberg.org/furbytm/LabCamera.git", from: "1.0.0"),
     .package(url: "https://github.com/furbytm/Nanocolor.git", from: "1.0.0"),
   ],
@@ -129,7 +129,7 @@ let package = Package(
     ),
 
     .executableTarget(
-      name: "AkariDemo",
+      name: "Kraken",
       dependencies: [
         .product(name: "LatticeCore", package: "Lattice"),
         .product(name: "LatticeMetal", package: "Lattice"),

@@ -200,8 +200,12 @@ extension Akari.ShadowAtlas
         out.view = instance_view[instance];
         out.position = (view_xf[out.view] * model) * in.a_position;
         clipToRect(out, render_rect, out.view);
-        float s = 1.0 / float(1u << ((out.view - \(punctualViewBase)u) % \(lodCount)u));
-        out.position.xy = (out.position.xy + out.position.w) * s - out.position.w;
+        // Point and spot light levels fill only a corner of the atlas view, sun levels fill all of it.
+        if (out.view >= \(punctualViewBase)u)
+        {
+          float s = 1.0 / float(1u << ((out.view - \(punctualViewBase)u) % \(lodCount)u));
+          out.position.xy = (out.position.xy + out.position.w) * s - out.position.w;
+        }
       }
       else
       {
@@ -248,6 +252,8 @@ extension Akari.ShadowAtlas
                             constant MaterialImages& materials [[buffer(6)]],
                             constant MaterialImages& styles [[buffer(7)]])
     {
+      // Texel 4's w is 2 for prims whose material never cuts holes, so skip the alpha test.
+      bool solid = false;
       if ((u.u_alphaTest & 2) != 0)
       {
         int id = int(in.primId + 0.5);
@@ -256,14 +262,14 @@ extension Akari.ShadowAtlas
         {
           float4 flags = styles.atlas.read(uint2((id % perRow) * 8 + 4, id / perRow));
           if (flags.z > 0.5 || (flags.y > 0.5 && flags.w < 0.5)) return;
+          solid = flags.w > 1.5;
         }
       }
-      if ((u.u_alphaTest & 1) != 0)
+      if ((u.u_alphaTest & 1) != 0 && !solid)
       {
-        constexpr sampler linear(filter::linear, mip_filter::linear, address::clamp_to_edge);
-        float4 mat = materials.atlas.sample(linear, in.uv);
-        // an untextured material's uv is -(row + 1), its constants instead of the atlas.
+        // Untextured materials store -(row + 1) in uv and use their constants, so only textured ones sample the atlas.
         int row = int(-in.uv.x + 0.5) - 1;
+        float4 mat;
         if (row >= 0)
         {
           // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
@@ -271,6 +277,11 @@ extension Akari.ShadowAtlas
           uint base = uint(row & 127) * 3u;
           mat = float4(0.0, 0.0, constants.atlas.read(uint2(base, line)).a,
                        constants.atlas.read(uint2(base + 1u, line)).b);
+        }
+        else
+        {
+          constexpr sampler linear(filter::linear, mip_filter::linear, address::clamp_to_edge);
+          mat = materials.atlas.sample(linear, in.uv);
         }
         if (mat.b < (mat.a > 0.0 ? mat.a : 0.5)) return;
       }

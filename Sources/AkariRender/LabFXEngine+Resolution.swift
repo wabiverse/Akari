@@ -86,6 +86,8 @@ extension Akari.LabFXEngine
     var underBudget: Double = 0
     var sinceChange: Double = 0
     var lastUpdate: Double?
+    /// The GPU time measured at each scale, and when.
+    var measured: [Float: (gpuTime: Double, at: Double)] = [:]
     /// How much finer or coarser than the record's fitted detail the instances pick their levels at,
     /// following the frames shown toward the frame budget.
     var geometryScale: Float = 1
@@ -157,13 +159,15 @@ extension Akari.LabFXEngine
     {
       res = DynamicResolution(gpuTime: res.gpuTime, lastUpdate: now, geometryScale: res.geometryScale,
                               geometryTarget: res.geometryTarget, frameTime: res.frameTime)
+      res.measured = [:]
       renderScale = ceiling
       return
     }
 
-    // metalfx upscales by 3x at most, the rest no further than from half the target.
+    // MetalFX upscales by up to 3x and everything else by up to 2x. This follows the chosen upscaler only,
+    // since following MetalFX's short pauses would keep resizing the targets and rebuilding its scaler.
     let temporal = settings.upscaler == .metalFX && settings.features.contains(.temporalAA) &&
-      !upscaling.failed && labgl.upscaleSupported() != 0 && Date() >= upscaling.neuralHeldUntil
+      !upscaling.failed && labgl.upscaleSupported() != 0
     let scales = DynamicResolution.scales(upTo: ceiling, downTo: temporal ? supersampleScale / 3 : max(supersampleScale / 3, 0.5))
     if scales != res.scales
     {
@@ -174,10 +178,18 @@ extension Akari.LabFXEngine
     res.sinceChange += dt
 
     let budget = 1 / Double(max(settings.targetFrameRate, 1))
+    if res.sinceChange > 0.5
+    {
+      res.measured[scales[res.step]] = (res.gpuTime, now)
+    }
+
+    // Shadows, probes and MetalFX's output pass cost the same at any scale,
+    // so only half the frame is assumed to follow the pixel count.
     func predicted(_ step: Int) -> Double
     {
+      if let known = res.measured[scales[step]], now - known.at < 10 { return known.gpuTime }
       let ratio = Double(scales[step] / scales[res.step])
-      return res.gpuTime * ratio * ratio
+      return res.gpuTime * (0.5 + 0.5 * ratio * ratio)
     }
 
     res.overBudget = res.gpuTime > budget * 0.95 ? res.overBudget + dt : 0
@@ -195,8 +207,7 @@ extension Akari.LabFXEngine
 
     if next != res.step
     {
-      // the smoothed time was measured at the old scale.
-      res.gpuTime = predicted(next)
+      if next > res.step { res.gpuTime = predicted(next) }
       res.step = next
       res.overBudget = 0
       res.underBudget = 0

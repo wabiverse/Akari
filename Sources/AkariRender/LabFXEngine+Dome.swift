@@ -60,8 +60,12 @@ extension Akari.LabFXEngine
     /// Every bounds the chosen geometry has had, which a rect light far outside of is the sun.
     var sunSceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
     var domeRevision: UInt64 = .max
-    /// What the image based lighting was last baked from, the dome's file, frame and banded color.
+    /// The dome file and frame the image based lighting was last baked from.
     var domeBakeKey: (file: String, values: [Float]) = ("\u{0}", [])
+    /// The dome color rounded to 1/16 stop. The light probes relight when it changes.
+    var domeColorBand: [Float] = []
+    /// The dome color the image based lighting was baked with. Color changes rescale it instead of rebaking.
+    var bakedDomeColor = SIMD3<Float>(repeating: 1)
     /// Bumped when the environment changes, the light probes relight from it.
     var revision: UInt64 = 0
     /// IBL is expensive, this sets a flag to bake it once.
@@ -184,15 +188,23 @@ extension Akari.LabFXEngine
 
     next.color = SIMD3(data.colorR, data.colorG, data.colorB) * data.intensity * exp2(data.exposure)
     dome = next
-    // the dome draws at its exact color, but the lighting baked from it (and the probes relit from
-    // that) only follows it in sixteenth stop bands, an animated dome doesn't rebake every frame.
-    var values = (0 ..< 3).map { Self.band(next.color[$0]) }
-    next.fromWorld.withUnsafeFloats { values += $0.map { ($0 * 1000).rounded() } }
+    // Baked lighting scales linearly with the dome color, so a color change just updates `iblTint`.
+    // Only a new image or frame rebakes. Light probes relight in 1/16 stop steps.
+    var values: [Float] = []
+    next.fromWorld.withUnsafeFloats { values = $0.map { ($0 * 1000).rounded() } }
     let key = (file: next.file, values: values)
+    let colorBand = (0 ..< 3).map { Self.band(next.color[$0]) }
     if key.file != environment.domeBakeKey.file || key.values != environment.domeBakeKey.values
+      || environment.bakedDomeColor.min() < 1e-4
     {
       environment.domeBakeKey = key
+      environment.domeColorBand = colorBand
       domeChanged()
+    }
+    else if colorBand != environment.domeColorBand
+    {
+      environment.domeColorBand = colorBand
+      environment.revision += 1
     }
   }
 
@@ -285,6 +297,7 @@ extension Akari.LabFXEngine
   func applyDome(_ light: LightSettings)
   {
     setFloat(.domeEnabled, dome == nil ? 0 : environment.domeWeight)
+    setVector(.iblTint, SIMD4(iblTint, 1))
     guard let dome else { return }
     // turned so the sun it was shot with stands where Sun Height puts it.
     var fromWorld = dome.fromWorld
@@ -301,6 +314,28 @@ extension Akari.LabFXEngine
     setVector(.domeSun, SIMD4((dome.sun?.irradiance ?? .zero) * dome.color, 0))
   }
 
+  /// Whether the environment is baked from the dome rather than the procedural sky.
+  var bakesDome: Bool
+  {
+    dome != nil && environment.domeWeight >= 1 && atmosphere.planet == nil
+  }
+
+  /// The current dome color relative to the baked color, or 1 without a dome.
+  var iblTint: SIMD3<Float>
+  {
+    guard bakesDome, let dome else { return SIMD3(repeating: 1) }
+    return dome.color / pointwiseMax(environment.bakedDomeColor, SIMD3(repeating: 1e-6))
+  }
+
+  /// `iblTint` rounded to 1/16 stop, for the light probes.
+  var probeSkyTint: SIMD3<Float>
+  {
+    guard bakesDome, environment.domeColorBand.count == 3 else { return SIMD3(repeating: 1) }
+    let banded = SIMD3(exp2(environment.domeColorBand[0] / 16), exp2(environment.domeColorBand[1] / 16),
+                       exp2(environment.domeColorBand[2] / 16))
+    return banded / pointwiseMax(environment.bakedDomeColor, SIMD3(repeating: 1e-6))
+  }
+
   /// The passes an IBL bake runs, the dome's in place of the procedural sky.
   func setIBLPasses(active: Bool)
   {
@@ -312,6 +347,9 @@ extension Akari.LabFXEngine
     runtime.setPassActive(.dome, active: active && bakesDome && atmosphere.planet == nil)
     runtime.setPassActive(.atmosphereEnv, active: active && atmosphere.planet != nil)
     guard active, bakesDome, let dome else { return }
+    // The bake draws the dome with this frame's color.
+    environment.bakedDomeColor = dome.color
+    setVector(.iblTint, SIMD4(1, 1, 1, 1))
     gl.bindTexture(target: GL_TEXTURE_2D, texture: runtime.texture(.dome, named: .dome))
     gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: 0,
                      width: GLsizei(dome.smallSize.x), height: GLsizei(dome.smallSize.y),

@@ -65,6 +65,7 @@
 #include "HdAkari/authoring.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <mutex>
 #include <vector>
@@ -276,6 +277,19 @@ HdAkariDescribeValue(VtValue const &v)
   if (v.IsArrayValued()) return "[" + std::to_string(v.GetArraySize()) + " " + v.GetTypeName() + "]";
   std::string s = TfStringify(v);
   return s.size() > 80 ? s.substr(0, 77) + "..." : s;
+}
+
+std::vector<double> HdAkariTimeSamples(UsdAttribute const &attribute)
+{
+  std::vector<double> times;
+  if (attribute) attribute.GetTimeSamples(&times);
+  return times;
+}
+
+bool HdAkariSetValue(UsdAttribute const &attribute, VtValue const &value, double time)
+{
+  if (!attribute || value.IsEmpty()) return false;
+  return attribute.Set(value, std::isnan(time) ? UsdTimeCode::Default() : UsdTimeCode(time));
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -82,6 +82,8 @@ extension Akari.LabFXEngine
     let recorder = Akari.Geom.Recorder(keepsTopology: false)
     var batch = BatchSummary()
     var recordedIDs: Set<UInt64> = []
+    /// Whether any selected prim is animated, so the mask also needs the animated capture.
+    var selectsAnimated = false
     var needsRecord = true
     var projection = Akari.Matrix4.identity
     var sceneProjection = Akari.Matrix4.identity
@@ -160,6 +162,7 @@ extension Akari.LabFXEngine
     { key, primId in
       isSelected(primId) && !geometry.animated.contains(key) ? key : nil
     })
+    outline.selectsAnimated = geometry.animated.contains { key in geometry.primIds[key].map(isSelected) ?? false }
     guard outline.needsRecord || ids != outline.recordedIDs else { return }
     // the outline capture draws with the plain mesh path, so instances expand.
     let selected = ids.compactMap { geometry.meshes[$0] }.flatMap
@@ -192,7 +195,8 @@ extension Akari.LabFXEngine
   {
     let captures = outline.all ? geometry.captures
       : [outline.batch.isEmpty ? nil : outline.capture,
-         geometry.dynamicBatch.isEmpty ? nil : geometry.dynamicCapture].compactMap(\.self)
+         // the animated capture holds every animated mesh, so it's only drawn when one of them is selected.
+         geometry.dynamicBatch.isEmpty || !outline.selectsAnimated ? nil : geometry.dynamicCapture].compactMap(\.self)
     guard !captures.isEmpty else { return }
 
     gl.matrixMode(GL_PROJECTION)

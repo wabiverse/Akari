@@ -92,7 +92,10 @@ extension Akari.LabFXEngine
       geometry.deformer.settle()
     }
     // the shadow maps cache static pages, so the flags meshes just brought have to be up before they're drawn.
-    if geometry.flags.emitters != styles.emitters || geometry.flags.transparent != styles.transparent || geometry.flags.opacity != styles.opacity
+    if geometry.flags.emitters != styles.emitters ||
+       geometry.flags.transparent != styles.transparent ||
+       geometry.flags.opacity != styles.opacity ||
+       geometry.flags.solidShadow != styles.solidShadow
     {
       geometry.record.restyled = syncStyles(scene) || geometry.record.restyled
     }
@@ -347,6 +350,7 @@ extension Akari.LabFXEngine
                                           contentKey: mesh.contentKey)
     raw.transparent = mesh.transparent
     raw.emitter = mesh.emitter
+    raw.shadowCutout = mesh.shadowCutout
     raw.opacity = mesh.opacity
     raw.smooth = mesh.smooth
     raw.color = SIMD3(mesh.displayColor[0], mesh.displayColor[1], mesh.displayColor[2])

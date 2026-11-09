@@ -74,6 +74,7 @@ extension Akari.LabFXEngine
     case dof = "u_dof"
     case dofSampling = "u_dofSampling"
     case domeColor = "u_domeColor"
+    case iblTint = "u_iblTint"
     case domeEnabled = "u_domeEnabled"
     case domeFromSky = "u_domeFromSky"
     case domeFromWorld = "u_domeFromWorld"
@@ -300,6 +301,9 @@ extension Akari.LabFXEngine
     case ssr
     case ssrAccum
     case ssrHistory
+    case sunShadowAccum
+    case sunShadowHistory
+    case sunShadowRaw
     case supersample
     case taa
     case tonemap

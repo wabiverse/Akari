@@ -55,9 +55,10 @@ public extension Akari.LabFXEngine
     var ready = false
   }
 
-  /// Fits the shadow views to this frame, then tags
-  /// the pages its G-buffer and froxels sample.
-  func markShadowPageUsage(camera: Akari.Camera, settings: RenderSettings)
+  /// Fits the shadow views to this frame and marks the shadow pages it uses,
+  /// final renders snap the sun direction instead of gliding to it like the
+  /// viewport does.
+  func markShadowPageUsage(camera: Akari.Camera, settings: RenderSettings, isFinalRender: Bool = false)
   {
     guard settings.features.contains(.shadowMaps) else { return }
     measureLightImportance(camera: camera)
@@ -73,7 +74,7 @@ public extension Akari.LabFXEngine
                               screenWidth: sizes.render.width,
                               screenHeight: sizes.render.height,
                               footprintHeight: max(sizes.render.height, sizes.target.height),
-                              lightDirection: Self.shadowSun(worldSpaceSunDirection(settings.light), angle: effectiveSunAngle(settings.light)),
+                              lightDirection: Akari.Math.normalize(worldSpaceSunDirection(settings.light)),
                               sceneBounds: sceneBounds,
                               settings: settings.light.shadow,
                               lights: pointLights.shadowed,
@@ -81,14 +82,10 @@ public extension Akari.LabFXEngine
                               sceneRevision: shadowCasterRevision,
                               staticCasters: shadows.staticCasters,
                               dynamicCasters: shadows.dynamicCasters,
-                              volume: volumetrics.froxels)
+                              volume: volumetrics.froxels,
+                              snapSun: isFinalRender)
   }
-  
-  /// The sun the shadow maps draw from, in bands an eighth of its disk wide, so a turning sun doesn't redraw them every frame.
-  static func shadowSun(_ direction: SIMD3<Float>, angle: Float) -> SIMD3<Float>
-  {
-    return Akari.Math.normalize(direction)
-  }
+
 
   /// Changes with the scene and whenever a capture the shadows draw records again, a reframe
   /// choosing other meshes or details without the scene changing.

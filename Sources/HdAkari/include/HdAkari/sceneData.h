@@ -107,6 +107,8 @@ struct HdAkariMeshData
   float opacity = 1.0f;   // from the bound material's UsdPreviewSurface.
   bool transparent = false; // a constant opacity below 1 without a threshold, drawn by the transparency pass.
   bool emitter = false;     // black and emissive, light that casts no shadow.
+  /// Whether the material can cut holes in the shadow.
+  bool shadowCutout = true;
   bool smooth = false;      // a subdivision surface, shaded without hard edges.
   /// Each triangle's Ptex face, its corners' places on it two bits apiece above.
   VtIntArray triangleFaces;

@@ -60,6 +60,9 @@ extension Akari.LabFXEngine
     var rebuilds = 0
     /// MetalFX didn't run last frame, its history is from before the TAA pass took over.
     var stale = true
+    /// The viewport size, and when it last changed.
+    var size = PixelSize(width: 0, height: 0)
+    var resizedAt = Date.distantPast
   }
 
   /// What brings this frame's scene up to the target.
@@ -93,7 +96,16 @@ extension Akari.LabFXEngine
 
     // metalfx can't build its scaler for a frame as small as hydra's 1x1 populate pass.
     let tiny = min(width, height) < 64
+    // MetalFX builds a scaler (a Neural Engine model) for each size, so use TAA until a resize settles.
+    let size = PixelSize(width: width, height: height)
+    if size != upscaling.size
+    {
+      upscaling.size = size
+      upscaling.resizedAt = Date()
+    }
+    let resizing = Self.resizingArea || Date().timeIntervalSince(upscaling.resizedAt) < 0.5
     upscaling.mode = if settings.upscaler != .metalFX || renderScale > 1 || tiny || upscaling.failed || motionBlur.subframes > 0
+      || resizing
       || labgl.upscaleSupported() == 0 || (settings.features.contains(.temporalAA) && !neuralUpscaleSafe)
     {
       .taa
@@ -118,6 +130,9 @@ extension Akari.LabFXEngine
     runtime.setPassActive(.downsample, active: upscaling.mode == .supersample)
     runtime.setPassActive(.upscaleSanitize, active: upscaling.mode != .taa)
   }
+
+  /// Set while a workspace edge is dragged, so MetalFX waits even if the drag pauses.
+  nonisolated(unsafe) public static var resizingArea = false
 
   /// Whether MetalFX's temporal scaler may run this frame.
   var neuralUpscaleSafe: Bool

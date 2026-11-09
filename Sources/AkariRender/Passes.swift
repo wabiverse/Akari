@@ -55,7 +55,7 @@ public extension Akari
 
     public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
-      ctx.labfx.markShadowPageUsage(camera: ctx.camera, settings: ctx.settings)
+      ctx.labfx.markShadowPageUsage(camera: ctx.camera, settings: ctx.settings, isFinalRender: ctx.isFinalRender)
       ctx.labfx.renderShadows(renderParam: ctx.renderParam,
                               camera: ctx.camera,
                               settings: ctx.settings,

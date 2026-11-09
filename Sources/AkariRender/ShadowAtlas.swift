@@ -238,7 +238,8 @@ public extension Akari
                               sceneRevision: UInt64,
                               staticCasters: [Casters],
                               dynamicCasters: [Casters],
-                              volume: VolumeFroxels? = nil)
+                              volume: VolumeFroxels? = nil,
+                              snapSun: Bool = false)
     {
       guard
         gbufferPosition != 0,
@@ -252,7 +253,8 @@ public extension Akari
       adaptPunctualBias()
 
       fitViews(camera: camera, lightDirection: lightDirection, sceneBounds: sceneBounds,
-               settings: settings, lights: lights, punctualFarDistance: punctualFarDistance)
+               settings: settings, lights: lights, punctualFarDistance: punctualFarDistance,
+               snapSun: snapSun)
 
       var punctualDirty = punctualHistory.pendingDirty
       punctualHistory.pendingDirty = 0
@@ -323,12 +325,13 @@ public extension Akari
                           sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
                           settings: ShadowSettings,
                           lights: [Akari.Lux.PointLight],
-                          punctualFarDistance: Float)
+                          punctualFarDistance: Float,
+                          snapSun: Bool)
     {
       let corners = Self.sceneCorners(sceneBounds)
       let technique = Self.resolveTechnique(camera: camera)
 
-      let sunChanged = sunMotion.advance(to: lightDirection)
+      let sunChanged = sunMotion.advance(to: lightDirection, snap: snapSun)
       var fitSettings = settings
       fitSettings.levelLodBias = (settings.levelLodBias + sunMotion.lodBias).rounded()
 

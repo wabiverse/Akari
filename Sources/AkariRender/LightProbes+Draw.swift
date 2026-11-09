@@ -195,6 +195,7 @@ extension Akari.LightProbes
     }
 
     kernel.set(.params, SIMD4(Float(lightCount), param, 0, 0))
+    kernel.set(.skyTint, SIMD4(lighting.skyTint, 1))
   }
 
   /// Uploads the run's projection matrices for the combined instanced entry

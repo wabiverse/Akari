@@ -97,6 +97,8 @@ public extension Akari.Geom
       public var transparent = false
       /// Black and emissive, casts no shadow.
       public var emitter = false
+      /// Whether the material can cut holes in the shadow.
+      public var shadowCutout = true
       /// The bound material's constant opacity.
       public var opacity: Float = 1
       /// The bound material's constant color and roughness.

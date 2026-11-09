@@ -278,7 +278,8 @@ inline uint64_t HdAkariMeshContentKey(HdAkariMeshData const &mesh)
   const uint8_t flags = uint8_t(mesh.transparent ? 1 : 0)
     | uint8_t(mesh.emitter ? 2 : 0)
     | uint8_t(mesh.transform.GetDeterminant() < 0.0 ? 4 : 0)
-    | uint8_t(mesh.smooth ? 8 : 0);
+    | uint8_t(mesh.smooth ? 8 : 0)
+    | uint8_t(mesh.shadowCutout ? 16 : 0);
   hash = HdAkariHashBytes(hash, &flags, sizeof(flags));
   return hash ? hash : 1;
 }

@@ -92,7 +92,7 @@ public extension Akari.LabFXEngine
     var probeSettings = settings.probes
     if isPlaying { probeSettings.captureViewsPerFrame = max(probeSettings.captureViewsPerFrame / 4, 6) }
 
-    let lighting = Akari.LightProbes.Lighting(
+    var lighting = Akari.LightProbes.Lighting(
       sunDirection: worldSpaceSunDirection(settings.light),
       sunHeight: effectiveSunHeight(settings.light),
       zUp: stageIsZUp,
@@ -107,6 +107,7 @@ public extension Akari.LabFXEngine
         [SIMD4($0.position, exp2((log2(max($0.intensity, 1e-6)) * 8).rounded() / 8)), SIMD4($0.color, $0.radius)]
       }
     )
+    lighting.skyTint = probeSkyTint
 
     let ready = lightProbes.update(captures: captures,
                                    sceneBounds: sceneBounds,

@@ -44,10 +44,12 @@
 #if __has_include(<pxr/pxrns.h>)
 # include <pxr/pxrns.h>
 # include <Sdf/layer.h>
+# include <Usd/attribute.h>
 # include <Vt/value.h>
 #else
 # include <pxr/pxr.h>
 # include <pxr/usd/sdf/layer.h>
+# include <pxr/usd/usd/attribute.h>
 # include <pxr/base/vt/value.h>
 #endif
 
@@ -55,6 +57,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -76,6 +79,12 @@ HDAKARI_API std::string HdAkariDescribeValue(VtValue const &value);
 
 /// A value's numbers into `out`, up to 3 of them, how many it has, 0 when it isn't numeric.
 HDAKARI_API int HdAkariValueNumbers(VtValue const &value, double *out);
+
+/// The times `attribute` has keys at.
+HDAKARI_API std::vector<double> HdAkariTimeSamples(UsdAttribute const &attribute);
+
+/// Writes `value` to `attribute` at `time`, or as its default when `time` is NaN.
+HDAKARI_API bool HdAkariSetValue(UsdAttribute const &attribute, VtValue const &value, double time);
 
 PXR_NAMESPACE_CLOSE_SCOPE
 

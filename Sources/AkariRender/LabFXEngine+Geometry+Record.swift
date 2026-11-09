@@ -227,6 +227,8 @@ extension Akari.LabFXEngine
       if mesh.transparent { geometry.flags.transparent.insert(mesh.primId) } else { geometry.flags.transparent.remove(mesh.primId) }
       if mesh.emitter { geometry.flags.emitters.insert(mesh.primId) } else { geometry.flags.emitters.remove(mesh.primId) }
       geometry.flags.opacity[mesh.primId] = mesh.transparent ? mesh.opacity : nil
+      if !mesh.transparent && !mesh.shadowCutout { geometry.flags.solidShadow.insert(mesh.primId) }
+      else { geometry.flags.solidShadow.remove(mesh.primId) }
       let key = Self.changeKey(mesh)
       let isNew = geometry.meshes.updateValue(mesh, forKey: mesh.key) == nil
       if geometry.hidden.remove(mesh.key) != nil { dirty.dynamics = true }

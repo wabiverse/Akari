@@ -119,6 +119,22 @@ buffer: ssrHistory
   textures:
     [ ssrHistory, f16x4, scale: 0.5 ]
 
+buffer: sunShadowRaw
+  has depth: no
+  textures:
+    [ sunShadowRaw, f16x1, scale: 1.0 ]
+
+buffer: sunShadowAccum
+  has depth: no
+  textures:
+    [ sunShadowAccum, f16x2, scale: 1.0 ]
+
+buffer: sunShadowHistory
+  has depth: no
+  latency: ring 2
+  textures:
+    [ sunShadowHistory, f16x2, scale: 1.0 ]
+
 buffer: taa
   has depth: no
   textures:
@@ -149,17 +165,17 @@ buffer: tonemap
 buffer: outlineMask
   has depth: yes
   textures:
-    [ outlineMask, f32x1, scale: 1.0 ]
+    [ outlineMask, f32x2, scale: 1.0 ]
 
 buffer: outlineEdge
   has depth: no
   textures:
-    [ outlineEdge, f16x1, scale: 1.0 ]
+    [ outlineEdge, f32x2, scale: 1.0 ]
 
 buffer: outlineSpan
   has depth: no
   textures:
-    [ outlineSpan, f16x1, scale: 1.0 ]
+    [ outlineSpan, f32x2, scale: 1.0 ]
 
 buffer: outline
   has depth: no
@@ -552,6 +568,31 @@ pass: point shadow blur v
            pointShadowBlur.pointShadowBlur3, pointShadowRaw.pointShadowGuide]
   outputs: pointShadow [pointShadow0, pointShadow1, pointShadow2, pointShadow3]
 
+pass: sun shadow
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: sun-shadow
+  inputs: [gbuffer.position, gbuffer.normal]
+  outputs: sunShadowRaw [ sunShadowRaw ]
+
+pass: sun shadow temporal
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: sun-shadow-temporal
+  inputs: [sunShadowRaw.sunShadowRaw, sunShadowHistory.sunShadowHistory, gbuffer.position, gbuffer.normal,
+           gbuffer.velocity]
+  outputs: sunShadowAccum [ sunShadowAccum ]
+
+pass: sun shadow history
+  draw: quad
+  depth test: never
+  write depth: no
+  use shader: sun-shadow-copy
+  inputs: [sunShadowAccum.sunShadowAccum]
+  outputs: sunShadowHistory [ sunShadowHistory ]
+
 pass: resolve
   draw: quad
   depth test: never
@@ -563,7 +604,7 @@ pass: resolve
            ssgiPrep.ssgiDepth, ssgiPrep.ssgiNormal, volumeIntegrated.volumeIntegrated,
            pointShadow.pointShadow0, pointShadow.pointShadow1, pointShadow.pointShadow2,
            pointShadow.pointShadow3, pointShadowRaw.pointShadowGuide,
-           ssrAccum.ssrAccum, ssr.ssrGuide,
+           ssrAccum.ssrAccum, ssr.ssrGuide, sunShadowAccum.sunShadowAccum,
            atmosTransmittance.atmosTransmittance, atmosAerial.atmosAerial, planetCloudMap.planetCloudMap]
   outputs: color [ final ]
 
@@ -1013,7 +1054,7 @@ pass: outline
   depth test: never
   write depth: no
   use shader: outline-composite
-  inputs: [tonemap.tonemap, outlineSpan.outlineSpan]
+  inputs: [tonemap.tonemap, outlineSpan.outlineSpan, outlineMask.outlineMask, gbuffer.position, gbuffer.normal]
   outputs: outline [ outline ]
 
 pass: aov
@@ -2585,7 +2626,8 @@ shader: fog-sim-composite
     ```
 
 shader: volume-march
-  uniforms: [ u_position_texture: sampler2d,
+  uniforms: [ u_iblTint: vec4,
+              u_position_texture: sampler2d,
               u_normal_texture: sampler2d,
               u_volumeShadow_texture: sampler2d,
               u_irradiance_texture: samplerCube,
@@ -2643,7 +2685,7 @@ shader: volume-march
       float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy + 5.588238 * float(frameIndex % 64), vec2(0.06711056, 0.00583715))));
       vec3 sun = mix(vec3(3.0), u_sunOverride.rgb, u_sunOverride.w);
       vec3 up = mix(vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), u_zUp);
-      vec3 sky = texture(u_irradiance_texture, mix(up, vec3(up.x, up.z, -up.y), u_zUp)).rgb * u_iblEnabled;
+      vec3 sky = texture(u_irradiance_texture, mix(up, vec3(up.x, up.z, -up.y), u_zUp)).rgb * u_iblTint.rgb * u_iblEnabled;
       vec4 r = volumeMarch(u_volumeDensity, u_volumeShadow_texture, u_volumeTextureFromWorld, eye, dir, tMax, noise,
                            u_volumeParams, u_volumeAlbedo.rgb, normalize(u_volumeSun.xyz), sun, sky);
       if (r.w >= 0.9999) discard;
@@ -2670,7 +2712,7 @@ shader: volume-march
       float noise = fract(volumeHash(int3(int2(gl_FragCoord.xy), 0)) + 0.6180339887 * float(frameIndex % 1024));
       float3 sun = mix(float3(3.0), u_sunOverride.rgb, u_sunOverride.w);
       float3 up = mix(float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0), u_zUp);
-      float3 sky = texture(u_irradiance_texture, mix(up, float3(up.x, up.z, -up.y), u_zUp)).rgb * u_iblEnabled;
+      float3 sky = texture(u_irradiance_texture, mix(up, float3(up.x, up.z, -up.y), u_zUp)).rgb * u_iblTint.rgb * u_iblEnabled;
       float tFirst;
       float4 r = volumeMarch(u_volumeDensity, u_volumeDensity_smp, u_volumeShadow_texture, u_volumeShadow_texture_smp,
                              u_volumeTextureFromWorld, eye, dir, tMax, noise, u_volumeParams, u_volumeAlbedo.rgb,
@@ -4116,7 +4158,8 @@ shader: bloom-composite
     ```
 
 shader: mesh-transparent
-  uniforms: [ u_material_atlas: sampler2d, u_color_atlas: sampler2d,
+  uniforms: [ u_iblTint: vec4,
+              u_material_atlas: sampler2d, u_color_atlas: sampler2d,
               u_normal_atlas: sampler2d, u_emissive_atlas: sampler2d, u_materialConstants: sampler2d,
               u_primStyle: sampler2d,
               u_position_texture: sampler2d,
@@ -4246,7 +4289,7 @@ shader: mesh-transparent
       float3 sun = mix(float3(3.0), u_sunOverride.rgb, u_sunOverride.w);
       float3 R = reflect(-V, N);
       float3 sky = mix(R, float3(R.x, R.z, -R.y), u_zUp);
-      float3 reflection = u_prefiltered_texture.sample(u_prefiltered_texture_smp, sky, level(mat.r * 5.0)).rgb * u_iblEnabled * F;
+      float3 reflection = u_prefiltered_texture.sample(u_prefiltered_texture_smp, sky, level(mat.r * 5.0)).rgb * u_iblTint.rgb * u_iblEnabled * F;
       float3 H = normalize(V + L);
       float NoH = saturate(dot(N, H));
       float a2 = roughness * roughness;
@@ -4255,7 +4298,7 @@ shader: mesh-transparent
       reflection += sun * saturate(NoL) * F * a2 / (3.14159265 * d * d) * 0.25 / max(NoV * saturate(NoL), 0.05);
 
       float3 Ns = mix(N, float3(N.x, N.z, -N.y), u_zUp);
-      float3 irradiance = u_irradiance_texture.sample(u_irradiance_texture_smp, Ns, level(0.0)).rgb * u_iblEnabled;
+      float3 irradiance = u_irradiance_texture.sample(u_irradiance_texture_smp, Ns, level(0.0)).rgb * u_iblTint.rgb * u_iblEnabled;
       float3 diffuse = albedo * (irradiance + sun / 3.14159265 * (saturate(NoL) + u_transparency.z * saturate(-NoL))) + emission;
 
       float depth = max(-var.posEye.z * u_transparency.x, 1e-3);
@@ -4278,7 +4321,8 @@ shader: mesh-transparent
     ```
 
 shader: transparent-composite
-  uniforms: [ u_final_texture: sampler2d,
+  uniforms: [ u_iblTint: vec4,
+              u_final_texture: sampler2d,
               u_tColor_texture: sampler2d,
               u_tReflect_texture: sampler2d,
               u_tTransmit_texture: sampler2d,
@@ -4376,7 +4420,7 @@ shader: transparent-composite
       bool inside = all(hp >= u_waterBounds.xy) && all(hp <= u_waterBounds.zw);
       // red goes within a few meters, blue green carries, by the water's own color.
       float3 absorb = (1.0 - u_waterColor.rgb) * 0.45 + float3(0.02, 0.01, 0.015);
-      float3 skyAmbient = u_prefiltered_texture.sample(u_prefiltered_texture_smp, mix(upW, float3(upW.x, upW.z, -upW.y), u_zUp), level(6.0)).rgb * u_iblEnabled;
+      float3 skyAmbient = u_prefiltered_texture.sample(u_prefiltered_texture_smp, mix(upW, float3(upW.x, upW.z, -upW.y), u_zUp), level(6.0)).rgb * u_iblTint.rgb * u_iblEnabled;
       float3 scatter = u_waterColor.rgb * skyAmbient * 0.06;
       float ior = u_water.z;
       float time = u_waterWaves.x;
@@ -4396,7 +4440,7 @@ shader: transparent-composite
         return zUp ? normalize(float3(-g.x, -g.y, 1.0)) : normalize(float3(-g.x, 1.0, -g.y));
       };
       auto environment = [&](float3 r, float rough) {
-        return u_prefiltered_texture.sample(u_prefiltered_texture_smp, mix(r, float3(r.x, r.z, -r.y), u_zUp), level(rough * 5.0)).rgb * u_iblEnabled;
+        return u_prefiltered_texture.sample(u_prefiltered_texture_smp, mix(r, float3(r.x, r.z, -r.y), u_zUp), level(rough * 5.0)).rgb * u_iblTint.rgb * u_iblEnabled;
       };
 
       if (!under && inside && t > 0.0 && t < dOpaque) {
@@ -4508,7 +4552,8 @@ shader: taa-copy-transparent
     ```
 
 shader: deferred-shade
-  uniforms: [ u_planetCloudMap_texture: sampler2d,
+  uniforms: [ u_iblTint: vec4,
+              u_planetCloudMap_texture: sampler2d,
               u_normal_texture: sampler2d,
               u_position_texture: sampler2d,
               u_diffuse_texture: sampler2d,
@@ -4567,6 +4612,7 @@ shader: deferred-shade
               u_volumeRange: vec4,
               u_ssrAccum_texture: sampler2d,
               u_ssrGuide_texture: sampler2d,
+              u_sunShadowAccum_texture: sampler2d,
               u_ssr: vec4,
               u_halfScale: vec4,
               u_horizonScan: vec4,
@@ -4650,146 +4696,6 @@ shader: deferred-shade
     vec3 toSkySpace(vec3 v)
     {
       return mix(v, vec3(v.x, v.z, -v.y), u_zUp);
-    }
-
-    int shadowLevelSlot(int i)
-    {
-      return int(texelFetch(u_shadow_data, ivec2(4, 96 + i), 0).x);
-    }
-
-    vec3 shadowLevelDepth(int i)
-    {
-      return texelFetch(u_shadow_data, ivec2(5, 96 + i), 0).xyz;
-    }
-
-    vec2 shadowLevelTileOffset(int i)
-    {
-      return texelFetch(u_shadow_data, ivec2(4, 96 + i), 0).yz;
-    }
-
-    int directionalLevelIndex(vec3 posEye)
-    {
-      bool isClipmap = u_shadowLodRange.z > 0.5;
-      int lodMin = int(u_shadowLodRange.x);
-      int lodMax = int(u_shadowLodRange.y);
-      vec3 delta = (u_eyeToLightRotation * vec4(posEye, 0.0)).xyz - u_directionalRefOffset.xyz;
-      float lod;
-      if (isClipmap) {
-        float narrowing = 32.0 / (32.0 - 1.0001);
-        lod = log2(length(delta) * narrowing * 2.0);
-      } else {
-        float narrowing = 32.0 / (32.0 - 2.5001);
-        float lodMinMinusOne = float(lodMin - 1);
-        float lodMinHalfSize = exp2(lodMinMinusOne);
-        lod = length(delta.xy) * narrowing / lodMinHalfSize + lodMinMinusOne;
-      }
-      lod += u_shadowLodRange.w;
-      int level = clamp(int(ceil(lod)), lodMin, lodMax);
-      return level - lodMin;
-    }
-
-    float directionalTap(vec2 tapTileFloat, ivec2 tile, vec4 pageInfo, int slot,
-                         inout ivec2 cacheTile, inout vec4 cachePage)
-    {
-      ivec2 tapTile = clamp(ivec2(floor(tapTileFloat)), ivec2(0), ivec2(31));
-      if (tapTile != cacheTile) {
-        cachePage = tapTile == tile
-            ? pageInfo
-            : texelFetch(u_shadow_pagetable, ivec2(tapTile.y * 32 + tapTile.x, slot), 0);
-        cacheTile = tapTile;
-      }
-      vec4 tapPage = cachePage;
-      vec2 frac = fract(tapTileFloat);
-      if (tapPage.z < 0.5) {
-        tapPage = pageInfo;
-        frac = clamp(tapTileFloat - vec2(tile), 0.0, 0.999999);
-      }
-      uint v = texelFetch(u_shadow_atlas, ivec3(int(tapPage.y) * 256 + int(frac.x * 256.0),
-                                                int(frac.y * 256.0), int(tapPage.x)), 0).r;
-      return v == 0xFFFFFFFFu ? 1.0 : uintBitsToFloat(v);
-    }
-
-    float directionalShadow(vec3 posEye, vec3 normalEye, float NoL, vec2 noise)
-    {
-      if (u_shadowEnabled < 0.5) return 1.0;
-
-      int levelCount = int(u_shadowLevelCount);
-      int i = directionalLevelIndex(posEye);
-      if (i < 0) return 1.0;
-
-      vec3 lightDelta = (u_eyeToLightRotation * vec4(posEye, 0.0)).xyz - u_directionalRefOffset.xyz;
-      int lodMin = int(u_shadowLodRange.x);
-      int lodMax = int(u_shadowLodRange.y);
-      float scale = clamp(length(lightDelta) * 2.0, exp2(float(lodMin)), exp2(float(lodMax)));
-      float sinTheta = sqrt(max(1.0 - NoL * NoL, 0.0));
-      float levelSize;
-      vec3 biasedPosEye;
-      vec2 tileFloat;
-      ivec2 tile;
-      int slot;
-      vec4 pageInfo = vec4(0.0);
-      for (int k = 0; k < levelCount; ++k, ++i) {
-        if (i >= levelCount) return 1.0;
-        levelSize = exp2(u_shadowLodRange.x + float(i));
-        float texelWorldSize = 1.41421356 / 8192.0 * levelSize;
-        biasedPosEye = posEye + normalEye * (texelWorldSize * (sinTheta + u_shadowBias.y));
-        float radius = levelSize * 0.5;
-        vec3 lightRel = (u_eyeToLightRotation * vec4(biasedPosEye, 0.0)).xyz;
-        vec2 lightXY = lightRel.xy + shadowLevelTileOffset(i);
-        vec2 ndcXY = lightXY / radius;
-        tileFloat = (ndcXY * 0.5 + 0.5) * 32.0;
-        if (any(lessThan(tileFloat, vec2(0.0))) || any(greaterThanEqual(tileFloat, vec2(32.0)))) { continue; }
-        tile = ivec2(tileFloat);
-        slot = shadowLevelSlot(i);
-        pageInfo = texelFetch(u_shadow_pagetable, ivec2(tile.y * 32 + tile.x, slot), 0);
-        if (pageInfo.z > 0.5) break;
-      }
-      if (pageInfo.z < 0.5) return 1.0;
-
-      vec3 lightRelZ = (u_eyeToLightRotation * vec4(biasedPosEye, 0.0)).xyz;
-      vec3 levelDepth = shadowLevelDepth(i);
-      float ndcZ = (lightRelZ.z + levelDepth.x) * levelDepth.y + levelDepth.z;
-      float compareDepth = ndcZ * 0.5 + 0.5 - u_shadowBias.x;
-
-      float tileTexelStep = 1.5 / 256.0 * clamp(scale * (32.0 / (32.0 - 1.0001)) / levelSize, 0.5, 1.0);
-
-      float tileWorld = levelSize / 32.0;
-      float tanHalf = tan(u_sunDirection.w);
-      float depthPerWorld = abs(0.5 * levelDepth.y);
-      float reach = 2.0 * tileWorld / max(tanHalf, 1e-3);
-      float aa = tileTexelStep * tileWorld;
-      vec3 normalLight = (u_eyeToLightRotation * vec4(normalEye, 0.0)).xyz;
-      float nz = normalLight.z < 0.0 ? min(normalLight.z, -0.05) : max(normalLight.z, 0.05);
-      vec2 planeSlope = normalLight.xy * (-0.5 * levelDepth.y / nz);
-      float lit = 0.0;
-      ivec2 cacheTile = tile;
-      vec4 cachePage = pageInfo;
-      for (int r = 0; r < 6; ++r) {
-        float phi = 6.2831853 * fract(noise.x + 0.618034 * float(r));
-        vec2 disk = vec2(cos(phi), sin(phi)) * sqrt(fract(noise.y + 0.754877 * float(r)));
-        float jitter = fract(noise.x + noise.y + 0.5698403 * float(r));
-        float plane = dot(planeSlope, disk) * aa;
-        float visible = 1.0;
-        bool covered = false;
-        for (int k = 0; k < 8; ++k) {
-          float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 7.0;
-          float t = reach * f * f;
-          float fNext = (float(k) + jitter) / 7.0;
-          float span = k == 7 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
-          vec2 offset = disk * (aa + tanHalf * t);
-          float occluder = directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage);
-          float behind = compareDepth + plane - t * depthPerWorld - occluder;
-          float lift = compareDepth + dot(planeSlope, offset) - occluder;
-          if ((behind > 0.0 && behind < span)
-              || (covered && behind <= 0.0 && lift > (2.0 * aa + 0.05 * t) * depthPerWorld)) {
-            visible = 0.0;
-            break;
-          }
-          covered = covered || behind >= span;
-        }
-        lit += visible;
-      }
-      return lit / 6.0;
     }
 
     vec4 pointLightPosIntensity(int i)
@@ -4983,8 +4889,8 @@ shader: deferred-shade
         if (u_iblEnabled > 0.5) {
           vec4 e = u_invProj * vec4(var.texCoord * 2.0 - 1.0, -1.0, 1.0);
           vec3 worldDir = normalize(invView * (e.xyz / e.w));
-          vec3 sky = texture(u_envCube_texture, toSkySpace(worldDir)).rgb;
-          if (u_viewShading.x > 0.5) sky = textureLod(u_prefiltered_texture, toSkySpace(worldDir), 3.0).rgb;
+          vec3 sky = texture(u_envCube_texture, toSkySpace(worldDir)).rgb * u_iblTint.rgb;
+          if (u_viewShading.x > 0.5) sky = textureLod(u_prefiltered_texture, toSkySpace(worldDir), 3.0).rgb * u_iblTint.rgb;
           else if (u_domeEnabled > 0.0) {
             vec3 d = normalize(mat3(u_domeFromWorld) * worldDir);
             vec2 uv = vec2((atan(d.z, d.x) + 0.5 * PI) / (2.0 * PI), acos(clamp(d.y, -1.0, 1.0)) / PI);
@@ -5044,11 +4950,11 @@ shader: deferred-shade
         vec3 Fd = (kD * diffuseColor / PI) * sunIrradiance;
 
         vec3 skyL = toSkySpace(L);
-        vec3 dayColor = mix(texture(u_envCube_texture, skyL).rgb, vec3(1.0), clamp(sunHeight, 0.0, 1.0));
-        vec3 nightColor = mix(texture(u_envCube_texture, skyL).rgb, vec3(0.95, 0.95, 1.00), clamp(-sunHeight, 0.0, 1.0));
+        vec3 dayColor = mix(texture(u_envCube_texture, skyL).rgb * u_iblTint.rgb, vec3(1.0), clamp(sunHeight, 0.0, 1.0));
+        vec3 nightColor = mix(texture(u_envCube_texture, skyL).rgb * u_iblTint.rgb, vec3(0.95, 0.95, 1.00), clamp(-sunHeight, 0.0, 1.0));
         vec3 dynamicSky = mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade);
 
-        float shadow = directionalShadow(posEye, normalEye, NoL, vec2(noise, noiseB));
+        float shadow = texelFetch(u_sunShadowAccum_texture, gbufferPixel, 0).r;
 
         color += (Fd + Fr) * mix(mix(dynamicSky, u_domeSun.rgb, u_domeEnabled) * u_iblEnabled, u_sunOverride.rgb, u_sunOverride.w) * shadow;
       }
@@ -5067,12 +4973,12 @@ shader: deferred-shade
       float lod = 5.0 * perceptualRoughness;
       lod = clamp(lod, 0.0, 5.0);
 
-      vec3 prefilteredRadiance = textureLod(u_prefiltered_texture, toSkySpace(r), lod).rgb;
+      vec3 prefilteredRadiance = textureLod(u_prefiltered_texture, toSkySpace(r), lod).rgb * u_iblTint.rgb;
 
       vec4 gi = ssgiUpsample(u_ssgiAccum_texture, gbufferPixel, posEye, normalEye);
       float specularOcclusion = clamp(pow(NoV + gi.a, exp2(-16.0 * roughness - 1.0)) - 1.0 + gi.a, 0.0, 1.0);
       specularOcclusion = mix(specularOcclusion, 1.0, u_ssr.z * (1.0 - clamp((perceptualRoughness - u_ssr.x) / 0.2, 0.0, 1.0)));
-      vec3 irradiance = texture(u_irradiance_texture, toSkySpace(N)).rgb;
+      vec3 irradiance = texture(u_irradiance_texture, toSkySpace(N)).rgb * u_iblTint.rgb;
       vec3 Fd = diffuseColor * irradiance * gi.a * (1.0 - E);
 
       vec4 reflection = ssrUpsample(gbufferPixel, posEye, normalEye);
@@ -5123,152 +5029,6 @@ shader: deferred-shade
     float3 toSkySpace(float3 v, float zUp)
     {
       return mix(v, float3(v.x, v.z, -v.y), zUp);
-    }
-
-    int shadowLevelSlot(int i, texture2d<float> dataTex)
-    {
-      return int(dataTex.read(uint2(4, 96 + i)).x);
-    }
-
-    float3 shadowLevelDepth(int i, texture2d<float> dataTex)
-    {
-      return dataTex.read(uint2(5, 96 + i)).xyz;
-    }
-
-    float2 shadowLevelTileOffset(int i, texture2d<float> dataTex)
-    {
-      return dataTex.read(uint2(4, 96 + i)).yz;
-    }
-
-    int directionalLevelIndex(float3 posEye, constant Uniforms& u)
-    {
-      bool isClipmap = u.u_shadowLodRange.z > 0.5;
-      int lodMin = int(u.u_shadowLodRange.x);
-      int lodMax = int(u.u_shadowLodRange.y);
-      float3 delta = (u.u_eyeToLightRotation * float4(posEye, 0.0)).xyz - u.u_directionalRefOffset.xyz;
-      float lod;
-      if (isClipmap) {
-        float narrowing = 32.0 / (32.0 - 1.0001);
-        lod = log2(length(delta) * narrowing * 2.0);
-      } else {
-        float narrowing = 32.0 / (32.0 - 2.5001);
-        float lodMinMinusOne = float(lodMin - 1);
-        float lodMinHalfSize = exp2(lodMinMinusOne);
-        lod = length(delta.xy) * narrowing / lodMinHalfSize + lodMinMinusOne;
-      }
-      lod += u.u_shadowLodRange.w;
-      int level = clamp(int(ceil(lod)), lodMin, lodMax);
-      return level - lodMin;
-    }
-
-    float directionalTap(float2 tapTileFloat, int2 tile, float4 pageInfo, int slot,
-                         thread int2& cacheTile, thread float4& cachePage,
-                         texture2d_array<uint> atlasTex, texture2d<float> pageTableTex)
-    {
-      int2 tapTile = clamp(int2(floor(tapTileFloat)), int2(0), int2(31));
-      if (any(tapTile != cacheTile)) {
-        cachePage = all(tapTile == tile)
-            ? pageInfo
-            : pageTableTex.read(uint2(tapTile.y * 32 + tapTile.x, slot));
-        cacheTile = tapTile;
-      }
-      float4 tapPage = cachePage;
-      float2 frac = fract(tapTileFloat);
-      if (tapPage.z < 0.5) {
-        tapPage = pageInfo;
-        frac = clamp(tapTileFloat - float2(tile), 0.0, 0.999999);
-      }
-      uint v = atlasTex.read(uint2(uint(tapPage.y) * 256u + uint(frac.x * 256.0), uint(frac.y * 256.0)),
-                             uint(tapPage.x)).r;
-      return v == 0xFFFFFFFFu ? 1.0 : as_type<float>(v);
-    }
-
-    float directionalShadow(float3 posEye, float3 normalEye, float NoL, float2 noise,
-                            texture2d_array<uint> atlasTex, sampler atlasSmp,
-                            texture2d<float> dataTex,
-                            texture2d<float> pageTableTex,
-                            constant Uniforms& u)
-    {
-      if (u.u_shadowEnabled < 0.5) return 1.0;
-
-      int levelCount = int(u.u_shadowLevelCount);
-      int i = directionalLevelIndex(posEye, u);
-      if (i < 0) return 1.0;
-
-      float3 lightDelta = (u.u_eyeToLightRotation * float4(posEye, 0.0)).xyz - u.u_directionalRefOffset.xyz;
-      int lodMin = int(u.u_shadowLodRange.x);
-      int lodMax = int(u.u_shadowLodRange.y);
-      float scale = clamp(length(lightDelta) * 2.0, exp2(float(lodMin)), exp2(float(lodMax)));
-      float sinTheta = sqrt(max(1.0 - NoL * NoL, 0.0));
-      float levelSize;
-      float3 biasedPosEye;
-      float2 tileFloat;
-      int2 tile;
-      int slot;
-      float4 pageInfo = float4(0.0);
-      for (int k = 0; k < levelCount; ++k, ++i) {
-        if (i >= levelCount) return 1.0;
-        levelSize = exp2(u.u_shadowLodRange.x + float(i));
-        float texelWorldSize = 1.41421356 / 8192.0 * levelSize;
-        biasedPosEye = posEye + normalEye * (texelWorldSize * (sinTheta + u.u_shadowBias.y));
-        float radius = levelSize * 0.5;
-        float3 lightRel = (u.u_eyeToLightRotation * float4(biasedPosEye, 0.0)).xyz;
-        float2 lightXY = lightRel.xy + shadowLevelTileOffset(i, dataTex);
-        float2 ndcXY = lightXY / radius;
-        tileFloat = (ndcXY * 0.5 + 0.5) * 32.0;
-        if (any(tileFloat < float2(0.0)) || any(tileFloat >= float2(32.0))) { continue; }
-        tile = int2(tileFloat);
-        slot = shadowLevelSlot(i, dataTex);
-        pageInfo = pageTableTex.read(uint2(tile.y * 32 + tile.x, slot));
-        if (pageInfo.z > 0.5) break;
-      }
-      if (pageInfo.z < 0.5) return 1.0;
-
-      float3 lightRelZ = (u.u_eyeToLightRotation * float4(biasedPosEye, 0.0)).xyz;
-      float3 levelDepth = shadowLevelDepth(i, dataTex);
-      float ndcZ = (lightRelZ.z + levelDepth.x) * levelDepth.y + levelDepth.z;
-      float compareDepth = ndcZ * 0.5 + 0.5 - u.u_shadowBias.x;
-
-      float tileTexelStep = 1.5 / 256.0 * clamp(scale * (32.0 / (32.0 - 1.0001)) / levelSize, 0.5, 1.0);
-
-      float tileWorld = levelSize / 32.0;
-      float tanHalf = tan(u.u_sunDirection.w);
-      float depthPerWorld = abs(0.5 * levelDepth.y);
-      float reach = 2.0 * tileWorld / max(tanHalf, 1e-3);
-      float aa = tileTexelStep * tileWorld;
-      float3 normalLight = (u.u_eyeToLightRotation * float4(normalEye, 0.0)).xyz;
-      float nz = normalLight.z < 0.0 ? min(normalLight.z, -0.05) : max(normalLight.z, 0.05);
-      float2 planeSlope = normalLight.xy * (-0.5 * levelDepth.y / nz);
-      float lit = 0.0;
-      int2 cacheTile = tile;
-      float4 cachePage = pageInfo;
-      for (int r = 0; r < 6; ++r) {
-        float phi = 6.2831853 * fract(noise.x + 0.618034 * float(r));
-        float2 disk = float2(cos(phi), sin(phi)) * sqrt(fract(noise.y + 0.754877 * float(r)));
-        float jitter = fract(noise.x + noise.y + 0.5698403 * float(r));
-        float plane = dot(planeSlope, disk) * aa;
-        float visible = 1.0;
-        bool covered = false;
-        for (int k = 0; k < 8; ++k) {
-          float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 7.0;
-          float t = reach * f * f;
-          float fNext = (float(k) + jitter) / 7.0;
-          float span = k == 7 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
-          float2 offset = disk * (aa + tanHalf * t);
-          float occluder = directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage,
-                                          atlasTex, pageTableTex);
-          float behind = compareDepth + plane - t * depthPerWorld - occluder;
-          float lift = compareDepth + dot(planeSlope, offset) - occluder;
-          if ((behind > 0.0 && behind < span)
-              || (covered && behind <= 0.0 && lift > (2.0 * aa + 0.05 * t) * depthPerWorld)) {
-            visible = 0.0;
-            break;
-          }
-          covered = covered || behind >= span;
-        }
-        lit += visible;
-      }
-      return lit / 6.0;
     }
 
     float4 pointLightPosIntensity(int i, constant Uniforms& u)
@@ -5609,8 +5369,8 @@ shader: deferred-shade
         if (u_iblEnabled > 0.5) {
           float4 e = u_invProj * float4(var.texCoord * 2.0 - 1.0, -1.0, 1.0);
           float3 worldDir = normalize(invView * (e.xyz / e.w));
-          float3 sky = texture(u_envCube_texture, toSkySpace(worldDir, u_zUp)).rgb;
-          if (u_viewShading.x > 0.5) sky = textureLod(u_prefiltered_texture, toSkySpace(worldDir, u_zUp), 3.0).rgb;
+          float3 sky = texture(u_envCube_texture, toSkySpace(worldDir, u_zUp)).rgb * u_iblTint.rgb;
+          if (u_viewShading.x > 0.5) sky = textureLod(u_prefiltered_texture, toSkySpace(worldDir, u_zUp), 3.0).rgb * u_iblTint.rgb;
           else if (u_domeEnabled > 0.0) {
             float3x3 rot = float3x3(u_domeFromWorld[0].xyz, u_domeFromWorld[1].xyz, u_domeFromWorld[2].xyz);
             float3 d = normalize(rot * worldDir);
@@ -5672,13 +5432,11 @@ shader: deferred-shade
           float3 Fd = (kD * diffuseColor / PI) * sunIrradiance;
 
           float3 skyL = toSkySpace(L, u_zUp);
-          float3 dayColor = mix(texture(u_envCube_texture, skyL).rgb, float3(1.0), saturate(sunHeight));
-          float3 nightColor = mix(texture(u_envCube_texture, skyL).rgb, float3(0.95, 0.95, 1.00), saturate(-sunHeight));
+          float3 dayColor = mix(texture(u_envCube_texture, skyL).rgb * u_iblTint.rgb, float3(1.0), saturate(sunHeight));
+          float3 nightColor = mix(texture(u_envCube_texture, skyL).rgb * u_iblTint.rgb, float3(0.95, 0.95, 1.00), saturate(-sunHeight));
           float3 dynamicSky = mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade);
 
-          float shadow = directionalShadow(posEye, normalEye, NoL, float2(noise, noiseB),
-                                           u_shadow_atlas, u_shadow_atlas_smp,
-                                           u_shadow_data, u_shadow_pagetable, _u);
+          float shadow = u_sunShadowAccum_texture.read(gbufferPixel).r;
 
           float3 sunColor = mix(mix(dynamicSky, u_domeSun.rgb, u_domeEnabled) * u_iblEnabled, u_sunOverride.rgb, u_sunOverride.w);
           if (u_atmosphere.x > 0.5) {
@@ -5717,7 +5475,7 @@ shader: deferred-shade
         float lod = 5.0 * perceptualRoughness;
         lod = clamp(lod, 0.0, 5.0);
 
-        float3 prefilteredRadiance = textureLod(u_prefiltered_texture, toSkySpace(r, u_zUp), lod).rgb * u_iblEnabled;
+        float3 prefilteredRadiance = textureLod(u_prefiltered_texture, toSkySpace(r, u_zUp), lod).rgb * u_iblTint.rgb * u_iblEnabled;
         prefilteredRadiance = probeSphereRadiance(worldPos, r, perceptualRoughness, prefilteredRadiance,
                                                   u_probe_sphere, u_probe_sphere_smp, u_probe_info, _u);
 
@@ -5725,7 +5483,7 @@ shader: deferred-shade
                                  u_ssgiDepth_texture, u_ssgiNormal_texture, _u);
         float specularOcclusion = clamp(pow(NoV + gi.a, exp2(-16.0 * roughness - 1.0)) - 1.0 + gi.a, 0.0, 1.0);
         specularOcclusion = mix(specularOcclusion, 1.0, u_ssr.z * (1.0 - saturate((perceptualRoughness - u_ssr.x) / 0.2)));
-        float3 irradiance = texture(u_irradiance_texture, toSkySpace(N, u_zUp)).rgb * u_iblEnabled;
+        float3 irradiance = texture(u_irradiance_texture, toSkySpace(N, u_zUp)).rgb * u_iblTint.rgb * u_iblEnabled;
         irradiance = probeVolumeIrradiance(worldPos, N, irradiance, u_probe_volume, _u);
         float3 Fd = diffuseColor * irradiance * gi.a * (1.0 - E);
 
@@ -7636,7 +7394,8 @@ shader: ssgi-copy
     ```
 
 shader: volume-scatter
-  uniforms: [ u_envCube_texture: samplerCube,
+  uniforms: [ u_iblTint: vec4,
+              u_envCube_texture: samplerCube,
               u_irradiance_texture: samplerCube,
               u_iblEnabled: float,
               u_shadow_atlas: usampler2DArray,
@@ -7746,8 +7505,8 @@ shader: volume-scatter
 
     vec3 volumeWorldLight(vec3 rayDir)
     {
-      vec3 ahead = texture(u_irradiance_texture, toSkySpace(rayDir)).rgb;
-      vec3 behind = texture(u_irradiance_texture, toSkySpace(-rayDir)).rgb;
+      vec3 ahead = texture(u_irradiance_texture, toSkySpace(rayDir)).rgb * u_iblTint.rgb;
+      vec3 behind = texture(u_irradiance_texture, toSkySpace(-rayDir)).rgb * u_iblTint.rgb;
       return max(0.5 * (ahead + behind) + 0.75 * u_volume.y * (ahead - behind), vec3(0.0)) * u_iblEnabled;
     }
 
@@ -7868,7 +7627,7 @@ shader: volume-scatter
 
       vec3 L = normalize(u_sunDirection.xyz);
       float nightFade = smoothstep(-0.3, 0.05, sunHeight);
-      vec3 skyL = texture(u_envCube_texture, toSkySpace(L)).rgb;
+      vec3 skyL = texture(u_envCube_texture, toSkySpace(L)).rgb * u_iblTint.rgb;
       vec3 dayColor = mix(skyL, vec3(1.0), clamp(sunHeight, 0.0, 1.0));
       vec3 nightColor = mix(skyL, vec3(0.95, 0.95, 1.00), clamp(-sunHeight, 0.0, 1.0));
       vec3 sun = mix(mix(mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade), u_domeSun.rgb, u_domeEnabled) * u_iblEnabled, u_sunOverride.rgb, u_sunOverride.w);
@@ -8060,7 +7819,7 @@ shader: volume-scatter
         float3 L = normalize(u_sunDirection.xyz);
         float nightFade = smoothstep(-0.3, 0.05, sunHeight);
         float3 skyDir = mix(L, float3(L.x, L.z, -L.y), u_zUp);
-        float3 skyL = texture(u_envCube_texture, skyDir).rgb;
+        float3 skyL = texture(u_envCube_texture, skyDir).rgb * u_iblTint.rgb;
         float3 dayColor = mix(skyL, float3(1.0), saturate(sunHeight));
         float3 nightColor = mix(skyL, float3(0.95, 0.95, 1.00), saturate(-sunHeight));
         float3 sun = mix(mix(mix(nightColor * MOON_INTENSITY, dayColor * LIGHT_INTENSITY, nightFade), u_domeSun.rgb, u_domeEnabled) * u_iblEnabled, u_sunOverride.rgb, u_sunOverride.w);
@@ -8069,8 +7828,8 @@ shader: volume-scatter
                      * volumeSunShadow(posEye, u_shadow_atlas, u_shadow_data, u_shadow_pagetable, _u)
                      * volumeTransmittance(frustumExitDistance(posEye, viewRot * L, _u), _u);
 
-        float3 worldAhead = texture(u_irradiance_texture, mix(rayDir, float3(rayDir.x, rayDir.z, -rayDir.y), u_zUp)).rgb;
-        float3 worldBehind = texture(u_irradiance_texture, mix(-rayDir, float3(-rayDir.x, -rayDir.z, rayDir.y), u_zUp)).rgb;
+        float3 worldAhead = texture(u_irradiance_texture, mix(rayDir, float3(rayDir.x, rayDir.z, -rayDir.y), u_zUp)).rgb * u_iblTint.rgb;
+        float3 worldBehind = texture(u_irradiance_texture, mix(-rayDir, float3(-rayDir.x, -rayDir.z, rayDir.y), u_zUp)).rgb * u_iblTint.rgb;
         light += max(0.5 * (worldAhead + worldBehind) + 0.75 * u_volume.y * (worldAhead - worldBehind), float3(0.0))
                * u_iblEnabled * u_volumeLook.x;
 
@@ -8405,6 +8164,261 @@ shader: ssr
     }
     ```
 
+shader: sun-shadow
+  uniforms: [ u_position_texture: sampler2d,
+              u_normal_texture: sampler2d,
+              u_shadow_atlas: usampler2DArray,
+              u_shadow_data: sampler2d,
+              u_shadow_pagetable: sampler2d,
+              u_view: mat4 <- auto-view-matrix,
+              u_sunDirection: vec4,
+              u_shadowEnabled: float,
+              u_shadowLevelCount: float,
+              u_shadowBias: vec4,
+              u_eyeToLightRotation: mat4,
+              u_directionalRefOffset: vec4,
+              u_shadowLodRange: vec4,
+              frameIndex: int ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    //@include SunShadow.glsl
+
+    // Sun visibility for this frame. The penumbra rays rotate with per-frame noise so the temporal
+    // pass can average them out. 0 where the surface faces away from the sun.
+    void main()
+    {
+      ivec2 pixel = ivec2(gl_FragCoord.xy);
+      vec4 normalSample = texelFetch(u_normal_texture, pixel, 0);
+      if (normalSample.a < 0.5) {
+        o_sunShadowRaw_texture = vec4(1.0);
+        return;
+      }
+      vec3 normalEye = normalSample.xyz;
+      vec3 posEye = texelFetch(u_position_texture, pixel, 0).xyz;
+      vec3 N = normalize(transpose(mat3(u_view)) * normalEye);
+      float cosTheta = dot(N, normalize(u_sunDirection.xyz));
+      if (cosTheta <= -sin(u_sunDirection.w)) {
+        o_sunShadowRaw_texture = vec4(0.0);
+        return;
+      }
+      vec2 noisePixel = gl_FragCoord.xy + 5.588238 * float(frameIndex % 64);
+      float noise = fract(52.9829189 * fract(dot(noisePixel, vec2(0.06711056, 0.00583715))));
+      float noiseB = fract(52.9829189 * fract(dot(noisePixel.yx, vec2(0.06711056, 0.00583715))));
+      o_sunShadowRaw_texture = vec4(directionalShadow(posEye, normalEye, max(cosTheta, 0.0), vec2(noise, noiseB)));
+    }
+    ```
+
+    source msl:
+    ```msl
+    //@include SunShadow.msl
+
+    //@main
+    {
+      uint2 pixel = uint2(gl_FragCoord.xy);
+      float4 normalSample = u_normal_texture.read(pixel);
+      if (normalSample.a < 0.5) {
+        o_sunShadowRaw_texture = float4(1.0);
+      } else {
+        float3 normalEye = normalSample.xyz;
+        float3 posEye = u_position_texture.read(pixel).xyz;
+        float3x3 invView = transpose(float3x3(u_view[0].xyz, u_view[1].xyz, u_view[2].xyz));
+        float3 N = normalize(invView * normalEye);
+        float cosTheta = dot(N, normalize(u_sunDirection.xyz));
+        if (cosTheta <= -sin(u_sunDirection.w)) {
+          o_sunShadowRaw_texture = float4(0.0);
+        } else {
+          float2 noisePixel = gl_FragCoord.xy + 5.588238 * float(frameIndex % 64);
+          float noise = fract(52.9829189 * fract(dot(noisePixel, float2(0.06711056, 0.00583715))));
+          float noiseB = fract(52.9829189 * fract(dot(noisePixel.yx, float2(0.06711056, 0.00583715))));
+          o_sunShadowRaw_texture = float4(directionalShadow(posEye, normalEye, max(cosTheta, 0.0), float2(noise, noiseB),
+                                                            u_shadow_atlas, u_shadow_atlas_smp,
+                                                            u_shadow_data, u_shadow_pagetable, _u));
+        }
+      }
+    }
+    ```
+
+shader: sun-shadow-temporal
+  uniforms: [ u_sunShadowRaw_texture: sampler2d,
+              u_sunShadowHistory_texture: sampler2d,
+              u_position_texture: sampler2d,
+              u_normal_texture: sampler2d,
+              u_velocity_texture: sampler2d,
+              u_taa: vec4 ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    // Blends the noisy sun visibility over several frames, following each pixel's motion.
+    // The history is clamped to nearby values so moving shadows don't smear, and dropped where a hidden surface appears.
+    // y stores depth so the next frame can tell when that happens.
+    void main()
+    {
+      ivec2 pixel = ivec2(gl_FragCoord.xy);
+      ivec2 size = textureSize(u_sunShadowRaw_texture, 0);
+      float current = texelFetch(u_sunShadowRaw_texture, pixel, 0).r;
+      float depth = log2(max(-texelFetch(u_position_texture, pixel, 0).z, 1e-4));
+      if (texelFetch(u_normal_texture, pixel, 0).a < 0.5 || u_taa.x < 0.5) {
+        o_sunShadowAccum_texture = vec4(current, depth, 0.0, 0.0);
+        return;
+      }
+      float lo = current, hi = current, nearest = depth, farthest = depth;
+      for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+          ivec2 q = clamp(pixel + ivec2(x, y), ivec2(0), size - 1);
+          if (texelFetch(u_normal_texture, q, 0).a < 0.5) continue;
+          float s = texelFetch(u_sunShadowRaw_texture, q, 0).r;
+          lo = min(lo, s);
+          hi = max(hi, s);
+          float d = log2(max(-texelFetch(u_position_texture, q, 0).z, 1e-4));
+          nearest = min(nearest, d);
+          farthest = max(farthest, d);
+        }
+      }
+      vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+      bool shutter = u_taa.w > 0.5;
+      vec2 prevUV = uv + (shutter ? vec2(0.0) : texelFetch(u_velocity_texture, pixel, 0).xy);
+      bool offscreen = any(lessThan(prevUV, vec2(0.0))) || any(greaterThan(prevUV, vec2(1.0)));
+      vec2 history = texture(u_sunShadowHistory_texture, clamp(prevUV, 0.0, 1.0)).rg;
+      // Use the nearest texel's depth, since a blend across an edge matches neither surface.
+      float historyDepth = texelFetch(u_sunShadowHistory_texture,
+                                     clamp(ivec2(prevUV * vec2(size)), ivec2(0), size - 1), 0).g;
+      // Surfaces seen edge on span more depth than the jitter, so accept any history depth in the range
+      // of the nearby pixels. Only a depth outside it means a hidden surface came into view.
+      bool uncovered = !shutter && !(historyDepth > nearest - 0.03 && historyDepth < farthest + 0.03);
+      // A rebuilt or unwritten history holds garbage, so only keep visibility between 0 and 1.
+      bool unusable = !(history.r >= 0.0 && history.r <= 1.0);
+      float alpha = (u_taa.y > 0.5 || offscreen || uncovered || unusable) ? 1.0 : max(u_taa.z, 0.05);
+      float kept = unusable ? current : clamp(history.r, lo, hi);
+      o_sunShadowAccum_texture = vec4(clamp(mix(kept, current, alpha), 0.0, 1.0), depth, 0.0, 0.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    //@main
+    {
+      int2 pixel = int2(gl_FragCoord.xy);
+      int2 size = int2(u_sunShadowRaw_texture.get_width(), u_sunShadowRaw_texture.get_height());
+      float current = u_sunShadowRaw_texture.read(uint2(pixel)).r;
+      float depth = log2(max(-u_position_texture.read(uint2(pixel)).z, 1e-4));
+      if (u_normal_texture.read(uint2(pixel)).a < 0.5 || u_taa.x < 0.5) {
+        o_sunShadowAccum_texture = float4(current, depth, 0.0, 0.0);
+      } else {
+        float lo = current, hi = current, nearest = depth, farthest = depth;
+        for (int y = -1; y <= 1; ++y) {
+          for (int x = -1; x <= 1; ++x) {
+            uint2 q = uint2(clamp(pixel + int2(x, y), int2(0), size - 1));
+            if (u_normal_texture.read(q).a < 0.5) continue;
+            float s = u_sunShadowRaw_texture.read(q).r;
+            lo = min(lo, s);
+            hi = max(hi, s);
+            float d = log2(max(-u_position_texture.read(q).z, 1e-4));
+            nearest = min(nearest, d);
+            farthest = max(farthest, d);
+          }
+        }
+        float2 uv = (float2(pixel) + 0.5) / float2(size);
+        bool shutter = u_taa.w > 0.5;
+        float2 prevUV = uv + (shutter ? float2(0.0) : u_velocity_texture.read(uint2(pixel)).xy);
+        bool offscreen = any(prevUV < float2(0.0)) || any(prevUV > float2(1.0));
+        float2 history = texture(u_sunShadowHistory_texture, clamp(prevUV, 0.0, 1.0)).rg;
+        // Use the nearest texel's depth, since a blend across an edge matches neither surface.
+        float historyDepth = u_sunShadowHistory_texture.read(uint2(clamp(int2(prevUV * float2(size)), int2(0), size - 1))).g;
+        // Surfaces seen edge on span more depth than the jitter, so accept any history depth in the range
+        // of the nearby pixels. Only a depth outside it means a hidden surface came into view.
+        bool uncovered = !shutter && !(historyDepth > nearest - 0.03 && historyDepth < farthest + 0.03);
+        // A rebuilt or unwritten history holds garbage, so only keep visibility between 0 and 1.
+        bool unusable = !(history.r >= 0.0 && history.r <= 1.0);
+        float alpha = (u_taa.y > 0.5 || offscreen || uncovered || unusable) ? 1.0 : max(u_taa.z, 0.05);
+        float kept = unusable ? current : clamp(history.r, lo, hi);
+        o_sunShadowAccum_texture = float4(saturate(mix(kept, current, alpha)), depth, 0.0, 0.0);
+      }
+    }
+    ```
+
+shader: sun-shadow-copy
+  uniforms: [ u_sunShadowAccum_texture: sampler2d ]
+  varying:  [ texCoord: vec2 ]
+
+  vsh:
+    attributes:
+    [ a_position: vec3 <- position,
+      a_uv: vec2 <- texcoord ]
+
+    source:
+    ```glsl
+    void main()
+    {
+      var.texCoord = a_uv;
+      gl_Position = vec4(a_position, 1.0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    var.texCoord = a_uv;
+    gl_Position = float4(a_position, 1.0);
+    ```
+
+  fsh:
+    source:
+    ```glsl
+    void main()
+    {
+      o_sunShadowHistory_texture = texelFetch(u_sunShadowAccum_texture, ivec2(gl_FragCoord.xy), 0);
+    }
+    ```
+
+    source msl:
+    ```msl
+    o_sunShadowHistory_texture = u_sunShadowAccum_texture.read(uint2(gl_FragCoord.xy));
+    ```
+
 shader: ssr-temporal
   uniforms: [ u_ssrRadiance_texture: sampler2d,
               u_ssrGuide_texture: sampler2d,
@@ -8610,7 +8624,8 @@ shader: outline-mask
               u_position_texture: sampler2d,
               u_normal_texture: sampler2d,
               u_outline: vec4,
-              u_renderScale: vec4 ]
+              u_renderScale: vec4,
+              u_taaJitter: vec4 ]
   varying:  [ posEye: vec3, uv: vec2, primId: float ]
 
   vsh:
@@ -8660,15 +8675,23 @@ shader: outline-mask
       float label = id >= 0 && float(id) < u_outline.z
         ? texelFetch(u_outlineLabels, ivec2(id % width, id / width), 0).r : 0.0;
       if (label <= 0.0) discard;
-      ivec2 pixel = ivec2(gl_FragCoord.xy * u_renderScale.xy);
-      vec4 scene = texelFetch(u_position_texture, pixel, 0);
-      int sceneId = int(round(scene.w));
-      float sceneLabel = sceneId >= 0 && float(sceneId) < u_outline.z
-        ? texelFetch(u_outlineLabels, ivec2(sceneId % width, sceneId / width), 0).r : 0.0;
-      bool hidden = texelFetch(u_normal_texture, pixel, 0).a >= 0.5 && sceneLabel <= 0.0 &&
-                    scene.z > var.posEye.z + max(0.01 * abs(var.posEye.z), 1e-3);
-      if (hidden) discard;
-      o_outlineMask_texture = vec4(label);
+      // The G-buffer is jittered and lower resolution, so find where this pixel landed in it. A pixel
+      // with an occluder in any of its four nearest texels counts as hidden, keeping outlines off occluders.
+      ivec2 base = ivec2(floor(gl_FragCoord.xy * u_renderScale.xy + u_taaJitter.xy - 0.5));
+      ivec2 size = textureSize(u_position_texture, 0);
+      bool hidden = false;
+      for (int i = 0; i < 4 && !hidden; ++i)
+      {
+        ivec2 pixel = clamp(base + ivec2(i & 1, i >> 1), ivec2(0), size - 1);
+        vec4 scene = texelFetch(u_position_texture, pixel, 0);
+        int sceneId = int(round(scene.w));
+        float sceneLabel = sceneId >= 0 && float(sceneId) < u_outline.z
+          ? texelFetch(u_outlineLabels, ivec2(sceneId % width, sceneId / width), 0).r : 0.0;
+        hidden = texelFetch(u_normal_texture, pixel, 0).a >= 0.5 && sceneLabel <= 0.0 &&
+                 scene.z > var.posEye.z + max(0.01 * abs(var.posEye.z), 1e-3);
+      }
+      // Hidden pixels are marked negative. y keeps the selected surface's depth for the composite.
+      o_outlineMask_texture = vec4(hidden ? -label : label, var.posEye.z, 0.0, 0.0);
     }
     ```
 
@@ -8692,17 +8715,24 @@ shader: outline-mask
       label = u_outlineLabels.read(uint2(id % width, id / width)).r;
     }
     if (label <= 0.0) discard_fragment();
-    uint2 pixel = uint2(gl_FragCoord.xy * u_renderScale.xy);
-    float4 scene = u_position_texture.read(pixel);
-    int sceneId = int(round(scene.w));
-    float sceneLabel = 0.0;
-    if (sceneId >= 0 && float(sceneId) < u_outline.z) {
-      sceneLabel = u_outlineLabels.read(uint2(sceneId % width, sceneId / width)).r;
+    // The G-buffer is jittered and lower resolution, so find where this pixel landed in it. A pixel
+    // with an occluder in any of its four nearest texels counts as hidden, keeping outlines off occluders.
+    int2 base = int2(floor(gl_FragCoord.xy * u_renderScale.xy + u_taaJitter.xy - 0.5));
+    int2 size = int2(u_position_texture.get_width(), u_position_texture.get_height());
+    bool hidden = false;
+    for (int i = 0; i < 4 && !hidden; ++i) {
+      uint2 pixel = uint2(clamp(base + int2(i & 1, i >> 1), int2(0), size - 1));
+      float4 scene = u_position_texture.read(pixel);
+      int sceneId = int(round(scene.w));
+      float sceneLabel = 0.0;
+      if (sceneId >= 0 && float(sceneId) < u_outline.z) {
+        sceneLabel = u_outlineLabels.read(uint2(sceneId % width, sceneId / width)).r;
+      }
+      hidden = u_normal_texture.read(pixel).a >= 0.5 && sceneLabel <= 0.0 &&
+               scene.z > var.posEye.z + max(0.01 * abs(var.posEye.z), 1e-3);
     }
-    bool hidden = u_normal_texture.read(pixel).a >= 0.5 && sceneLabel <= 0.0 &&
-                  scene.z > var.posEye.z + max(0.01 * abs(var.posEye.z), 1e-3);
-    if (hidden) discard_fragment();
-    o_outlineMask_texture = float4(label);
+    // Hidden pixels are marked negative. y keeps the selected surface's depth for the composite.
+    o_outlineMask_texture = float4(hidden ? -label : label, var.posEye.z, 0.0, 0.0);
     ```
 
 shader: outline-edge
@@ -8737,13 +8767,17 @@ shader: outline-edge
       ivec2 pixel = ivec2(gl_FragCoord.xy);
       ivec2 size = textureSize(u_outlineMask_texture, 0);
       ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
-      float label = texelFetch(u_outlineMask_texture, pixel, 0).r;
+      // Edges are the selection's own silhouette, hidden parts included, not where something covers it.
+      // The composite hides the parts of the line that are behind something.
+      vec2 mask = texelFetch(u_outlineMask_texture, pixel, 0).rg;
+      float label = abs(mask.r);
       bool edge = false;
       for (int i = 0; i < 4; ++i) {
         ivec2 q = clamp(pixel + offsets[i], ivec2(0), size - 1);
-        edge = edge || texelFetch(u_outlineMask_texture, q, 0).r != label;
+        edge = edge || abs(texelFetch(u_outlineMask_texture, q, 0).r) != label;
       }
-      o_outlineEdge_texture = vec4(label > 0.0 && edge ? 1.0 : 0.0);
+      // y passes the selected surface's depth along to the composite.
+      o_outlineEdge_texture = vec4(label > 0.0 && edge ? 1.0 : 0.0, mask.g, 0.0, 0.0);
     }
     ```
 
@@ -8752,13 +8786,17 @@ shader: outline-edge
     int2 pixel = int2(gl_FragCoord.xy);
     int2 size = int2(u_outlineMask_texture.get_width(), u_outlineMask_texture.get_height());
     const int2 offsets[4] = { int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1) };
-    float label = u_outlineMask_texture.read(uint2(pixel)).r;
+    // Edges are the selection's own silhouette, hidden parts included, not where something covers it.
+    // The composite hides the parts of the line that are behind something.
+    float2 mask = u_outlineMask_texture.read(uint2(pixel)).rg;
+    float label = abs(mask.r);
     bool edge = false;
     for (int i = 0; i < 4; ++i) {
       uint2 q = uint2(clamp(pixel + offsets[i], int2(0), size - 1));
-      edge = edge || u_outlineMask_texture.read(q).r != label;
+      edge = edge || abs(u_outlineMask_texture.read(q).r) != label;
     }
-    o_outlineEdge_texture = float4(label > 0.0 && edge ? 1.0 : 0.0);
+    // y passes the selected surface's depth along to the composite.
+    o_outlineEdge_texture = float4(label > 0.0 && edge ? 1.0 : 0.0, mask.g, 0.0, 0.0);
     ```
 
 shader: outline-span
@@ -8791,40 +8829,56 @@ shader: outline-span
     ```glsl
     void main()
     {
+      // The horizontal half of the distance to the nearest edge, with that edge's depth.
       ivec2 pixel = ivec2(gl_FragCoord.xy);
       int width = textureSize(u_outlineEdge_texture, 0).x;
-      int radius = int(ceil(max(u_outline.w, 1.0) * 0.5 + 0.5));
+      int radius = int(ceil(max(u_outline.w, 1.0) * 0.5 + 1.0));
       float best = 1024.0;
+      float depth = 0.0;
       for (int dx = -radius; dx <= radius; ++dx) {
         int x = pixel.x + dx;
-        if (x >= 0 && x < width && texelFetch(u_outlineEdge_texture, ivec2(x, pixel.y), 0).r > 0.5) {
-          best = min(best, float(abs(dx)));
+        if (x < 0 || x >= width) continue;
+        vec2 edge = texelFetch(u_outlineEdge_texture, ivec2(x, pixel.y), 0).rg;
+        if (edge.r > 0.5 && float(abs(dx)) < best) {
+          best = float(abs(dx));
+          depth = edge.g;
         }
       }
-      o_outlineSpan_texture = vec4(best);
+      o_outlineSpan_texture = vec4(best, depth, 0.0, 0.0);
     }
     ```
 
     source msl:
     ```msl
+    // The horizontal half of the distance to the nearest edge, with that edge's depth.
     int2 pixel = int2(gl_FragCoord.xy);
     int width = int(u_outlineEdge_texture.get_width());
-    int radius = int(ceil(max(u_outline.w, 1.0) * 0.5 + 0.5));
+    int radius = int(ceil(max(u_outline.w, 1.0) * 0.5 + 1.0));
     float best = 1024.0;
+    float depth = 0.0;
     for (int dx = -radius; dx <= radius; ++dx) {
       int x = pixel.x + dx;
-      if (x >= 0 && x < width && u_outlineEdge_texture.read(uint2(x, pixel.y)).r > 0.5) {
-        best = min(best, float(abs(dx)));
+      if (x < 0 || x >= width) continue;
+      float2 edge = u_outlineEdge_texture.read(uint2(x, pixel.y)).rg;
+      if (edge.r > 0.5 && float(abs(dx)) < best) {
+        best = float(abs(dx));
+        depth = edge.g;
       }
     }
-    o_outlineSpan_texture = float4(best);
+    o_outlineSpan_texture = float4(best, depth, 0.0, 0.0);
     ```
 
 shader: outline-composite
   uniforms: [ u_tonemap_texture: sampler2d,
               u_outlineSpan_texture: sampler2d,
+              u_outlineMask_texture: sampler2d,
+              u_position_texture: sampler2d,
+              u_normal_texture: sampler2d,
+              u_outlineLabels: sampler2d,
               u_outline: vec4,
-              u_outlineColor: vec4 ]
+              u_outlineColor: vec4,
+              u_renderScale: vec4,
+              u_taaJitter: vec4 ]
   varying:  [ texCoord: vec2 ]
 
   vsh:
@@ -8854,19 +8908,34 @@ shader: outline-composite
     {
       ivec2 pixel = ivec2(gl_FragCoord.xy);
       int height = textureSize(u_outlineSpan_texture, 0).y;
-      int radius = int(ceil(max(u_outline.w, 1.0) * 0.5 + 0.5));
+      float halfWidth = max(u_outline.w, 1.0) * 0.5;
+      int radius = int(ceil(halfWidth + 1.0));
       float best = 1048576.0;
+      float depth = 0.0;
       for (int dy = -radius; dy <= radius; ++dy) {
         int y = pixel.y + dy;
-        if (y >= 0 && y < height) {
-          float dx = texelFetch(u_outlineSpan_texture, ivec2(pixel.x, y), 0).r;
-          best = min(best, dx * dx + float(dy * dy));
-        }
+        if (y < 0 || y >= height) continue;
+        vec2 span = texelFetch(u_outlineSpan_texture, ivec2(pixel.x, y), 0).rg;
+        float d = span.x * span.x + float(dy * dy);
+        if (d < best) { best = d; depth = span.y; }
       }
-      float halfWidth = max(u_outline.w, 1.0) * 0.5;
-      float coverage = (1.0 - smoothstep(halfWidth - 0.5, halfWidth + 0.5, sqrt(best))) * u_outlineColor.a;
+      // A pixel wide falloff on each side smooths the line's stair steps.
+      float coverage = 1.0 - smoothstep(halfWidth - 1.0, halfWidth + 1.0, sqrt(best));
+
+      // Hide the line where something unselected is in front of the edge it belongs to.
+      ivec2 gSize = textureSize(u_position_texture, 0);
+      ivec2 g = clamp(ivec2(floor((vec2(pixel) + 0.5) * u_renderScale.xy + u_taaJitter.xy)), ivec2(0), gSize - 1);
+      vec4 scene = texelFetch(u_position_texture, g, 0);
+      int sceneId = int(round(scene.w));
+      int width = int(u_outline.y);
+      float sceneLabel = sceneId >= 0 && float(sceneId) < u_outline.z
+        ? texelFetch(u_outlineLabels, ivec2(sceneId % width, sceneId / width), 0).r : 0.0;
+      bool inFront = texelFetch(u_normal_texture, g, 0).a >= 0.5 && sceneLabel <= 0.0 &&
+                     scene.z > depth + max(0.01 * abs(depth), 1e-3);
+      if (inFront || texelFetch(u_outlineMask_texture, pixel, 0).r < 0.0) coverage = 0.0;
+
       vec4 color = texelFetch(u_tonemap_texture, pixel, 0);
-      o_outline_texture = vec4(mix(color.rgb, u_outlineColor.rgb, coverage), color.a);
+      o_outline_texture = vec4(mix(color.rgb, u_outlineColor.rgb, coverage * u_outlineColor.a), color.a);
     }
     ```
 
@@ -8874,19 +8943,38 @@ shader: outline-composite
     ```msl
     int2 pixel = int2(gl_FragCoord.xy);
     int height = int(u_outlineSpan_texture.get_height());
-    int radius = int(ceil(max(u_outline.w, 1.0) * 0.5 + 0.5));
+    float halfWidth = max(u_outline.w, 1.0) * 0.5;
+    int radius = int(ceil(halfWidth + 1.0));
     float best = 1048576.0;
+    float depth = 0.0;
     for (int dy = -radius; dy <= radius; ++dy) {
       int y = pixel.y + dy;
-      if (y >= 0 && y < height) {
-        float dx = u_outlineSpan_texture.read(uint2(pixel.x, y)).r;
-        best = min(best, dx * dx + float(dy * dy));
-      }
+      if (y < 0 || y >= height) continue;
+      float2 span = u_outlineSpan_texture.read(uint2(pixel.x, y)).rg;
+      float d = span.x * span.x + float(dy * dy);
+      if (d < best) { best = d; depth = span.y; }
     }
-    float halfWidth = max(u_outline.w, 1.0) * 0.5;
-    float coverage = (1.0 - smoothstep(halfWidth - 0.5, halfWidth + 0.5, sqrt(best))) * u_outlineColor.a;
+    // A pixel wide falloff on each side smooths the line's stair steps.
+    float coverage = 1.0 - smoothstep(halfWidth - 1.0, halfWidth + 1.0, sqrt(best));
+
+    // Hide the line where something unselected is in front of the edge it belongs to.
+    if (coverage > 0.0) {
+      int2 gSize = int2(u_position_texture.get_width(), u_position_texture.get_height());
+      uint2 g = uint2(clamp(int2(floor((float2(pixel) + 0.5) * u_renderScale.xy + u_taaJitter.xy)), int2(0), gSize - 1));
+      float4 scene = u_position_texture.read(g);
+      int sceneId = int(round(scene.w));
+      int width = int(u_outline.y);
+      float sceneLabel = 0.0;
+      if (sceneId >= 0 && float(sceneId) < u_outline.z) {
+        sceneLabel = u_outlineLabels.read(uint2(sceneId % width, sceneId / width)).r;
+      }
+      bool inFront = u_normal_texture.read(g).a >= 0.5 && sceneLabel <= 0.0 &&
+                     scene.z > depth + max(0.01 * abs(depth), 1e-3);
+      if (inFront || u_outlineMask_texture.read(uint2(pixel)).r < 0.0) coverage = 0.0;
+    }
+
     float4 color = u_tonemap_texture.read(uint2(pixel));
-    o_outline_texture = float4(mix(color.rgb, u_outlineColor.rgb, coverage), color.a);
+    o_outline_texture = float4(mix(color.rgb, u_outlineColor.rgb, coverage * u_outlineColor.a), color.a);
     ```
 
 shader: aov

@@ -236,6 +236,7 @@ extension Akari.LightProbes
       float4 u_lightColor2;
       float4 u_lightColor3;
       float4 u_params;
+      float4 u_skyTint;
     };
 
     constant float PI = 3.14159265358979;
@@ -410,7 +411,7 @@ extension Akari.LightProbes
                     texturecube<float> env, sampler envSmp, texture2d<float> sunMap,
                     texture2d<float> sh, constant U& u, float skyLod)
     {
-      if (a.w == 0.0) return env.sample(envSmp, toSkySpace(dir, u.u_sky.x), level(skyLod)).rgb * u.u_sky.y;
+      if (a.w == 0.0) return env.sample(envSmp, toSkySpace(dir, u.u_sky.x), level(skyLod)).rgb * u.u_skyTint.rgb * u.u_sky.y;
       if (a.w < 0.0) return float3(0.0);
       float t = u.u_sky.z / max(n.w, 1e-8) * length(float3(ndc, 1.0));
       float3 x = origin + dir * t;
@@ -425,7 +426,7 @@ extension Akari.LightProbes
       {
         float sunHeight = u.u_sun.w;
         float nightFade = smoothstep(-0.3, 0.05, sunHeight);
-        float3 skyL = env.sample(envSmp, toSkySpace(L, u.u_sky.x), level(0.0)).rgb;
+        float3 skyL = env.sample(envSmp, toSkySpace(L, u.u_sky.x), level(0.0)).rgb * u.u_skyTint.rgb;
         float3 dayColor = mix(skyL, float3(1.0), saturate(sunHeight));
         float3 nightColor = mix(skyL, float3(0.95, 0.95, 1.0), saturate(-sunHeight));
         float3 dynamicSky = mix(nightColor * 0.12, dayColor * 3.0, nightFade);

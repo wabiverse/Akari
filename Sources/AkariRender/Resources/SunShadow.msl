@@ -1,0 +1,147 @@
+/// Looks up the sun shadow in the shadow map, softening its edge with 6 short rays.
+/// The caller rotates the rays with a little noise each frame.
+int shadowLevelSlot(int i, texture2d<float> dataTex)
+{
+  return int(dataTex.read(uint2(4, 96 + i)).x);
+}
+
+float3 shadowLevelDepth(int i, texture2d<float> dataTex)
+{
+  return dataTex.read(uint2(5, 96 + i)).xyz;
+}
+
+float2 shadowLevelTileOffset(int i, texture2d<float> dataTex)
+{
+  return dataTex.read(uint2(4, 96 + i)).yz;
+}
+
+int directionalLevelIndex(float3 posEye, constant Uniforms& u)
+{
+  bool isClipmap = u.u_shadowLodRange.z > 0.5;
+  int lodMin = int(u.u_shadowLodRange.x);
+  int lodMax = int(u.u_shadowLodRange.y);
+  float3 delta = (u.u_eyeToLightRotation * float4(posEye, 0.0)).xyz - u.u_directionalRefOffset.xyz;
+  float lod;
+  if (isClipmap) {
+    float narrowing = 32.0 / (32.0 - 1.0001);
+    lod = log2(length(delta) * narrowing * 2.0);
+  } else {
+    float narrowing = 32.0 / (32.0 - 2.5001);
+    float lodMinMinusOne = float(lodMin - 1);
+    float lodMinHalfSize = exp2(lodMinMinusOne);
+    lod = length(delta.xy) * narrowing / lodMinHalfSize + lodMinMinusOne;
+  }
+  lod += u.u_shadowLodRange.w;
+  int level = clamp(int(ceil(lod)), lodMin, lodMax);
+  return level - lodMin;
+}
+
+float directionalTap(float2 tapTileFloat, int2 tile, float4 pageInfo, int slot,
+                     thread int2& cacheTile, thread float4& cachePage,
+                     texture2d_array<uint> atlasTex, texture2d<float> pageTableTex)
+{
+  int2 tapTile = clamp(int2(floor(tapTileFloat)), int2(0), int2(31));
+  if (any(tapTile != cacheTile)) {
+    cachePage = all(tapTile == tile)
+        ? pageInfo
+        : pageTableTex.read(uint2(tapTile.y * 32 + tapTile.x, slot));
+    cacheTile = tapTile;
+  }
+  float4 tapPage = cachePage;
+  float2 frac = fract(tapTileFloat);
+  if (tapPage.z < 0.5) {
+    tapPage = pageInfo;
+    frac = clamp(tapTileFloat - float2(tile), 0.0, 0.999999);
+  }
+  uint v = atlasTex.read(uint2(uint(tapPage.y) * 256u + uint(frac.x * 256.0), uint(frac.y * 256.0)),
+                         uint(tapPage.x)).r;
+  return v == 0xFFFFFFFFu ? 1.0 : as_type<float>(v);
+}
+
+float directionalShadow(float3 posEye, float3 normalEye, float NoL, float2 noise,
+                        texture2d_array<uint> atlasTex, sampler atlasSmp,
+                        texture2d<float> dataTex,
+                        texture2d<float> pageTableTex,
+                        constant Uniforms& u)
+{
+  if (u.u_shadowEnabled < 0.5) return 1.0;
+
+  int levelCount = int(u.u_shadowLevelCount);
+  int i = directionalLevelIndex(posEye, u);
+  if (i < 0) return 1.0;
+
+  float3 lightDelta = (u.u_eyeToLightRotation * float4(posEye, 0.0)).xyz - u.u_directionalRefOffset.xyz;
+  int lodMin = int(u.u_shadowLodRange.x);
+  int lodMax = int(u.u_shadowLodRange.y);
+  float scale = clamp(length(lightDelta) * 2.0, exp2(float(lodMin)), exp2(float(lodMax)));
+  float sinTheta = sqrt(max(1.0 - NoL * NoL, 0.0));
+  float levelSize;
+  float3 biasedPosEye;
+  float2 tileFloat;
+  int2 tile;
+  int slot;
+  float4 pageInfo = float4(0.0);
+  for (int k = 0; k < levelCount; ++k, ++i) {
+    if (i >= levelCount) return 1.0;
+    levelSize = exp2(u.u_shadowLodRange.x + float(i));
+    float texelWorldSize = 1.41421356 / 8192.0 * levelSize;
+    biasedPosEye = posEye + normalEye * (texelWorldSize * (sinTheta + u.u_shadowBias.y));
+    float radius = levelSize * 0.5;
+    float3 lightRel = (u.u_eyeToLightRotation * float4(biasedPosEye, 0.0)).xyz;
+    float2 lightXY = lightRel.xy + shadowLevelTileOffset(i, dataTex);
+    float2 ndcXY = lightXY / radius;
+    tileFloat = (ndcXY * 0.5 + 0.5) * 32.0;
+    if (any(tileFloat < float2(0.0)) || any(tileFloat >= float2(32.0))) { continue; }
+    tile = int2(tileFloat);
+    slot = shadowLevelSlot(i, dataTex);
+    pageInfo = pageTableTex.read(uint2(tile.y * 32 + tile.x, slot));
+    if (pageInfo.z > 0.5) break;
+  }
+  if (pageInfo.z < 0.5) return 1.0;
+
+  float3 lightRelZ = (u.u_eyeToLightRotation * float4(biasedPosEye, 0.0)).xyz;
+  float3 levelDepth = shadowLevelDepth(i, dataTex);
+  float ndcZ = (lightRelZ.z + levelDepth.x) * levelDepth.y + levelDepth.z;
+  float compareDepth = ndcZ * 0.5 + 0.5 - u.u_shadowBias.x;
+
+  float tileTexelStep = 1.5 / 256.0 * clamp(scale * (32.0 / (32.0 - 1.0001)) / levelSize, 0.5, 1.0);
+
+  float tileWorld = levelSize / 32.0;
+  float tanHalf = tan(u.u_sunDirection.w);
+  float depthPerWorld = abs(0.5 * levelDepth.y);
+  float reach = 2.0 * tileWorld / max(tanHalf, 1e-3);
+  float aa = tileTexelStep * tileWorld;
+  float3 normalLight = (u.u_eyeToLightRotation * float4(normalEye, 0.0)).xyz;
+  float nz = normalLight.z < 0.0 ? min(normalLight.z, -0.05) : max(normalLight.z, 0.05);
+  float2 planeSlope = normalLight.xy * (-0.5 * levelDepth.y / nz);
+  float lit = 0.0;
+  int2 cacheTile = tile;
+  float4 cachePage = pageInfo;
+  for (int r = 0; r < 6; ++r) {
+    float phi = 6.2831853 * fract(noise.x + 0.618034 * float(r));
+    float2 disk = float2(cos(phi), sin(phi)) * sqrt(fract(noise.y + 0.754877 * float(r)));
+    float jitter = fract(noise.x + noise.y + 0.5698403 * float(r));
+    float plane = dot(planeSlope, disk) * aa;
+    float visible = 1.0;
+    bool covered = false;
+    for (int k = 0; k < 8; ++k) {
+      float f = k == 0 ? 0.0 : (float(k) - 1.0 + jitter) / 7.0;
+      float t = reach * f * f;
+      float fNext = (float(k) + jitter) / 7.0;
+      float span = k == 7 ? 1e30 : (reach * fNext * fNext - t) * depthPerWorld;
+      float2 offset = disk * (aa + tanHalf * t);
+      float occluder = directionalTap(tileFloat + offset / tileWorld, tile, pageInfo, slot, cacheTile, cachePage,
+                                      atlasTex, pageTableTex);
+      float behind = compareDepth + plane - t * depthPerWorld - occluder;
+      float lift = compareDepth + dot(planeSlope, offset) - occluder;
+      if ((behind > 0.0 && behind < span)
+          || (covered && behind <= 0.0 && lift > (2.0 * aa + 0.05 * t) * depthPerWorld)) {
+        visible = 0.0;
+        break;
+      }
+      covered = covered || behind >= span;
+    }
+    lit += visible;
+  }
+  return lit / 6.0;
+}

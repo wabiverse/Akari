@@ -277,6 +277,7 @@ HdAkariSurfaceLook HdAkariApproximatePxrSurface(HdAkariPxrSurface const &s)
   const GfVec3f fromDiffuse = diffuse * (oneMinusSpecular / (1.0f - 0.04f) / std::max(1.0f - m, eps));
   const GfVec3f fromSpecular = (specular - GfVec3f(0.04f * (1.0f - m))) / std::max(m, eps);
   look.color = Saturate(Mix(fromDiffuse, fromSpecular, m * m));
+  look.color = Saturate(Mix(look.color, s.refractionColor, transmit));
   look.roughness = Saturate(weight > eps ? roughness / weight : 1.0f);
   look.opacity = Saturate(s.presence) * (1.0f - transmit);
   look.emissive = s.glowColor * std::max(s.glowGain, 0.0f);

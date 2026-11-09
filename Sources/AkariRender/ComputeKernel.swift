@@ -269,7 +269,7 @@ protocol UniformValue
   static var glType: GLenum { get }
 }
 
-protocol UniformScalar: SIMDScalar, UniformValue
+protocol UniformScalar: SIMDScalar, UniformValue, Hashable, Codable
 {
   static var vec3Type: GLenum { get }
   static var vec4Type: GLenum { get }

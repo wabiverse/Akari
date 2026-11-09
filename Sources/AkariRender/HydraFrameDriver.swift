@@ -140,7 +140,7 @@ public extension Akari
     {
       if primPaths == nil
       {
-        var imaging = engine.getEngine()
+        let imaging = engine.getEngine()
         var found: [(id: Int32, path: String)] = []
         var misses = 0
         var id: Int32 = 0

@@ -90,6 +90,7 @@ extension Akari
     case sun = "u_sun"
     case sunColor = "u_sunColor"
     case sunMap = "u_sunMap"
+    case skyTint = "u_skyTint"
     case sunMatrix = "u_sunMatrix"
     case value = "u_value"
     case vgrid

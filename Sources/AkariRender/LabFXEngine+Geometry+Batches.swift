@@ -106,7 +106,7 @@ extension Akari.LabFXEngine
     var details: [UInt64: Detail] = [:]
     let regularMeshes = applyDetail(regular, cache: inputs.details, into: &details)
     let instancedPrototypes = inputs.meshes.filter { !$0.instances.isEmpty } + duplicates
-    var (binned, instanceDetail) = binInstances(instancedPrototypes, budget: budget.prototypes, camera: inputs.camera)
+    let (binned, instanceDetail) = binInstances(instancedPrototypes, budget: budget.prototypes, camera: inputs.camera)
     let instancedMeshes = applyDetail(binned, cache: inputs.details, into: &details)
     let recordedTriangles = (regularMeshes + instancedMeshes).reduce(0) { $0 + $1.tris.size() }
     // the camera moving on rarely changes what's chosen, a capture choosing the same isn't rebuilt.

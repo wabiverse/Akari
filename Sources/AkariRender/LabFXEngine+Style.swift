@@ -54,6 +54,7 @@ extension Akari.LabFXEngine
     var transparent: Set<Int32> = []
     var emitters: Set<Int32> = []
     var opacity: [Int32: Float] = [:]
+    var solidShadow: Set<Int32> = []
   }
 
   static let stylePrimsPerRow = 512
@@ -66,6 +67,7 @@ extension Akari.LabFXEngine
     let capacity = (maxPrimId / Self.stylePrimsPerRow + 1) * Self.stylePrimsPerRow
     guard revision != styles.revision || capacity > styles.capacity || geometry.flags.transparent != styles.transparent
       || geometry.flags.emitters != styles.emitters || geometry.flags.opacity != styles.opacity
+      || geometry.flags.solidShadow != styles.solidShadow
     else
     {
       bindStyles()
@@ -77,6 +79,7 @@ extension Akari.LabFXEngine
     styles.transparent = geometry.flags.transparent
     styles.emitters = geometry.flags.emitters
     styles.opacity = geometry.flags.opacity
+    styles.solidShadow = geometry.flags.solidShadow
 
     let snapshot = scene.StyleSnapshot()
     let defaults: [Float] = [5, 1, 0, 0.04, 0, 0, 0, -1] + [Float](repeating: 0, count: 24)
@@ -97,6 +100,12 @@ extension Akari.LabFXEngine
     for id in geometry.flags.emitters where id >= 0 && Int(id) < capacity
     {
       texels[Int(id) * 32 + 18] = 1
+    }
+
+    // Texel 4's w holds opacity. A value of 2 marks a prim whose shadow needs no alpha test.
+    for id in geometry.flags.solidShadow where id >= 0 && Int(id) < capacity
+    {
+      texels[Int(id) * 32 + 19] = 2
     }
 
     for (id, opacity) in geometry.flags.opacity where id >= 0 && Int(id) < capacity

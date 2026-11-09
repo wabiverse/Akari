@@ -819,7 +819,8 @@ extension Akari.ShadowAtlas
         int view = candidate_views[k];
         uint rect = render_rect[view];
         if (rect == 0u) continue;
-        float size = float(\(tilemapRes) >> ((view - \(punctualViewBase)) % \(lodCount)));
+        float size = float(view >= \(punctualViewBase) ? (\(tilemapRes) >> ((view - \(punctualViewBase)) % \(lodCount)))
+                                                       : \(tilemapRes));
         VEC2 rmin = VEC2(float(rect & 31u), float((rect >> 5u) & 31u)) / size * 2.0 - 1.0;
         VEC2 rmax = (VEC2(float((rect >> 10u) & 31u), float((rect >> 15u) & 31u)) + 1.0) / size * 2.0 - 1.0;
         int out0 = 0, out1 = 0, out2 = 0, out3 = 0, out4 = 0, out5 = 0;
@@ -836,7 +837,7 @@ extension Akari.ShadowAtlas
         }
         if (out0 < 8 && out1 < 8 && out2 < 8 && out3 < 8 && out4 < 8 && out5 < 8)
         {
-          instance_view[draw * \(maxPunctualViews) + int(n)] = uint(view);
+          instance_view[draw * \(maxViews) + int(n)] = uint(view);
           n += 1u;
         }
       }

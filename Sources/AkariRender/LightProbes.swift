@@ -81,6 +81,8 @@ public extension Akari
       public var environment: UInt64
       /// Per point light, position + intensity then color + radius.
       public var lights: [SIMD4<Float>]
+      /// Scales the environment cube by the dome color, rounded the same way as `environment`.
+      public var skyTint = SIMD3<Float>(repeating: 1)
     }
 
     struct Layout: Equatable

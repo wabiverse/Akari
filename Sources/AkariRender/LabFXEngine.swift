@@ -84,7 +84,8 @@ public extension Akari
 
     // Buffers at the G-buffer's size, and at half of it.
 
-    private static let renderBuffers: [Buffer] = [.gbuffer, .color, .transparentAccum, .transparentResolved, .upscaleInput]
+    private static let renderBuffers: [Buffer] = [.gbuffer, .color, .transparentAccum, .transparentResolved, .upscaleInput,
+                                                  .sunShadowRaw, .sunShadowAccum, .sunShadowHistory]
     private static let halfRenderBuffers: [Buffer] = [.ssgiPrep, .ssgiPyramid, .ssgi, .ssgiAccum, .ssgiHistory, .pointShadowRaw, .pointShadowBlur, .pointShadow, .fogSimHalf,
                                             .volumeScatter, .volumeIntegrated, .ssr, .ssrAccum, .ssrHistory]
 

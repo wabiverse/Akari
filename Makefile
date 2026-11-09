@@ -4,7 +4,7 @@
 all: bundle
 
 # Configurable app name (override via command line: make bundle APP_NAME=MyApp)
-APP_NAME ?= AkariDemo
+APP_NAME ?= Kraken
 CODESIGN_IDENTITY ?=
 # Build configuration to use (override via command line: make bundle BUILD_CONFIG=debug)
 BUILD_CONFIG ?= release

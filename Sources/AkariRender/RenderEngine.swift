@@ -175,6 +175,28 @@ public extension Akari
                             height: Int,
                             isFinalRender: Bool = false)
     {
+      // Hydra's frame queue doesn't drain an autorelease pool between frames, so drain one per frame here
+      // instead of letting Metal and MetalFX objects pile up until the queue goes idle.
+      autoreleasepool
+      {
+        drawFrame(hgi: hgi, renderParam: renderParam, color: color, depth: depth, primId: primId,
+                  instanceId: instanceId, view: view, projection: projection, width: width, height: height,
+                  isFinalRender: isFinalRender)
+      }
+    }
+
+    private func drawFrame(hgi: Pixar.HgiMetal,
+                           renderParam: Pixar.HdAkariRenderParam,
+                           color: Pixar.HdAkariRenderBuffer?,
+                           depth: Pixar.HdAkariRenderBuffer?,
+                           primId: Pixar.HdAkariRenderBuffer?,
+                           instanceId: Pixar.HdAkariRenderBuffer?,
+                           view: [Float],
+                           projection: [Float],
+                           width: Int,
+                           height: Int,
+                           isFinalRender: Bool)
+    {
       labfx.makeCurrent()
       var settings = applyPendingSettings()
       let finalSample = finalRenderSample

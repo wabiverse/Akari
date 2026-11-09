@@ -57,6 +57,8 @@ extension Akari.LabFXEngine
     var transparent: Set<Int32> = []
     var emitters: Set<Int32> = []
     var opacity: [Int32: Float] = [:]
+    /// Opaque prims whose materials never cut holes in their shadows.
+    var solidShadow: Set<Int32> = []
   }
 
   /// What the captures last recorded, and when.
