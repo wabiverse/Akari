@@ -9,7 +9,8 @@
 #
 # one time setup:
 #   1. Xcode > Settings > Accounts > Manage Certificates > + > Apple Distribution
-#   2. developer.apple.com > Profiles > + > App Store Connect, app id foundation.wabi.usd, download it
+#   2. developer.apple.com > Identifiers > foundation.wabi.usd > Capabilities > Increased Memory Limit, then
+#      Profiles > + > App Store Connect, app id foundation.wabi.usd, download it
 #   3. App Store Connect > Apps > + for foundation.wabi.usd
 #   4. App Store Connect > Users and Access > Integrations > App Store Connect API > new key with App Manager access,
 #      put AuthKey_<key id>.p8 in ~/.appstoreconnect/private_keys and export ASC_KEY_ID and ASC_ISSUER_ID
@@ -40,6 +41,10 @@ security cms -D -i "$profile" > "$work/profile.plist"
 /usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$work/profile.plist" > "$work/entitlements.plist"
 [[ "$(/usr/libexec/PlistBuddy -c "Print :Entitlements:get-task-allow" "$work/profile.plist" 2>/dev/null)" != "true" ]] \
   || fail "$profile is a development profile, TestFlight needs an App Store Connect distribution profile"
+
+# without the increased memory limit ios kills big scenes with no crash report.
+[[ "$(/usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.developer.kernel.increased-memory-limit" "$work/profile.plist" 2>/dev/null)" == "true" ]] \
+  || echo "warning: $profile lacks Increased Memory Limit, turn it on for foundation.wabi.usd at developer.apple.com and download the profile again" >&2
 
 export SWIFT_COLLECTIVE_DYNAMIC_LIBRARIES=1 SWIFTUSD_BUILD_FROM_SOURCE=1
 swift-bundler bundle -c "$config" -p iOS --codesign --identity "$identity" --provisioning-profile "$profile" \
