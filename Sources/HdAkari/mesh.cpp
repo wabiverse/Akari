@@ -282,11 +282,7 @@ void PackCornerColors(HdSceneDelegate *sceneDelegate, SdfPath const &id, HdMeshU
       }
     }
   } else if (interp == HdInterpolationFaceVarying) {
-    VtValue triangulated;
-    if (meshUtil.ComputeTriangulatedFaceVaryingPrimvar(colors.cdata(), int(colors.size()), HdTypeFloatVec3, &triangulated)
-          != HdMeshComputationResult::Success || !triangulated.IsHolding<VtVec3fArray>()) return;
-    perCorner = triangulated.UncheckedGet<VtVec3fArray>();
-    if (perCorner.size() != corners) return;
+    if (!HdAkariTriangulateFaceVarying(meshUtil, colors, perCorner) || perCorner.size() != corners) return;
   } else if (interp == HdInterpolationUniform && primitiveParams.size() == tris.size()) {
     for (size_t t = 0; t < tris.size(); ++t) {
       const int face = HdMeshUtil::DecodeFaceIndexFromCoarseFaceParam(primitiveParams[t]);
@@ -367,12 +363,7 @@ VtVec3fArray CornerNormals(HdSceneDelegate *sceneDelegate, SdfPath const &id, Hd
       break;
 
     case HdInterpolationFaceVarying: {
-      VtValue triangulated;
-      if (meshUtil.ComputeTriangulatedFaceVaryingPrimvar(normals.cdata(), int(normals.size()), HdTypeFloatVec3,
-                                                         &triangulated) != HdMeshComputationResult::Success ||
-          !triangulated.IsHolding<VtVec3fArray>()) return {};
-      perCorner = triangulated.UncheckedGet<VtVec3fArray>();
-      if (perCorner.size() != corners) return {};
+      if (!HdAkariTriangulateFaceVarying(meshUtil, normals, perCorner) || perCorner.size() != corners) return {};
       break;
     }
 

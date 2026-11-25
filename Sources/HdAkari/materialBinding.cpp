@@ -519,6 +519,38 @@ std::vector<SdfPath> HdAkariMaterialUsers(std::string const &materialKey)
   return it == materialUsers.end() ? std::vector<SdfPath>() : std::vector<SdfPath>(it->second.begin(), it->second.end());
 }
 
+namespace {
+
+template <typename Array>
+bool TriangulateFaceVarying(HdMeshUtil &meshUtil, Array const &values, HdType type, Array &out)
+{
+  VtValue triangulated;
+  const HdMeshComputationResult result =
+    meshUtil.ComputeTriangulatedFaceVaryingPrimvar(values.cdata(), int(values.size()), type, &triangulated);
+
+  // a mesh made only of triangles already has its values one per corner, so hydra hands nothing back
+  if (result == HdMeshComputationResult::Unchanged) {
+    out = values;
+    return true;
+  }
+
+  if (result != HdMeshComputationResult::Success || !triangulated.IsHolding<Array>()) return false;
+  out = triangulated.UncheckedGet<Array>();
+  return true;
+}
+
+} // namespace
+
+bool HdAkariTriangulateFaceVarying(HdMeshUtil &meshUtil, VtVec2fArray const &values, VtVec2fArray &out)
+{
+  return TriangulateFaceVarying(meshUtil, values, HdTypeFloatVec2, out);
+}
+
+bool HdAkariTriangulateFaceVarying(HdMeshUtil &meshUtil, VtVec3fArray const &values, VtVec3fArray &out)
+{
+  return TriangulateFaceVarying(meshUtil, values, HdTypeFloatVec3, out);
+}
+
 /// fetches the prim's raw uv primvar, remapped into its atlas cell.
 void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, HdMeshUtil &meshUtil,
                             HdAkariMaterialTextures const &textures, HdAkariAtlasCell const &cell,
@@ -589,11 +621,7 @@ void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, H
         }
       }
     } else if (interp == HdInterpolationFaceVarying) {
-      VtValue triangulated;
-      HdMeshComputationResult result = meshUtil.ComputeTriangulatedFaceVaryingPrimvar(
-          flatUv.cdata(), int(flatUv.size()), HdTypeFloatVec2, &triangulated);
-      if (result != HdMeshComputationResult::Success || !triangulated.IsHolding<VtVec2fArray>()) return false;
-      rawUvs = triangulated.UncheckedGet<VtVec2fArray>();
+      if (!HdAkariTriangulateFaceVarying(meshUtil, flatUv, rawUvs)) return false;
     } else {
       return false;
     }

@@ -112,6 +112,10 @@ void HdAkariForgetMaterial(SdfPath const &materialId);
 /// the rprims whose triangles last took the material keyed `materialKey`
 std::vector<SdfPath> HdAkariMaterialUsers(std::string const &materialKey);
 
+/// a face varying primvar as one value per triangle corner, kept as is when the mesh is already all triangles
+bool HdAkariTriangulateFaceVarying(HdMeshUtil &meshUtil, VtVec2fArray const &values, VtVec2fArray &out);
+bool HdAkariTriangulateFaceVarying(HdMeshUtil &meshUtil, VtVec3fArray const &values, VtVec3fArray &out);
+
 /// fetches the prim's raw uv primvar, remapped into its atlas cell
 void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, HdMeshUtil &meshUtil,
                             HdAkariMaterialTextures const &textures, HdAkariAtlasCell const &cell,

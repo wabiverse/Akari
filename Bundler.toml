@@ -12,6 +12,7 @@ commit = '$(COMMIT_HASH)'
 UIFileSharingEnabled = true
 LSSupportsOpeningDocumentsInPlace = true
 ITSAppUsesNonExemptEncryption = false
+UIApplicationSceneManifest = { type = "dict", value = { UIApplicationSupportsMultipleScenes = false, UISceneConfigurations = { type = "dict", value = { UIWindowSceneSessionRoleApplication = [ { type = "dict", value = { UISceneConfigurationName = 'Default Configuration', UISceneDelegateClassName = 'UIKitBackend.SceneDelegate' } } ] } } } }
 UISupportedInterfaceOrientations = [ 'UIInterfaceOrientationPortrait', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight' ]
 "UISupportedInterfaceOrientations~ipad" = [ 'UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUpsideDown', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight' ]
 CFBundleDocumentTypes = [ { type = "dict", value = { CFBundleTypeExtensions = [ 'usd', 'usda', 'usdc', 'usdz' ], CFBundleTypeName = 'Universal Scene Description File', CFBundleTypeRole = 'Editor', LSHandlerRank = 'Default', LSIsAppleDefaultForType = true, LSItemContentTypes = [ 'com.pixar.universal-scene-description', 'com.pixar.universal-scene-description-mobile', 'com.pixar.usd.ascii', 'com.pixar.usd.crate' ], CFBundleTypeIconSystemGenerated = true } } ]
