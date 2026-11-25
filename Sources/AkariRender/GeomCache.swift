@@ -44,9 +44,7 @@ import LabGL
 
 public extension Akari.Geom
 {
-  /// A built mesh's vertices, eight floats each, indices, and each
-  /// triangle's streamed Ptex face when it has them, read straight
-  /// from the cache's mapped pack if it exists.
+  /// a built mesh's vertices, indices and streamed ptex faces, read straight from the cache's mapped pack when it is there
   final class Built: @unchecked Sendable
   {
     public let verts: UnsafeBufferPointer<Float>
@@ -96,16 +94,14 @@ public extension Akari.Geom
       verts.isEmpty || indices.isEmpty
     }
 
-    /// Read from the cache's file, so the system can drop its pages, not held in memory.
+    /// read from the cache's file, so the system can drop its pages, not held in memory.
     public var isMapped: Bool
     {
       pack != nil
     }
   }
 
-  /// An append only file, unlinked as soon as it's open and
-  /// mapped read only once over a reservation far past what
-  /// it grows to.
+  /// an append only file, unlinked once open and mapped read only over a reservation far past what it grows to
   final class Pack: @unchecked Sendable
   {
     public let base: UnsafeMutableRawPointer
@@ -138,11 +134,12 @@ public extension Akari.Geom
       close(fd)
     }
 
-    /// Appends `parts` one after another at a page aligned offset, nil when it can't.
+    /// appends `parts` one after another at a page aligned offset, nil when it can't.
     func append(_ parts: [UnsafeRawBufferPointer]) -> (offset: Int, length: Int)?
     {
       let page = Int(getpagesize())
       let length = (parts.reduce(0) { $0 + $1.count } + page - 1) / page * page
+
       // writing past the end grows the file, the lock only hands out the room.
       lock.lock()
       let offset = end
@@ -173,12 +170,7 @@ public extension Akari.Geom
     }
   }
 
-  /// Built meshes kept on disk by content and mapped back read only, so
-  /// what's built never has to fit in memory twice and a rerecord maps it
-  /// back instead of rebuilding. Builds append to the session's packs, each
-  /// record's GPU buffers to packs of their own that go with the last of
-  /// them. It stops storing builds once they hold a quarter of the free disk
-  /// or `AKARI_GEOMETRY_CACHE_GB`, `AKARI_GEOMETRY_CACHE=0` disables the cache.
+  /// built meshes kept on disk by content and mapped back, so a rerecord maps instead of rebuilding, off with `AKARI_GEOMETRY_CACHE=0`
   final class GeometryCache: @unchecked Sendable
   {
     public static let shared = GeometryCache()
@@ -193,7 +185,7 @@ public extension Akari.Geom
     private var buffers: [Pack] = []
     private var next = 0
 
-    /// Appends to one file serialize on it, so they spread over several.
+    /// appends to one file serialize on it, so they spread over several.
     private static let shards = 8
 
     private init()
@@ -233,14 +225,14 @@ public extension Akari.Geom
       (0 ..< shards).compactMap { _ in Pack(in: root, capacity: 1 << 36) }
     }
 
-    /// Removes this session's folder, its packs are already unlinked.
+    /// removes this session's folder, its packs are already unlinked.
     public func removeAll()
     {
       guard let root else { return }
       try? FileManager.default.removeItem(atPath: root)
     }
 
-    /// Removes the caches of sessions that are no longer running.
+    /// removes the caches of sessions that are no longer running.
     private static func sweep(_ parent: String)
     {
       for name in (try? FileManager.default.contentsOfDirectory(atPath: parent)) ?? []
@@ -255,7 +247,7 @@ public extension Akari.Geom
       root != nil
     }
 
-    /// The cache key of a mesh's build, zero when it has no content key.
+    /// the cache key of a mesh's build, zero when it has no content key.
     public static func key(contentKey: UInt64, flipWinding: Bool, points: Int, triangles: Int, uvs: Int) -> UInt64
     {
       guard contentKey != 0 else { return 0 }
@@ -276,7 +268,7 @@ public extension Akari.Geom
       return Built(builds[found.pack], at: found.offset, vertCount: found.verts, indexCount: found.indices, faceCount: found.faces)
     }
 
-    /// Appends a build under `key` and maps it back, or keeps a copy in memory when it can't be stored.
+    /// appends a build under `key` and maps it back, or keeps a copy in memory when it can't be stored.
     public func store(_ key: UInt64, verts: [Float], indices: [Int32], ptexFaces: [UInt32]) -> Built
     {
       let bytes = Int64(verts.count * 4 + indices.count * 4 + ptexFaces.count * 4)
@@ -298,9 +290,7 @@ public extension Akari.Geom
       return Built(builds[shard], at: stored.offset, vertCount: verts.count, indexCount: indices.count, faceCount: ptexFaces.count)
     }
 
-    /// Starts a record's GPU buffers in a pack of
-    /// their own, the last ones go once the buffers
-    /// made from it do.
+    /// starts a record's gpu buffers in a pack of their own, freed with the buffers made from it
     public func beginRecord()
     {
       lock.lock()
@@ -308,10 +298,10 @@ public extension Akari.Geom
       lock.unlock()
     }
 
-    /// Leaves this much of the disk free.
+    /// leaves this much of the disk free.
     private static let diskReserve: Int64 = 2 << 30
 
-    /// The disk's room past the reserve, nil when there's none or no cache.
+    /// the disk's room past the reserve, nil when there's none or no cache.
     public var freeDisk: Int64?
     {
       var disk = statfs()
@@ -320,16 +310,13 @@ public extension Akari.Geom
       return free > 0 ? free : nil
     }
 
-    /// A readonly GPU buffer of `parts` one after another, appended to the
-    /// record's pack and mapped, so its pages are the file's for the system
-    /// to drop and read back rather than the process's to swap. 0 when the
-    /// disk is short of room, the caller keeps them in memory instead.
+    /// a read only gpu buffer of `parts` mapped from the record's pack so the system can drop its pages, 0 when the disk is short
     public func mappedBuffer(usage: GLuint, _ parts: [UnsafeRawBufferPointer]) -> GLuint
     {
       pack(parts).map { buffer(usage: usage, $0) } ?? 0
     }
 
-    /// Where `pack` wrote, which holds its file open.
+    /// where `pack` wrote, which holds its file open.
     public struct Slice: @unchecked Sendable
     {
       let pack: Pack
@@ -351,7 +338,7 @@ public extension Akari.Geom
       return Slice(pack: pack, offset: slice.offset, length: slice.length)
     }
 
-    /// `mappedBuffer`'s GPU buffer, from the render thread.
+    /// `mappedBuffer`'s gpu buffer, from the render thread.
     public func buffer(usage: GLuint, _ slice: Slice) -> GLuint
     {
       // each buffer holds the pack, which unmaps after the last of them.

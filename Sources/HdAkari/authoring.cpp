@@ -77,7 +77,7 @@ namespace {
 class Journal;
 TF_DECLARE_WEAK_AND_REF_PTRS(Journal);
 
-// One change to a layer, how to take it back and how to make it again.
+// one change to a layer, how to take it back and how to make it again.
 struct Change
 {
   JournalPtr layer;
@@ -89,7 +89,7 @@ std::vector<Change> changes;
 size_t position = 0;
 bool replaying = false;
 
-// Records each change before the layer makes it, while its old value is still there.
+// records each change before the layer makes it, while its old value is still there.
 class Journal : public SdfLayerStateDelegateBase
 {
 public:
@@ -150,6 +150,7 @@ protected:
   {
     _Record([=](Journal &j) { j.DeleteSpec(path, inert); }, [=](Journal &j) { j.CreateSpec(path, type, inert); });
   }
+
   // a deletion takes the spec's whole subtree, which comes back field by field, parents first.
   void _OnDeleteSpec(SdfPath const &path, bool inert) override
   {

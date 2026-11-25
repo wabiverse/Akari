@@ -1,0 +1,83 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    doc = """Akari saber showcase with two back to back rect lights along each blade in place of its cylinder light."""
+    endTimeCode = 1
+    framesPerSecond = 24
+    metersPerUnit = 1
+    startTimeCode = 1
+    subLayers = [@SaberShowcase.usda@]
+    upAxis = "Z"
+)
+
+over "World"
+{
+    over "Dark"
+    {
+        over "Blade"
+        {
+            over "Light" (
+                active = false
+            )
+            {
+            }
+
+            def RectLight "Back"
+            {
+                color3f inputs:color = (1, 0.04, 0.03)
+                float inputs:height = 0.93
+                float inputs:intensity = 432.0
+                float inputs:width = 0.032
+                double3 xformOp:translate = (0, 0, 0.62)
+                float xformOp:rotateX = 90
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateX"]
+            }
+
+            def RectLight "Front"
+            {
+                color3f inputs:color = (1, 0.04, 0.03)
+                float inputs:height = 0.93
+                float inputs:intensity = 432.0
+                float inputs:width = 0.032
+                double3 xformOp:translate = (0, 0, 0.62)
+                float xformOp:rotateX = -90
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateX"]
+            }
+        }
+    }
+
+    over "Light"
+    {
+        over "Blade"
+        {
+            over "Light" (
+                active = false
+            )
+            {
+            }
+
+            def RectLight "Back"
+            {
+                color3f inputs:color = (0.45, 0.3, 1)
+                float inputs:height = 0.93
+                float inputs:intensity = 432.0
+                float inputs:width = 0.032
+                double3 xformOp:translate = (0, 0, 0.62)
+                float xformOp:rotateX = 90
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateX"]
+            }
+
+            def RectLight "Front"
+            {
+                color3f inputs:color = (0.45, 0.3, 1)
+                float inputs:height = 0.93
+                float inputs:intensity = 432.0
+                float inputs:width = 0.032
+                double3 xformOp:translate = (0, 0, 0.62)
+                float xformOp:rotateX = -90
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateX"]
+            }
+        }
+    }
+
+}

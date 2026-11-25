@@ -162,6 +162,7 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
       const GfVec3f c = color.UncheckedGet<GfVec3f>();
       distant.colorR = c[0]; distant.colorG = c[1]; distant.colorB = c[2];
     }
+
     // intensity is the luminance of its disk, normalized or not, as RenderMan's distant light has no normalize.
     const float halfAngle = std::clamp(distant.angle * float(M_PI) / 360.0f, 0.0f, float(M_PI));
     if (halfAngle > 0.0f)
@@ -260,7 +261,7 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
     data.intensity /= area;
   }
 
-  // a hero light always keeps full quality shadows, `akari:hero` in USD or an `akari_hero` user property.
+  // a hero light always keeps full quality shadows, `akari:hero` in usd or an `akari_hero` user property.
   for (TfToken const &name : {_tokens->hero, _tokens->userPropertiesAkariHero})
   {
     const VtValue heroVal = sceneDelegate->GetLightParamValue(id, name);

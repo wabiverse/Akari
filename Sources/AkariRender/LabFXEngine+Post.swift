@@ -44,11 +44,10 @@ import LabGL
 
 extension Akari.LabFXEngine
 {
-  /// Bloom with the lens's streaks and ghosts, and depth of field, over the resolved HDR color.
+  /// bloom with lens streaks and ghosts plus depth of field over the resolved hdr color
   struct Post
   {
     var lens: Pixar.HdAkariCameraLens?
-    var viewportLens = Pixar.HdAkariCameraLens()
     var focusObjectDistance: Double?
     var bloomThisFrame = false
     var lensThisFrame = false
@@ -62,61 +61,59 @@ extension Akari.LabFXEngine
                                      .bloomUp0, .bloomUp1, .bloomUp2, .bloomUp3, .bloomUp4,
                                      .bloomComposite]
   static let lensPasses: [Pass] = [.lensStreak, .lensStreakWide, .lensStreakLong, .lensGhosts]
-  static let dofPasses: [Pass] = [.depthOfFieldDepth, .depthOfFieldTiles8, .depthOfFieldTiles, .depthOfFieldNeighbors, .depthOfFieldDownsample, .depthOfFieldHalf, .depthOfField, .depthOfFieldApply]
+  static let dofPasses: [Pass] = [.depthOfFieldDepth, .depthOfFieldTiles8, .depthOfFieldTiles, .depthOfFieldNeighbors,
+                                   .depthOfFieldDownsample, .depthOfFieldHalf, .depthOfField, .depthOfFieldApply]
 
-  /// The lens of the USD camera a render or the viewport looks through, nil for a free camera.
+  /// the lens of the usd camera a render or the viewport looks through, nil for a free camera
   public var usdCameraLens: Pixar.HdAkariCameraLens?
   {
     get { post.lens }
     set { post.lens = newValue }
   }
 
-  /// The free view's focal length and aperture, its depth of field focusing as `settings` say.
-  public var viewportLens: Pixar.HdAkariCameraLens
-  {
-    get { post.viewportLens }
-    set { post.viewportLens = newValue }
-  }
-
-  /// The view's distance to its focus object this frame, in scene units, nil without one.
+  /// the view's distance to its focus object this frame in scene units, nil without one
   public var focusObjectDistance: Double?
   {
     get { post.focusObjectDistance }
     set { post.focusObjectDistance = newValue }
   }
 
-  /// Turns bloom on for this frame, the camera's `akari:bloom`, `akari:streak` and `akari:flare` as `settings` scale them.
+  /// turns bloom on for this frame from the camera's `akari:bloom`, `akari:streak` and `akari:flare` scaled by `settings`
   public func setBloom(_ settings: BloomSettings)
   {
     let lens = post.lens ?? Pixar.HdAkariCameraLens()
     let strength = Float(lens.bloom) * settings.strength
     let streaks = Float(lens.streak) + settings.streaks
     let ghosts = Float(lens.flare) + settings.ghosts
+
     setVector(.bloom, SIMD4(strength, streaks, ghosts, 0))
     setVector(.bloomFilter, SIMD4(settings.threshold, settings.smoothness, settings.maximum > 0 ? settings.maximum : 60000, 0))
     setVector(.bloomTint, SIMD4(settings.tint, settings.saturation))
+
     post.bloomThisFrame = strength > 0 || streaks > 0 || ghosts > 0
     post.lensThisFrame = streaks > 0 || ghosts > 0
   }
 
-  /// Turns depth of field on for this frame when the lens has an `fStop` and a `focusDistance`,
-  /// the USD camera's unless `settings` override it, the free view's from `settings`. Unless
-  /// `exact`, the half resolution gather takes a quarter of the taps.
+  /// turns depth of field on when a usd camera's lens has an fstop and focus distance, the free view never blurs
   public func setDepthOfField(width: Int, exact: Bool, settings: DepthOfFieldSettings)
   {
-    var lens = post.lens ?? post.viewportLens
-    if settings.overridesCamera || post.lens == nil
+    guard var lens = post.lens else { return }
+    if settings.overridesCamera
     {
       lens.fStop = Double(settings.fStop)
       lens.focusDistance = post.focusObjectDistance ?? Double(settings.focusDistance) / Double(stageMetersPerUnit)
     }
 
     guard lens.fStop > 0, lens.focusDistance > 0, lens.horizontalAperture > 0 else { return }
-    let f = lens.focalLength
+
+    let focal = lens.focalLength
     let focus = lens.focusDistance * Double(stageMetersPerUnit) * 1000
-    guard focus > f else { return }
-    let coc = f * f / (lens.fStop * (focus - f)) / lens.horizontalAperture * Double(width)
+    guard focus > focal else { return }
+
+    // blur radius in pixels for a point at infinity
+    let coc = 0.5 * focal * focal / (lens.fStop * (focus - focal)) / lens.horizontalAperture * Double(width)
     let maxRadius = min(Double(settings.maxSize) * Double(width) / 1920, 48)
+
     setVector(.dof, SIMD4(Float(coc), Float(lens.focusDistance), Float(max(maxRadius, 4)), geometry.flags.transparent.isEmpty ? 0 : 1))
     setVector(.dofSampling, SIMD4(exact ? 0.375 : 1.5, 0, 0, 0))
     post.dofThisFrame = true

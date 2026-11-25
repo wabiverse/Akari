@@ -1,0 +1,109 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    doc = """Asset browser showcase: an empty two meter diorama room referenced from the sample asset library,
+    lit by a warm spot outside its glazed window, so the glass throws caustics, and three soft fills,
+    ready to dress by dragging furniture out of the asset browser and dropping materials on it."""
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "World" (
+    kind = "assembly"
+)
+{
+    def Xform "DioramaRoom" (
+        prepend references = @./AssetLibrary/Rooms/DioramaRoom.usda@
+    )
+    {
+        matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0.08724377721238241, 0, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def Scope "Lights"
+    {
+        def SphereLight "Spot_Outside" (
+            active = true
+            prepend apiSchemas = ["ShapingAPI"]
+        )
+        {
+            color3f inputs:color = (1, 0.932, 0.817)
+            float inputs:intensity = 1273.2
+            bool inputs:normalize = 1
+            float inputs:radius = 0.05
+            float inputs:shaping:cone:angle = 22.5
+            float inputs:shaping:cone:softness = 0.15
+            matrix4d xformOp:transform = ( (-0.9226, 0, -0.3857, 0), (-0.1944, 0.8637, 0.465, 0), (0.3331, 0.504, -0.7969, 0), (0.7204, 2.1258437772123826, -2.9582, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+
+        def DomeLight "World" (
+            active = true
+        )
+        {
+            color3f inputs:color = (0.09, 0.116, 0.134)
+            float inputs:intensity = 0.5
+            matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0.08724377721238241, 0, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+        }
+    }
+
+    def Camera "Camera"
+    {
+        float2 clippingRange = (1, 100)
+        float focalLength = 300
+        float focusDistance = 0.8
+        float fStop = 0.1
+        float horizontalAperture = 36
+        float verticalAperture = 36
+        matrix4d xformOp:transform = ( (0.7071, 0, -0.7071, 0), (-0.3536, 0.866, -0.3536, 0), (0.6124, 0.5, 0.6124, 0), (18.353, 16.082243777212383, 18.353, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def "WoodenChair" (
+        active = false
+        instanceable = true
+        prepend references = @./AssetLibrary/Furniture/WoodenChair.usda@
+    )
+    {
+        matrix4d xformOp:transform = ( (0.7071067811865476, 0, -0.7071067811865475, 0), (0, 1, 0, 0), (0.7071067811865475, 0, 0.7071067811865476, 0), (-0.5188094108710463, 0.08724377721238241, -0.5237379966403376, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def "PictureFrame" (
+        instanceable = true
+        prepend references = @./AssetLibrary/Picture Frames/PictureFrame.usda@
+    )
+    {
+        matrix4d xformOp:transform = ( (0, 0, -1, 0), (0, 1, 0, 0), (1, 0, 0, 0), (-0.9399999976158142, 0.9711654618871821, 0.0163712961225031, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def "PottedPlant" (
+        instanceable = true
+        prepend references = @./AssetLibrary/Plants/PottedPlant.usda@
+    )
+    {
+        matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.5695368985404072, 0.08724377721238241, -0.7058000186085706, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def "Sidetable" (
+        instanceable = true
+        prepend references = @./AssetLibrary/Furniture/Sidetable.usda@
+    )
+    {
+        matrix4d xformOp:transform = ( (0, 0, -1, 0), (0, 1, 0, 0), (1, 0, 0, 0), (-0.6799999976158146, 0.08724377721238241, 0.2217986929694249, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def "WoodenChair_001" (
+        instanceable = true
+        prepend references = @./AssetLibrary/Furniture/WoodenChair.usda@
+    )
+    {
+        matrix4d xformOp:transform = ( (0.7071067811865476, 0, -0.7071067811865475, 0), (0, 1, 0, 0), (0.7071067811865475, 0, 0.7071067811865476, 0), (-0.5644364933527896, 0.08724377721238241, -0.48397667051255017, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+}
+

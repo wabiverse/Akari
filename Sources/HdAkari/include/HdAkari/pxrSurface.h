@@ -57,7 +57,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// The PxrSurface inputs that shape its look, at RenderMan's defaults.
+/// the `PxrSurface` inputs that shape its look, at their default values
 struct HdAkariPxrSurface
 {
   float diffuseGain = 1.0f;
@@ -110,7 +110,7 @@ struct HdAkariPxrSurface
   float presence = 1.0f;
 };
 
-/// A PxrSurface's look in Akari's metallic roughness model.
+/// a `PxrSurface` look in akari's metallic roughness model
 struct HdAkariSurfaceLook
 {
   GfVec3f color = GfVec3f(0.18f);
@@ -118,13 +118,14 @@ struct HdAkariSurfaceLook
   float roughness = 0.2f;
   float opacity = 1.0f;
   GfVec3f emissive = GfVec3f(0.0f);
+  /// what the surface reflects facing the eye while it is not a metal, four percent for most things
+  GfVec3f specular = GfVec3f(0.04f);
 };
 
-/// Sets the input named `name` from `value`, false when it isn't one that shapes the look.
+/// sets the input named `name` from `value`, false when it isn't one that shapes the look
 HDAKARI_API bool HdAkariSetPxrSurfaceInput(HdAkariPxrSurface &surface, TfToken const &name, VtValue const &value);
 
-/// Layers the coat, specular, glass, fuzz, subsurface and diffuse lobes down onto one base color,
-/// metallic and roughness, with glass seen through Akari's transparency.
+/// layers the coat, specular, glass, fuzz, subsurface and diffuse lobes down onto one base color, metallic and roughness
 HDAKARI_API HdAkariSurfaceLook HdAkariApproximatePxrSurface(HdAkariPxrSurface const &surface);
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -92,11 +92,11 @@ HdAkariSphere::~HdAkariSphere() = default;
 TfTokenVector const&
 HdAkariSphere::GetBuiltinPrimvarNames() const
 {
-    static const TfTokenVector primvarNames = {
-        HdSphereSchemaTokens->radius
-    };
+  static const TfTokenVector primvarNames = {
+    HdSphereSchemaTokens->radius
+  };
 
-    return primvarNames;
+  return primvarNames;
 }
 
 HdDirtyBits
@@ -111,7 +111,7 @@ HdAkariSphere::GetInitialDirtyBitsMask() const
     | HdChangeTracker::DirtyDisplayStyle
     | HdChangeTracker::DirtyMaterialId
     | HdChangeTracker::DirtyInstancer;
-  
+
   return mask;
 }
 
@@ -151,16 +151,14 @@ HdAkariSphere::Sync(HdSceneDelegate *sceneDelegate,
   data.primId = GetPrimId();
   HdAkariSyncStyle(sceneDelegate, id, data.primId, scene);
 
-  // a point instancer's prototype publishes one matrix per instance, the
-  // renderer draws the sphere with GPU instancing instead of copying it.
+  // a point instancer's prototype publishes a matrix per instance and the renderer instances the sphere
   _UpdateInstancer(sceneDelegate, dirtyBits);
   const SdfPath instancerId = GetInstancerId();
   const bool instanced = !instancerId.IsEmpty();
   if (instanced) HdInstancer::_SyncInstancerAndParents(sceneDelegate->GetRenderIndex(), instancerId);
 
-  // fetch parameters.
-  VtValue radiusVal = sceneDelegate->Get(id, HdSphereSchemaTokens->radius);
-  double radius = radiusVal.IsHolding<double>() ? radiusVal.UncheckedGet<double>() : 1.0;
+  const VtValue radiusVal = sceneDelegate->Get(id, HdSphereSchemaTokens->radius);
+  const double radius = radiusVal.IsHolding<double>() ? radiusVal.UncheckedGet<double>() : 1.0;
 
   if (HdAkariSyncAtmosphere(sceneDelegate, id, scene, radius)) {
     *dirtyBits = HdChangeTracker::Clean;
@@ -187,9 +185,8 @@ HdAkariSphere::Sync(HdSceneDelegate *sceneDelegate,
 
   data.transform = sceneDelegate->GetTransform(id);
   data.visible = sceneDelegate->GetVisible(id);
-  
-  // constant display color, a minimal way to support authored colors.
-  // (todo): support actual per-vertex color.
+
+  // only the first display color is used, todo per vertex color
   const VtValue colorVal = sceneDelegate->Get(id, HdTokens->displayColor);
   if (colorVal.IsHolding<VtVec3fArray>()) {
     const VtVec3fArray colors = colorVal.UncheckedGet<VtVec3fArray>();
@@ -197,29 +194,31 @@ HdAkariSphere::Sync(HdSceneDelegate *sceneDelegate,
       data.displayColor = colors[0];
     }
   }
-  
+
   HdAkariTextureAtlas *atlas = param->GetTextureAtlas();
   if (atlas) atlas->EnsureGridSized(sceneDelegate);
+
   HdAkariSyncMaterial(sceneDelegate, id, atlas, meshUtil, data);
   data.contentKey = HdAkariMeshContentKey(data);
 
-  // bump revision so the GPU buffer cache knows to rebuild.
+  // bump the revision so the gpu buffer cache knows to rebuild
   data.dataRevision = ++_dataGeneration;
 
   if (instanced) {
     HdAkariInstanceSet set = HdAkariInstances(sceneDelegate->GetRenderIndex(), instancerId, id);
     data.instances = std::move(set.transforms);
     data.instancesKey = set.key;
-    // nothing to draw without instances.
+
+    // nothing to draw without instances
     if (data.instances.empty()) {
       scene->RemoveMesh(id);
       *dirtyBits = HdChangeTracker::Clean;
       return;
     }
   }
-  
+
   scene->UpdateMesh(std::move(data));
-  
+
   *dirtyBits = HdChangeTracker::Clean;
 }
 

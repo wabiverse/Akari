@@ -43,6 +43,7 @@ import Foundation
 import HdAkari
 import HydraKit
 import LabGL
+import simd
 
 extension Akari.Geom.Deformer
 {
@@ -72,6 +73,16 @@ extension Akari.Geom.Deformer
     block.uvs.reserveCapacity(triCount * 6)
     let hidden = Self.hiddenEdges(mesh, triangles: topology.triIndices, spacing: spacing)
     let order: (Int, Int, Int) = mesh.flipWinding ? (0, 2, 1) : (0, 1, 2)
+
+    // authored normals turn with the surface around their point, so the layout keeps that surface's normals too
+    let given = Self.authoredNormals(mesh) ? Akari.Geom.flatten(points: mesh.normals) : []
+    if !given.isEmpty
+    {
+      block.cornerNormals.reserveCapacity(triCount * 12)
+      block.restNormals = Self.smoothNormals(Akari.Geom.flatten(points: mesh.points), triangles: topology.triIndices,
+                                             count: count)
+    }
+
     for t in 0 ..< triCount
     {
       let i0 = Int(topology.triIndices[t * 3]), i1 = Int(topology.triIndices[t * 3 + 1]), i2 = Int(topology.triIndices[t * 3 + 2])
@@ -92,6 +103,13 @@ extension Akari.Geom.Deformer
         block.corners.append(Int32(t) | (bits << 28))
         block.uvs.append(topology.triUvs[(t * 3 + c) * 2])
         block.uvs.append(topology.triUvs[(t * 3 + c) * 2 + 1])
+
+        guard !given.isEmpty else { continue }
+
+        // the winding repair swapped this triangle's last two corners, and its normals with them
+        let repaired = !topology.flipped.isEmpty && topology.flipped[t]
+        let o = (t * 3 + (repaired && c != 0 ? 3 - c : c)) * 3
+        block.cornerNormals += [given[o], given[o + 1], given[o + 2], 0]
       }
     }
 
@@ -110,9 +128,39 @@ extension Akari.Geom.Deformer
     return block
   }
 
-  /// Per triangle, the edges (bit c, the edge facing corner c) inside one of the irregular cells
-  /// `spacing` wide its rest surface is cut into, so a dense mesh becomes a sparse wireframe. Empty
-  /// without a spacing.
+  /// the area weighted smooth normal of each point, four floats each, up where a point touches no face.
+  private static func smoothNormals(_ points: [Float], triangles: [Int32], count: Int) -> [Float]
+  {
+    var sums = [SIMD3<Float>](repeating: .zero, count: count)
+    func point(_ i: Int) -> SIMD3<Float>
+    {
+      SIMD3(points[i * 3], points[i * 3 + 1], points[i * 3 + 2])
+    }
+
+    for t in stride(from: 0, to: triangles.count - 2, by: 3)
+    {
+      let a = Int(triangles[t]), b = Int(triangles[t + 1]), c = Int(triangles[t + 2])
+      guard a >= 0, b >= 0, c >= 0, a < count, b < count, c < count else { continue }
+
+      let n = cross(point(b) - point(a), point(c) - point(a))
+      sums[a] += n
+      sums[b] += n
+      sums[c] += n
+    }
+
+    var out: [Float] = []
+    out.reserveCapacity(count * 4)
+    for sum in sums
+    {
+      let length = simd_length(sum)
+      let n = length > 1e-8 ? sum / length : SIMD3<Float>(0, 1, 0)
+      out += [n.x, n.y, n.z, 0]
+    }
+
+    return out
+  }
+
+  /// each triangle's edges inside the cells `spacing` wide its rest surface is cut into, so a dense mesh draws a sparse wireframe
   private static func hiddenEdges(_ mesh: Akari.Geom.Recorder.RawMesh, triangles: [Int32], spacing: Float) -> [UInt8]
   {
     let count = mesh.points.size()

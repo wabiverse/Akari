@@ -51,9 +51,7 @@ import SwiftCrossUI
 #if os(macOS)
   extension Kraken
   {
-    /// The dope sheet shows the selection's animated properties down the side
-    /// and their keys along the frames, keyboard shortcuts apply while the cursor
-    /// is over it.
+    /// the dope sheet, animated properties down the side and keys along the frames, its shortcuts work under the cursor
     struct NativeDopeSheet: NSViewRepresentable
     {
       let layout: Layout
@@ -99,9 +97,9 @@ import SwiftCrossUI
 
       private enum Modal
       {
-        /// Moving keys with G or by dragging them. `duplicate` is set for Shift-D.
+        /// moving keys with g or by dragging them. `duplicate` is set for shift-d.
         case grab(anchor: CGFloat, duplicate: Bool, drag: Bool)
-        /// Scaling keys around the current frame with S.
+        /// scaling keys around the current frame with s.
         case scale(anchor: CGFloat)
         case box(from: NSPoint, to: NSPoint, extend: Bool)
         case scrub
@@ -119,7 +117,7 @@ import SwiftCrossUI
       private var rows: [Row] = []
       private var selected = Set<Key>()
       private var selectedChannels = Set<String>()
-      /// The frames in view, or nil to show the scene's range.
+      /// the frames in view, or nil to show the scene's range.
       private var visible: (lo: Double, hi: Double)?
       private var frameRange: (lo: Double, hi: Double)
       {
@@ -188,7 +186,7 @@ import SwiftCrossUI
         layout?.hydra.currentTimeCode ?? 0
       }
 
-      /// Reloads the channels when the selection or keys change, and redraws when the frame moves.
+      /// reloads the channels when the selection or keys change, and redraws when the frame moves.
       private func poll()
       {
         guard let layout else { return }
@@ -246,7 +244,7 @@ import SwiftCrossUI
         needsDisplay = true
       }
 
-      /// The keys shown on a row. Summary and prim rows show their channels' keys combined.
+      /// the keys shown on a row. summary and prim rows show their channels' keys combined.
       private func keys(_ row: Row) -> [Key]
       {
         switch row
@@ -294,7 +292,7 @@ import SwiftCrossUI
         return r >= 0 && r < rows.count ? r : nil
       }
 
-      /// The nearest key within reach of `p`.
+      /// the nearest key within reach of `p`.
       private func key(at p: NSPoint) -> (row: Int, time: Double)?
       {
         guard p.x > Self.channelWidth, let r = row(at: p) else { return nil }
@@ -613,7 +611,7 @@ import SwiftCrossUI
         return Double((mouse.x - pivot) / (anchor - pivot))
       }
 
-      /// Confirms a running move or scale. Returns false if none was running.
+      /// confirms a running move or scale. returns false if none was running.
       private func commitModal() -> Bool
       {
         switch modal
@@ -640,7 +638,7 @@ import SwiftCrossUI
         needsDisplay = true
       }
 
-      /// The selected keys, grouped by channel.
+      /// the selected keys, grouped by channel.
       private var selectedByChannel: [(path: String, name: String, times: [Double])]
       {
         Dictionary(grouping: selected, by: \.channel).compactMap
@@ -653,7 +651,8 @@ import SwiftCrossUI
       {
         let groups = selectedByChannel
         guard !groups.isEmpty else { return }
-        // Keep the moved keys selected.
+
+        // keep the moved keys selected.
         selected = Set(selected.map { Key(channel: $0.channel, time: (pivot + ($0.time - pivot) * scale + delta).rounded()) })
         layout?.keyframes.edit(duplicate ? "Duplicated Keyframes" : "Moved Keyframes")
         { stage, _ in
@@ -678,7 +677,7 @@ import SwiftCrossUI
         }
       }
 
-      /// Keys the selected channels on the current frame (I), or every visible channel if none are selected.
+      /// keys the selected channels on the current frame, or every visible one when none are selected
       private func insertKeys()
       {
         let chosen = channels.filter { selectedChannels.isEmpty || selectedChannels.contains($0.id) }
@@ -689,7 +688,7 @@ import SwiftCrossUI
           var keyedTransforms = Set<String>()
           return targets.reduce(false)
           { done, target in
-            // A prim with an unkeyed move gets its whole transform keyed where it was moved to.
+            // a prim with an unkeyed move gets its whole transform keyed where it was moved to.
             if target.1.hasPrefix("xformOp:"), SceneEdit.holdsTransform(target.0)
             {
               guard keyedTransforms.insert(target.0).inserted else { return done }
@@ -701,7 +700,7 @@ import SwiftCrossUI
         }
       }
 
-      /// Pastes copied keys so the first one lands on the current frame (Ctrl-V).
+      /// pastes copied keys so the first lands on the current frame
       private func pasteKeys()
       {
         guard let first = clipboard.map(\.time).min() else { return }
@@ -749,7 +748,7 @@ import SwiftCrossUI
         .foregroundColor: NSColor.white,
       ]
 
-      /// Where a key is drawn while it's being moved or scaled.
+      /// where a key is drawn while it's being moved or scaled.
       private func shownTime(_ key: Key) -> Double
       {
         guard selected.contains(key) else { return key.time }
@@ -786,7 +785,7 @@ import SwiftCrossUI
         }
       }
 
-      /// An attribute name without its inputs or xformOp prefix.
+      /// an attribute name without its inputs or xformOp prefix.
       private static func label(_ name: String) -> String
       {
         for prefix in ["inputs:", "xformOp:"] where name.hasPrefix(prefix)
@@ -802,14 +801,14 @@ import SwiftCrossUI
         bounds.fill()
         let width = bounds.width
 
-        // Dim frames outside the scene's range.
+        // dim frames outside the scene's range.
         Self.outside.setFill()
         NSRect(x: Self.channelWidth, y: Self.rulerHeight, width: max(x(Double(range.0)) - Self.channelWidth, 0),
                height: bounds.height).fill()
         let endX = x(Double(range.1) + 1)
         if endX < width { NSRect(x: endX, y: Self.rulerHeight, width: width - endX, height: bounds.height).fill() }
 
-        // Frame lines and numbers.
+        // frame lines and numbers.
         let steps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000]
         let step = steps.first { CGFloat($0) * pixelsPerFrame >= 50 } ?? 10000
         var f = (Int(frame(at: Self.channelWidth).rounded(.up)) / step) * step
@@ -827,7 +826,7 @@ import SwiftCrossUI
           f += step
         }
 
-        // Row backgrounds and channel names.
+        // row backgrounds and channel names.
         for (r, row) in rows.enumerated()
         {
           let top = y(r)
@@ -846,7 +845,7 @@ import SwiftCrossUI
             NSRect(x: 0, y: top, width: Self.channelWidth, height: Self.rowHeight).fill()
           }
 
-          // Join keys that hold the same value as the next key.
+          // join keys that hold the same value as the next key.
           let rowKeys = keys(row)
           let times = Set(rowKeys.map { shownTime($0) }).sorted()
           if case .channel = row, times.count > 1
@@ -867,7 +866,8 @@ import SwiftCrossUI
 
           var size: CGFloat = 5.5
           if case .channel = row { size = 5 }
-          // Draw in time order. Dictionary order changes between draws, which makes overlapping keys flicker.
+
+          // draw in time order. dictionary order changes between draws, which makes overlapping keys flicker.
           for t in drawn.keys.sorted()
           {
             let isSelected = drawn[t] ?? false
@@ -878,7 +878,7 @@ import SwiftCrossUI
           }
         }
 
-        // The channel list, drawn over the scrolled key area.
+        // the channel list, drawn over the scrolled key area.
         Self.channelBackground.setFill()
         NSRect(x: 0, y: 0, width: Self.channelWidth, height: bounds.height).fill()
         for (r, row) in rows.enumerated()
@@ -914,7 +914,7 @@ import SwiftCrossUI
                     withAttributes: Self.label)
         }
 
-        // The ruler's corner. The playhead is a subview on top.
+        // the ruler's corner. the playhead is a subview on top.
         Self.channelBackground.setFill()
         NSRect(x: 0, y: 0, width: Self.channelWidth, height: Self.rulerHeight).fill()
         placePlayhead()
@@ -964,7 +964,7 @@ import SwiftCrossUI
         playhead.frameNumber = Int(time.rounded(.down))
       }
 
-      /// The playhead line, with the frame number on the ruler.
+      /// the playhead line, with the frame number on the ruler.
       private final class PlayheadView: NSView
       {
         static let width: CGFloat = 64

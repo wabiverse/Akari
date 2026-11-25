@@ -43,13 +43,12 @@ import HdAkari
 
 public extension Akari
 {
-  /// The Swift implementation of Akari's Hydra render delegate.
+  /// the swift implementation of akari's hydra render delegate.
   final class RenderDelegate
   {
     public init() {}
 
-    /// The Hydra prim type tokens (`HdPrimTypeTokens`) Akari renders.
-    /// Raw values must match Hydra's spelling exactly.
+    /// the hydra prim type tokens akari renders, the raw values spell them exactly as hydra does
     enum Prim
     {
       enum Rprim: String, CaseIterable { case mesh, sphere, cube, cylinder, cone, capsule, volume, basisCurves }
@@ -72,7 +71,7 @@ public extension Akari
       Prim.Bprim.allCases.map(\.rawValue)
     }
 
-    /// The AOVs Akari renders, by their Hydra names.
+    /// the aovs akari renders, by their hydra names.
     enum Aov: String
     {
       case color
@@ -82,7 +81,7 @@ public extension Akari
       case elementId
     }
 
-    /// Returns Akari's raw default AOV descriptor for a given `name`.
+    /// returns akari's raw default aov descriptor for a given `name`.
     public func defaultAovDescriptor(forName name: String) -> Int32
     {
       switch Aov(rawValue: name)
@@ -121,8 +120,7 @@ private func activeDelegate(_ raw: UnsafeMutableRawPointer?) -> Akari.RenderDele
   return Unmanaged<Akari.RenderDelegate>.fromOpaque(raw).takeUnretainedValue()
 }
 
-/// Shared body behind the three `AKRenderDelegateSupportedXPrimTypes` entry
-/// points below, which differ only in which list they report.
+/// the body the three supported prim type entry points share, they differ only in the list they report
 private func reportSupportedTypes(_ delegate: UnsafeMutableRawPointer?,
                                   _ cb: @convention(c) (UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void,
                                   _ ctx: UnsafeMutableRawPointer?,
@@ -174,9 +172,7 @@ public func AKRenderDelegateDefaultAovDescriptor(_ delegate: UnsafeMutableRawPoi
   return delegate.defaultAovDescriptor(forName: String(cString: name))
 }
 
-/// C string copies of every prim type name, allocated once and never
-/// freed so Hydra can hold onto the pointers for the process lifetime,
-/// never mutated after this initializer, hence `nonisolated(unsafe)`.
+/// c string copies of every prim type name, made once and never freed so hydra can keep the pointers for the life of the process
 private nonisolated(unsafe) let internedPrimNames: [String: UnsafePointer<CChar>] = {
   typealias Prim = Akari.RenderDelegate.Prim
   let allNames = Prim.Rprim.allCases.map(\.rawValue)
@@ -192,8 +188,7 @@ private nonisolated(unsafe) let internedPrimNames: [String: UnsafePointer<CChar>
   })
 }()
 
-/// Shared body behind the three `AKRenderDelegateXClassName` entry points
-/// below, which differ only in which lookup method they call.
+/// the body the three class name entry points share, they differ only in the lookup they call
 private func classNameLookup(_ delegate: UnsafeMutableRawPointer?,
                              _ typeId: UnsafePointer<CChar>?,
                              _ resolve: (Akari.RenderDelegate, String) -> String?) -> UnsafePointer<CChar>?

@@ -78,6 +78,7 @@ extension Kraken.Layout
     }
 
     guard !selection.isEmpty else { return }
+
     checkpoint()
     var locals: [String: simd_double4x4] = [:]
     for path in selection
@@ -103,11 +104,21 @@ extension Kraken.Layout
     let paths = mode == .edit ? [] : selection
     let time = hydra.currentTimeCode
     let world = meshWorld
-    let radius = mode == .edit ? (mesh?.verts.map
-    { v -> Double in
-      let p = world * SIMD4(SIMD3<Double>(self.mesh!.points[v]), 1)
-      return simd_distance(SIMD3(p.x, p.y, p.z), target)
-    }.max() ?? 0) : 0
+
+    let radius: Double
+    if mode == .edit, let mesh
+    {
+      radius = mesh.verts.map
+      { v -> Double in
+        let p = world * SIMD4(SIMD3<Double>(mesh.points[v]), 1)
+        return simd_distance(SIMD3(p.x, p.y, p.z), target)
+      }.max() ?? 0
+    }
+    else
+    {
+      radius = 0
+    }
+
     onStage
     { stage in
       var size = radius * 2
@@ -122,12 +133,14 @@ extension Kraken.Layout
           hi = simd_max(hi, SIMD3(box[3], box[4], box[5]))
         }
 
-        if lo.x.isFinite
+        if all(lo .< .infinity), all(hi .> -.infinity)
         {
           center = (lo + hi) / 2
           size = simd_distance(lo, hi)
         }
       }
+
+      guard [center.x, center.y, center.z, size].allSatisfy(\.isFinite) else { return hydra.frameAll() }
 
       hydra.stopFlick()
       hydra.viewCamera.focus = Pixar.GfVec3d(center.x, center.y, center.z)
@@ -140,7 +153,7 @@ extension Kraken.Layout
     hydra.frameAll()
   }
 
-  /// Points the active camera along the view.
+  /// points the active camera along the view
   func alignCameraToView()
   {
     guard let path = active, widgets.contains(where: { $0.path == path && $0.kind == .camera }),

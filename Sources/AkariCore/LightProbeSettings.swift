@@ -38,14 +38,14 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-/// How the volume and sphere light probes are placed, captured and relit.
+/// how the volume and sphere light probes are placed, captured and relit.
 public struct LightProbeSettings: Sendable
 {
-  /// Auto volume probes along the scene's longest axis.
+  /// auto volume probes along the scene's longest axis.
   public var volumeResolution: Int = 12
-  /// Light bounces the volume probes gather.
+  /// light bounces the volume probes gather.
   public var bounces: Int = 2
-  /// Cube faces captured per frame while the probes rebake.
+  /// cube faces captured per frame while the probes rebake.
   public var captureViewsPerFrame: Int = 96
 
   public init()

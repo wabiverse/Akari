@@ -1,0 +1,122 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    doc = """Akari modifier stack test, an open half box mirrored back into a closed box and refined by subdivision, an array of plates and a solidified sheet, so the Modifiers tab has something to drive."""
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "World"
+{
+    def Scope "Looks"
+    {
+        def Material "Clay"
+        {
+            token outputs:surface.connect = </World/Looks/Clay/S.outputs:surface>
+            def Shader "S"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.62, 0.55, 0.48)
+                float inputs:roughness = 0.55
+                token outputs:surface
+            }
+        }
+    }
+
+    def Mesh "MirroredBox" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </World/Looks/Clay>
+        double3 xformOp:translate = (-2.4, 1.1, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        point3f[] points = [(0, -1, -1), (0, 1, -1), (0, 1, 1), (0, -1, 1), (1, -1, -1), (1, 1, -1), (1, 1, 1), (1, -1, 1)]
+        int[] faceVertexCounts = [4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [4, 5, 6, 7, 0, 4, 7, 3, 1, 2, 6, 5, 0, 1, 5, 4, 3, 7, 6, 2]
+
+        uniform token subdivisionScheme = "catmullClark"
+        uniform int akari:subdivision:viewportLevel = 2
+        uniform int akari:subdivision:renderLevel = 3
+
+        uniform token[] akari:modifiers = ["Mirror", "Subdivision"]
+
+        uniform token akari:modifier:Mirror:type = "mirror"
+        uniform bool akari:modifier:Mirror:viewport = 1
+        uniform bool akari:modifier:Mirror:render = 1
+        uniform bool akari:modifier:Mirror:axisX = 1
+        uniform bool akari:modifier:Mirror:axisY = 0
+        uniform bool akari:modifier:Mirror:axisZ = 0
+        uniform bool akari:modifier:Mirror:merge = 1
+        uniform float akari:modifier:Mirror:mergeThreshold = 0.001
+
+        uniform token akari:modifier:Subdivision:type = "subdivision"
+        uniform bool akari:modifier:Subdivision:viewport = 1
+        uniform bool akari:modifier:Subdivision:render = 1
+    }
+
+    def Mesh "ArrayedPlate" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </World/Looks/Clay>
+        double3 xformOp:translate = (1.4, 0.2, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        point3f[] points = [(-0.5, 0, -0.5), (0.5, 0, -0.5), (0.5, 0.2, 0.5), (-0.5, 0.2, 0.5)]
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 3, 2, 1]
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+            interpolation = "faceVarying"
+        )
+
+        uniform token[] akari:modifiers = ["Array", "Solidify"]
+
+        uniform token akari:modifier:Array:type = "array"
+        uniform bool akari:modifier:Array:viewport = 1
+        uniform bool akari:modifier:Array:render = 1
+        uniform int akari:modifier:Array:count = 4
+        uniform float3 akari:modifier:Array:relativeOffset = (1.2, 0, 0)
+        uniform float3 akari:modifier:Array:constantOffset = (0, 0.25, 0)
+        uniform bool akari:modifier:Array:merge = 0
+        uniform float akari:modifier:Array:mergeThreshold = 0.001
+
+        uniform token akari:modifier:Solidify:type = "solidify"
+        uniform bool akari:modifier:Solidify:viewport = 1
+        uniform bool akari:modifier:Solidify:render = 1
+        uniform float akari:modifier:Solidify:thickness = 0.08
+        uniform float akari:modifier:Solidify:offset = -1
+        uniform bool akari:modifier:Solidify:rim = 1
+    }
+
+    def Mesh "Floor" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </World/Looks/Clay>
+        point3f[] points = [(-7, 0, -7), (7, 0, -7), (7, 0, 7), (-7, 0, 7)]
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        uniform token subdivisionScheme = "none"
+        normal3f[] normals = [(0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0)] (
+            interpolation = "faceVarying"
+        )
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:angle = 1.5
+        float inputs:intensity = 4
+        double3 xformOp:rotateXYZ = (-48, -32, 0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Camera "Camera"
+    {
+        float focalLength = 50
+        float2 clippingRange = (0.1, 1000)
+        double3 xformOp:translate = (0, 2.4, 9)
+        double3 xformOp:rotateXYZ = (-7, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }
+}

@@ -52,8 +52,7 @@ import class SwiftCrossUI.Published
 
 extension Kraken
 {
-  /// The Material tab's own Akari viewport: the active material, referenced live out of the scene's
-  /// layers, on one of the preview shapes. Its engine renders on the scene's device between the scene's frames.
+  /// the material tab's own akari viewport, the active material on a preview shape, rendered between the scene's frames
   @MainActor
   final class MaterialPreview: ObservableObject
   {
@@ -103,7 +102,7 @@ extension Kraken
       }
     }
 
-    /// Previews the material at `path` in the scene, none when empty.
+    /// previews the material at `path` in the scene, none when empty.
     func show(material path: String)
     {
       material = path
@@ -132,7 +131,7 @@ extension Kraken
 
     // MARK: stage
 
-    /// Looks at the shape a little from above, the backdrop filling the view behind it.
+    /// looks at the shape a little from above, the backdrop filling the view behind it.
     private nonisolated static func frame(_ hydra: Hydra.RenderEngine)
     {
       hydra.viewCamera.rotation = Pixar.GfVec3d(-12, 0, 0)
@@ -151,6 +150,7 @@ extension Kraken
       _ = stage.DefinePrim(Sdf.Path(materialPath), .material)
       let any = Pixar.VtValue()
       let sun = UsdLux.DistantLight.define(stage, path: Sdf.Path(root).AppendChild(Tf.Token("Key")))
+
       // the brightness of its two degree disk, 3 delivered.
       sun.CreateIntensityAttr(any, false).set(Float(3135))
       sun.CreateAngleAttr(any, false).set(Float(2))
@@ -170,7 +170,7 @@ extension Kraken
       return stage
     }
 
-    /// A rough, plain colored surface for the backdrop.
+    /// a rough, plain colored surface for the backdrop.
     private nonisolated static func matte(_ albedo: Float, at path: Pixar.SdfPath, on stage: UsdStage) -> UsdShade.Material
     {
       let material = UsdShade.Material.define(stage, path: path)
@@ -202,7 +202,7 @@ extension Kraken
       return mesh.GetPrim()
     }
 
-    /// Puts `shape` in place of the one shown, bound to the previewed material.
+    /// puts `shape` in place of the one shown, bound to the previewed material.
     private nonisolated static func author(_ shape: PreviewShape, on stage: UsdStage)
     {
       let base = Sdf.Path(shapePath)
@@ -236,7 +236,7 @@ extension Kraken
     }
   }
 
-  /// The material Preview panel: the preview, and the shapes to show it on down its side.
+  /// the material preview panel: the preview, and the shapes to show it on down its side.
   @MainActor
   struct MaterialPreviewView: View
   {

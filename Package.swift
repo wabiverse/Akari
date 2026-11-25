@@ -6,8 +6,8 @@ let package = Package(
   platforms: [
     .macOS(.v15),
     .visionOS(.v1),
-    .iOS(.v17),
-    .tvOS(.v17)
+    .iOS(.v18),
+    .tvOS(.v18)
   ],
   products: [
     .library(name: "Akari", targets: ["AkariCore", "AkariRender", "AkariHydra", "HdAkari"]),
@@ -15,14 +15,20 @@ let package = Package(
     .executable(name: "Kraken", targets: ["Kraken"])
   ],
   dependencies: [
-    .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.11.1"),
+    .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.11.2"),
+    .package(url: "https://github.com/moreSwift/swift-cross-ui.git", from: "0.11.0"),
     .package(url: "https://github.com/wabiverse/MetaOneTBB.git", from: "1.0.0"),
     .package(url: "https://github.com/wabiverse/MetaOpenVDB.git", from: "1.0.0"),
     .package(url: "https://github.com/wabiverse/MetaPtex.git", from: "1.0.0"),
-    .package(url: "https://github.com/wabiverse/Lattice.git", from: "1.0.0"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.2.9"),
+    .package(url: "https://github.com/wabiverse/MetaOpenSubdiv.git", from: "1.0.0"),
+    .package(url: "https://github.com/wabiverse/MetaOpenColorIO.git", from: "1.0.0"),
+    .package(url: "https://github.com/wabiverse/Lattice.git", from: "1.0.2"),
     .package(url: "https://codeberg.org/furbytm/LabCamera.git", from: "1.0.0"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.3.2"),
     .package(url: "https://github.com/furbytm/Nanocolor.git", from: "1.0.0"),
+    .package(url: "https://github.com/wabiverse/MetaOpenImageIO.git", from: "1.0.1"),
+    .package(url: "https://github.com/wabiverse/MetaTIFF.git", from: "1.0.1"),
+    .package(url: "https://github.com/wabiverse/SwiftLabGeomVoxSplat.git", from: "0.0.1"),
   ],
   targets: [
     // TODO: support externally provided openusd builds.
@@ -68,8 +74,8 @@ let package = Package(
         .product(name: "HydraKit", package: "swift-usd"),
         // TODO: support externally provided openusd builds.
         // .target(name: "OpenUSD"),
-        // .product(name: "LatticeCore", package: "Lattice"),
-        // .product(name: "LatticeUSD", package: "Lattice"),
+        .product(name: "LatticeCore", package: "Lattice"),
+        .product(name: "LatticeUSD", package: "Lattice"),
         .product(name: "Nanocolor", package: "Nanocolor"),
         .product(name: "LabGL", package: "SwiftLabGL"),
         .product(name: "LabFX", package: "SwiftLabGL"),
@@ -114,6 +120,7 @@ let package = Package(
         .product(name: "OneTBB", package: "MetaOneTBB"),
         .product(name: "OpenVDB", package: "MetaOpenVDB"),
         .product(name: "Ptex", package: "MetaPtex"),
+        .product(name: "OpenSubdiv", package: "MetaOpenSubdiv"),
         .product(name: "LabGL", package: "SwiftLabGL"),
       ],
       resources: [
@@ -135,6 +142,7 @@ let package = Package(
         .product(name: "LatticeMetal", package: "Lattice"),
         .product(name: "LatticeUSD", package: "Lattice"),
         .product(name: "lattice", package: "Lattice"),
+        .product(name: "OpenColorIO", package: "MetaOpenColorIO"),
         .target(name: "AkariCore"),
         .target(name: "AkariRender"),
         .target(name: "AkariHydra"),
@@ -142,6 +150,11 @@ let package = Package(
         // TODO: support externally provided openusd builds.
         // .target(name: "OpenUSD"),
         .product(name: "HydraKit", package: "swift-usd"),
+        .product(name: "VoxSplat", package: "SwiftLabGeomVoxSplat"),
+      ],
+      resources: [
+        // the kraken script module sources, compiled with each script
+        .copy("ScriptKit")
       ],
       cxxSettings: [
         .define("_LIBCPP_ABI_NO_COMPRESSED_PAIR_PADDING")

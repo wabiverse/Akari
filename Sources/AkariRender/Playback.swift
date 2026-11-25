@@ -48,9 +48,7 @@ import HydraKit
 
 public extension Akari
 {
-  /// The timeline plays at the scene's frame rate, looping between
-  /// its start and end frames, with the stage's soundtrack playing
-  /// in time with it.
+  /// the timeline plays at the scene's frame rate between its start and end, with the stage's soundtrack in time
   final class Playback: @unchecked Sendable
   {
     public weak var hydra: Hydra.RenderEngine?
@@ -84,7 +82,7 @@ public extension Akari
                                                    timeCodesPerSecond: timeCodesPerSecond)
     }
 
-    /// Takes the range, rate and soundtrack of the stage the viewport shows now, on the frame queue.
+    /// takes the range, rate and soundtrack of the stage the viewport shows now, on the frame queue.
     public func adoptStage()
     {
       guard let hydra else { return }
@@ -107,6 +105,9 @@ public extension Akari
       }
 
       hydra.currentTimeCode = info.startTimeCode
+
+      // the probes bake ahead for the new stage's sun just as they do for the stage a launch opens
+      planSunBakes(hydra.stage)
     }
 
     public var isPlaying: Bool
@@ -124,14 +125,14 @@ public extension Akari
       soundtrack != nil
     }
 
-    /// The frames played, start and end inclusive.
+    /// the frames played, start and end inclusive.
     public var range: ClosedRange<Double>
     {
       get { lock.withLock { _range } }
       set { lock.withLock { _range = newValue } }
     }
 
-    /// Frames per second.
+    /// frames per second.
     public var frameRate: Double
     {
       get { lock.withLock { _frameRate } }
@@ -144,7 +145,7 @@ public extension Akari
       set { lock.withLock { _muted = newValue; epoch += 1 } }
     }
 
-    /// The current frame, a seek not yet applied included.
+    /// the current frame, a seek not yet applied included.
     public var frame: Double
     {
       lock.withLock { pendingSeek } ?? hydra?.currentTimeCode ?? 0
@@ -164,7 +165,7 @@ public extension Akari
       lock.withLock { direction = 0 }
     }
 
-    /// Plays, or pauses when already playing that way.
+    /// plays, or pauses when already playing that way.
     public func toggle(reverse: Bool = false)
     {
       lock.withLock
@@ -194,7 +195,7 @@ public extension Akari
       seek(to: frame.rounded(.down) + Double(frames))
     }
 
-    /// The first frame each of the stage's authored light probes shows.
+    /// the first frame each of the stage's authored light probes shows.
     public static func probeBakeTimes(_ stage: UsdStage) -> [Double]
     {
       var times = [Double](repeating: 0, count: 16)
@@ -202,7 +203,22 @@ public extension Akari
       return Array(times.prefix(count))
     }
 
-    /// Bakes the light probes at `times` as the stage loads, then comes back, so playback never waits on a bake.
+    /// gives the light probes every sun direction in the stage so they can bake them before playback.
+    public func planSunBakes(_ stage: UsdStage)
+    {
+      let capacity = Akari.LightProbes.maxSunBakes
+      var directions = [Float](repeating: 0, count: capacity * 3)
+      let count = directions.withUnsafeMutableBufferPointer
+      {
+        Int(Pixar.HdAkariSunDirections(stage, $0.baseAddress!, Int32(capacity), Akari.LightProbes.sunSpacingDegrees))
+      }
+      akari?.labfx.lightProbes.plannedSunDirections = (0 ..< count).map
+      {
+        SIMD3(directions[$0 * 3], directions[$0 * 3 + 1], directions[$0 * 3 + 2])
+      }
+    }
+
+    /// bakes the light probes at `times` as the stage loads, then comes back, so playback never waits on a bake.
     public func prebakeProbes(at times: [Double]) async
     {
       guard !times.isEmpty, let akari, let hydra else { return }
@@ -213,6 +229,7 @@ public extension Akari
       {
         seek(to: time)
         let deadline = ProcessInfo.processInfo.systemUptime + 120
+
         // a few frames drawn there first, so the probes it shows have been seen.
         while hydra.currentTimeCode != time, ProcessInfo.processInfo.systemUptime < deadline
         {
@@ -233,7 +250,7 @@ public extension Akari
       seek(to: home)
     }
 
-    /// Moves time along, on the frame queue before each frame.
+    /// moves time along, on the frame queue before each frame.
     func advance()
     {
       guard let hydra else { return }
@@ -304,7 +321,7 @@ public extension Akari
 
 #if canImport(AVFoundation)
 
-  /// The stage's soundtrack, decoded whole up front so a seek lands on the exact sample.
+  /// the stage's soundtrack, decoded whole up front so a seek lands on the exact sample.
   private final class Soundtrack: @unchecked Sendable
   {
     private let queue = DispatchQueue(label: "akari.soundtrack")

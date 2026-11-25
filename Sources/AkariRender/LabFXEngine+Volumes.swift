@@ -46,7 +46,7 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// The stage's `UsdVolVolume`, its density in a 3D texture, ray marched over the resolve.
+  /// the stage's `UsdVolVolume`, its density in a 3D texture, ray marched over the resolve.
   struct Volumes
   {
     struct Grid
@@ -65,7 +65,7 @@ extension Akari.LabFXEngine
       var anisotropy: Float
     }
 
-    /// A density field read off the render thread, waiting for its texture.
+    /// a density field read off the render thread, waiting for its texture.
     struct Voxels: @unchecked Sendable
     {
       var dims: SIMD3<Int>
@@ -92,7 +92,7 @@ extension Akari.LabFXEngine
 
   static let volumePasses: [Pass] = [.volumeShadow, .volumeMarch]
 
-  /// Picks up the first visible volume and loads its density field once per file.
+  /// picks up the first visible volume and loads its density field once per file.
   func syncVolumes(_ scene: Pixar.HdAkariScene)
   {
     let revision = scene.VolumeRevision()
@@ -152,7 +152,7 @@ extension Akari.LabFXEngine
                                 anisotropy: min(max(data.anisotropy, -0.95), 0.95))
   }
 
-  /// Binds the volume for the frame and rebakes its sun shadow when the sun or the volume moved.
+  /// binds the volume for the frame and rebakes its sun shadow when the sun or the volume moved.
   func applyVolumes(sun: SIMD3<Float>)
   {
     let active = volumes.hero != nil
@@ -218,6 +218,7 @@ extension Akari.LabFXEngine
     var texture: GLuint = 0
     gl.genTextures(count: 1, textures: &texture)
     gl.bindTexture(target: GLenum(GL_TEXTURE_3D), texture: texture)
+
     // trilinear and clamped, a nearest lookup shows every voxel once the camera is inside the cloud.
     for (pname, param) in [(GL_TEXTURE_MIN_FILTER, GL_LINEAR), (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
                            (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE),

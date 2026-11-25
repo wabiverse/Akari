@@ -44,9 +44,7 @@ import LabGL
 
 extension Akari.LabFXEngine
 {
-  /// The static capture's draws the camera sees, culled and encoded on the GPU
-  /// in two passes (last frame's survivors first, then whatever the Hi-Z of those
-  /// doesn't hide.
+  /// culls and encodes the static draws the camera sees on the gpu in two passes, last frame's survivors then what their hi z doesn't hide
   struct CameraCull
   {
     var kernels = Akari.ComputeKernels<CullKernel>()
@@ -57,10 +55,10 @@ extension Akari.LabFXEngine
     var capacity = 0
     var count = 0
     var generation: UInt64 = .max
-    /// Last frame's survivors are stale, the early pass takes every draw in the frustum.
+    /// when last frame survivors are stale the early pass takes every draw in the frustum.
     var reset = true
     var encoded = false
-    /// Farthest view distance per texel, each level half the last, packed one after another.
+    /// farthest view distance per texel, each level half the size of the last, packed back to back.
     var hzb: GLuint = 0
     var hzbCapacity = 0
     var levels: [SIMD4<Int32>] = []
@@ -104,7 +102,7 @@ extension Akari.LabFXEngine
     }
   }
 
-  /// Camera culled replay slots, the shadows take the ones above.
+  /// replay slots for the camera cull, the shadows use the slots above these.
   static let cameraCullSlot: Int32 = 0
   static let cameraLateCullSlot: Int32 = 1
 
@@ -254,8 +252,7 @@ extension Akari.LabFXEngine
     }
     """
 
-  /// Whether a box is behind the Hi-Z, its nearest distance past the farthest
-  /// one under the up to 2x2 texels of the level its screen rect fits.
+  /// whether a box is behind the hi z, its nearest distance past the farthest one under the texels of the level its rect fits
   static let occludedBody = """
       float nearest = 1e30;
       VEC2 lo2 = VEC2(1e30), hi2 = VEC2(-1e30);
@@ -364,8 +361,7 @@ extension Akari.LabFXEngine
     }
     """
 
-  /// Culls the static capture's draws to `viewProjection` and last frame's survivors, and encodes
-  /// them for the G-buffer's early replay, which falls back to every draw when this can't.
+  /// culls the static draws to the view and last frame's survivors for the early gbuffer replay, which draws everything when this fails
   func cullStaticGeometry(projection: Akari.Matrix4, view: Akari.Matrix4)
   {
     let viewProjection = projection * view
@@ -374,42 +370,62 @@ extension Akari.LabFXEngine
     geometry.cameraCull.perspective = projection[2, 3] < -0.5
     geometry.cameraCull.encoded = encodeCameraCull(viewProjection)
     runtime.setMeshCaptureCulledSlot(.meshStatic, slot: geometry.cameraCull.encoded ? Self.cameraCullSlot : -1)
-    // each instance draws the level of detail its size needs from the camera, at the full output's resolution.
+    geometry.dynamicCulled = encodeDynamicCull(viewProjection)
+
+    // each instance draws the level of detail its size needs from the camera, at full output resolution.
     let eye = view.inverse().transform(.zero)
     let lodScale = abs(projection[1, 1]) * Float(max(sizes.target.height, 1)) * 0.5 * geometry.instanceLOD.detail
       * dynamicResolution.geometryScale
+
     geometry.instanceLOD.pixelScale = projection[1, 1] * Float(sizes.render.height) * 0.5
     geometry.instancesCulled = cullInstances(viewProjection, pixelScale: geometry.instanceLOD.pixelScale,
                                              eye: [eye.x, eye.y, eye.z], lodScale: lodScale)
   }
 
-  /// The instance cull slot taking only each instance's level of detail, for the replays culling none.
+  /// the instance cull slot that only picks each level of detail, for replays that cull nothing.
   static let instanceLevelSlot: UInt32 = 100
-  /// The probes, sun map and shadow runs past the culled ones see the scene this much coarser than
-  /// the camera, keeping what's at least a pixel there.
+  /// the probes, sun map and unculled shadow runs see the scene this much coarser than the camera
   static let instanceLevelCoarsening: Float = 16
 
-  /// Instances smaller than this, in radius on screen, aren't drawn.
+  /// instances with a screen radius smaller than this are not drawn.
   static let instanceMinPixels: Float = 1
 
-  /// Keeps the instances in front of the camera, inside its sides
-  /// and covering some of a pixel, for the instanced gbuffer pass.
+  /// keeps the instances in front of the camera, in its frustum and covering part of a pixel, for the instanced gbuffer pass
   private func cullInstances(_ viewProjection: Akari.Matrix4, pixelScale: Float, eye: [Float], lodScale: Float) -> Bool
   {
     guard !geometry.instancedBatch.isEmpty, let capture = geometry.staticInstancedCapture else { return false }
+
     labgl.captureLodView(eye: eye, pixelScale: lodScale / Self.instanceLevelCoarsening)
     let levels = labgl.captureCullInstances(capture, viewProjections: nil, pixelScales: nil, viewCount: 0, minPixels: 1,
                                             rects: 0, rectIndices: nil, rectGrids: nil, slot: Self.instanceLevelSlot) != 0
     labgl.captureInstanceFallbackSlot(levels ? Self.instanceLevelSlot : ~0)
+
     labgl.captureLodView(eye: eye, pixelScale: lodScale)
     let queued = viewProjection.withUnsafeFloats
     {
       labgl.captureCullInstances(capture, viewProjection: $0.baseAddress, pixelScale: pixelScale,
                                  minPixels: Self.instanceMinPixels, slot: 0) != 0
     }
-    // the camera's and the levels' culls run as one pass.
+
+    // the camera cull and the level cull run as one pass.
     labgl.captureFlushInstanceCulls(capture)
+
     return queued
+  }
+
+  /// the dynamic capture's slot for the draws that reach into the camera, after the glass slot
+  static let dynamicCameraSlot = glassDrawSlot + 1
+
+  /// encodes the deformed draws whose bounds reach into the camera for the passes that draw them from the camera
+  private func encodeDynamicCull(_ viewProjection: Akari.Matrix4) -> Bool
+  {
+    guard
+      !geometry.dynamicBatch.isEmpty,
+      let capture = geometry.dynamicCapture,
+      let visibility = geometry.deformer.cameraVisibility(viewProjection)
+    else { return false }
+
+    return labgl.captureEncodeCulled(capture, visibility: visibility, offset: 0, slot: Self.dynamicCameraSlot, instanceStride: 0) != 0
   }
 
   private func encodeCameraCull(_ viewProjection: Akari.Matrix4) -> Bool
@@ -436,6 +452,7 @@ extension Akari.LabFXEngine
       cull.generation = generation
       cull.count = 0
       cull.reset = true
+
       var bounds: UnsafePointer<Float>? = nil
       let count = Int(labgl.captureIndirectDrawBounds(capture, bounds: &bounds))
       guard
@@ -467,6 +484,7 @@ extension Akari.LabFXEngine
         cull.lastVisible != 0,
         let p = gl.mapBuffer(cull.bounds)
       else { return false }
+
       p.copyMemory(from: bounds, byteCount: count * 6 * MemoryLayout<Float>.size)
       gl.unmapBuffer(cull.bounds)
       cull.count = count
@@ -484,9 +502,7 @@ extension Akari.LabFXEngine
                                      slot: UInt32(Self.cameraCullSlot), instanceStride: 0) != 0
   }
 
-  /// After the early replay: builds the Hi-Z of what it drew, tests every draw in
-  /// the frustum against it and encodes those the early replay missed for the late
-  /// one.
+  /// after the early replay, builds its hi z, tests every draw in the frustum and encodes the ones it missed for the late replay
   func encodeLateCull() -> Bool
   {
     guard
@@ -508,7 +524,8 @@ extension Akari.LabFXEngine
     guard position != 0 else { return false }
 
     let first = cull.levels[0]
-    let hzbFirst = cull.kernels[.hzbFirst], hzbReduce = cull.kernels[.hzbReduce]
+    let hzbFirst = cull.kernels[.hzbFirst]
+    let hzbReduce = cull.kernels[.hzbReduce]
     hzbFirst.set(.params, SIMD4<Int32>(Int32(sizes.render.width), Int32(sizes.render.height), first.y, first.z))
     hzbFirst.bind(cull.hzb)
     hzbFirst.sample(position, at: 1)
@@ -534,7 +551,7 @@ extension Akari.LabFXEngine
                                      slot: UInt32(Self.cameraLateCullSlot), instanceStride: 0) != 0
   }
 
-  /// Lays the Hi-Z levels out for the render size, from half of it down to one texel.
+  /// lays out the hi z levels for the render size, from half of it down to one texel.
   private func ensureHzb(_ cull: inout CameraCull) -> Bool
   {
     let size = SIMD2(max(sizes.render.width, 1), max(sizes.render.height, 1))
@@ -544,11 +561,13 @@ extension Akari.LabFXEngine
     var offset = 0
     var w = (size.x + 1) / 2
     var h = (size.y + 1) / 2
+
     while true
     {
       levels.append(SIMD4(Int32(offset), Int32(w), Int32(h), 0))
       offset += w * h
       if w == 1, h == 1 { break }
+
       w = (w + 1) / 2
       h = (h + 1) / 2
     }
@@ -579,8 +598,10 @@ extension Akari.LabFXEngine
 
     cull.levels = levels
     cull.levelSize = size
+
     // the survivors were tested at the old size.
     cull.reset = true
+
     return true
   }
 }

@@ -52,10 +52,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// @class HdAkariBasisCurves
-///
-/// A `UsdGeomBasisCurves`, drawn as tubes of its `widths` along the evaluated curves.
-///
+/// a `UsdGeomBasisCurves` drawn as tubes of its `widths` along the evaluated curves
 class HdAkariBasisCurves final : public HdBasisCurves
 {
 public:
@@ -85,10 +82,16 @@ protected:
 
 private:
   uint64_t _dataGeneration = 0;
-  /// The tessellated tubes, reused while only a display property changes.
+
+  /// the tessellated tubes, reused while only a display property changes
   bool _geometryBuilt = false;
   VtVec3fArray _tubePoints;
   VtVec3iArray _tubeTriangles;
+
+  /// what the last topology revision was given for
+  VtVec3iArray _topologyTriangles;
+  VtVec2fArray _topologyUvs;
+  uint64_t _topologyRevision = 0;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

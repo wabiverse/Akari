@@ -43,18 +43,17 @@ import AkariRender
 import HdAkari
 import HydraKit
 
-/// Registers a live ``Akari/RenderEngine`` with Hydra.
+/// registers a live akari render engine with hydra
 public func registerAkariRenderer(engine: Akari.RenderEngine)
 {
-  // Explicitly make its TF_REGISTRY_FUNCTION run.
+  // explicitly make its TF_REGISTRY_FUNCTION run.
   AkariHdEnsureLinked()
 
   AkariHydraSetRenderEngine(Unmanaged.passRetained(engine).toOpaque())
   AkariHydraSetRenderDelegate(Unmanaged.passRetained(Akari.RenderDelegate()).toOpaque())
 }
 
-/// Runs `body` with `engine` as the one Akari render delegates made meanwhile draw with, so a second
-/// Hydra engine gets an Akari engine of its own. `engine` has to outlive what `body` makes.
+/// runs `body` with `engine` as the engine new akari render delegates draw with, so a second hydra engine gets its own, `engine` must outlive what `body` makes
 public func withAkariRenderer<T>(_ engine: Akari.RenderEngine, _ body: () -> T) -> T
 {
   let registered = AkariHydraGetRenderEngine()
@@ -63,7 +62,7 @@ public func withAkariRenderer<T>(_ engine: Akari.RenderEngine, _ body: () -> T) 
   return body()
 }
 
-/// Clears and releases the registered engine + delegate.
+/// clears and releases the registered engine and delegate
 public func unregisterAkariRenderer()
 {
   if let raw = AkariHydraGetRenderEngine()
@@ -79,36 +78,67 @@ public func unregisterAkariRenderer()
   }
 }
 
-/// The per-frame callback the C++ `HdAkariRenderPass` invokes.
-@_cdecl("AkariEngineRenderFrame")
-public func AkariEngineRenderFrame(_ engine: UnsafeMutableRawPointer?,
-                                   _ hgi: Pixar.HgiMetal?,
-                                   _ renderParam: Pixar.HdAkariRenderParam,
-                                   _ colorBuffer: Pixar.HdAkariRenderBuffer?,
-                                   _ depthBuffer: Pixar.HdAkariRenderBuffer?,
-                                   _ primIdBuffer: Pixar.HdAkariRenderBuffer?,
-                                   _ instanceIdBuffer: Pixar.HdAkariRenderBuffer?,
-                                   _ viewMatrix: UnsafePointer<Double>?,
-                                   _ projMatrix: UnsafePointer<Double>?,
-                                   _ width: Int32,
-                                   _ height: Int32)
-{
-  guard let engine, let hgi else { return }
-  let renderer = Unmanaged<Akari.RenderEngine>.fromOpaque(engine).takeUnretainedValue()
+/// the per-frame callback the c++ `HdAkariRenderPass` invokes.
+#if canImport(HgiMetal)
+  @_cdecl("AkariEngineRenderFrame")
+  public func AkariEngineRenderFrame(_ engine: UnsafeMutableRawPointer?,
+                                     _ hgi: Pixar.HgiMetal?,
+                                     _ renderParam: Pixar.HdAkariRenderParam,
+                                     _ colorBuffer: Pixar.HdAkariRenderBuffer?,
+                                     _ depthBuffer: Pixar.HdAkariRenderBuffer?,
+                                     _ primIdBuffer: Pixar.HdAkariRenderBuffer?,
+                                     _ instanceIdBuffer: Pixar.HdAkariRenderBuffer?,
+                                     _ viewMatrix: UnsafePointer<Double>?,
+                                     _ projMatrix: UnsafePointer<Double>?,
+                                     _ width: Int32,
+                                     _ height: Int32)
+  {
+    guard let engine, let hgi else { return }
+    let renderer = Unmanaged<Akari.RenderEngine>.fromOpaque(engine).takeUnretainedValue()
 
-  renderer.renderFrame(hgi: hgi,
-                       renderParam: renderParam,
-                       color: colorBuffer,
-                       depth: depthBuffer,
-                       primId: primIdBuffer,
-                       instanceId: instanceIdBuffer,
-                       view: floats16(viewMatrix),
-                       projection: floats16(projMatrix),
-                       width: Int(width),
-                       height: Int(height))
-}
+    renderer.renderFrame(hgi: hgi,
+                         renderParam: renderParam,
+                         color: colorBuffer,
+                         depth: depthBuffer,
+                         primId: primIdBuffer,
+                         instanceId: instanceIdBuffer,
+                         view: floats16(viewMatrix),
+                         projection: floats16(projMatrix),
+                         width: Int(width),
+                         height: Int(height))
+  }
+#else
+  @_cdecl("AkariEngineRenderFrame")
+  public func AkariEngineRenderFrame(_ engine: UnsafeMutableRawPointer?,
+                                     _ hgi: UnsafeMutableRawPointer?,
+                                     _ renderParam: Pixar.HdAkariRenderParam,
+                                     _ colorBuffer: Pixar.HdAkariRenderBuffer?,
+                                     _ depthBuffer: Pixar.HdAkariRenderBuffer?,
+                                     _ primIdBuffer: Pixar.HdAkariRenderBuffer?,
+                                     _ instanceIdBuffer: Pixar.HdAkariRenderBuffer?,
+                                     _ viewMatrix: UnsafePointer<Double>?,
+                                     _ projMatrix: UnsafePointer<Double>?,
+                                     _ width: Int32,
+                                     _ height: Int32)
+  {
+    guard let engine, let hgi else { return }
+    let renderer = Unmanaged<Akari.RenderEngine>.fromOpaque(engine).takeUnretainedValue()
+    let hgiMetal = hgi.assumingMemoryBound(to: Pixar.HgiMetal.self)
 
-/// Copy a 4x4 double matrix into 16 floats.
+    renderer.renderFrame(hgi: hgiMetal.pointee,
+                         renderParam: renderParam,
+                         color: colorBuffer,
+                         depth: depthBuffer,
+                         primId: primIdBuffer,
+                         instanceId: instanceIdBuffer,
+                         view: floats16(viewMatrix),
+                         projection: floats16(projMatrix),
+                         width: Int(width),
+                         height: Int(height))
+  }
+#endif
+
+/// copy a 4x4 double matrix into 16 floats.
 private func floats16(_ p: UnsafePointer<Double>?) -> [Float]
 {
   guard let p else { return Akari.Matrix4.identity.m }

@@ -51,8 +51,7 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// The strip along the window's bottom: the hotkeys of whatever the pointer is
-  /// over at its left, the scene's memory and Akari's version at its right.
+  /// the strip along the window's bottom, hotkeys on the left and memory and version on the right
   struct StatusBar
   {
     var layout: Layout?
@@ -156,7 +155,7 @@ extension Kraken
         return view.bounds.contains(view.convert(window.convertPoint(fromScreen: screen), from: nil))
       }
 
-      /// What the pointer is over decides the hints, the viewport's change while a modifier is held.
+      /// what the pointer is over decides the hints, the viewport's change while a modifier is held.
       private func currentHints() -> [Hint]
       {
         guard let content = window?.contentView else { return [] }

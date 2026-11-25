@@ -55,8 +55,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// A dome light's latlong image as half float RGBA, top row first, plus a
-/// box filtered copy small enough to bake the environment cube from.
+/// a dome light's latlong image as half float rgba, top row first, with a small filtered copy to bake the environment from
 struct HdAkariDomeImage
 {
   int width = 0;
@@ -65,18 +64,20 @@ struct HdAkariDomeImage
   int smallWidth = 0;
   int smallHeight = 0;
   std::vector<uint16_t> small;
-  /// The same copy with its sun left in, for a scene whose own distant light shades as the sun.
+
+  /// the same copy with its sun left in, for a scene whose own distant light shades as the sun
   std::vector<uint16_t> smallFull;
-  /// Sun extraction as radiance over the threshold, toward its energy
-  /// weighted direction (dome space) with its summed irradiance.
+
+  /// the sun pulled out as the radiance over the threshold, along its energy weighted direction with its summed irradiance
   bool hasSun = false;
   float sunX = 0.0f, sunY = 1.0f, sunZ = 0.0f;
   float sunR = 0.0f, sunG = 0.0f, sunB = 0.0f;
-  /// Angular diameter of the disk its energy spreads over, in radians.
+
+  /// the angular diameter in radians of the disk its energy spreads over
   float sunAngle = 0.0f;
 };
 
-/// Reads `path`, nullptr when it can't, free it with HdAkariFreeDomeImage.
+/// reads `path`, null when it can't, free it with `HdAkariFreeDomeImage`
 HDAKARI_API
 HdAkariDomeImage *HdAkariLoadDomeImage(std::string const &path, int smallWidth, float sunThreshold,
                                        float *progress);
@@ -84,11 +85,11 @@ HdAkariDomeImage *HdAkariLoadDomeImage(std::string const &path, int smallWidth, 
 HDAKARI_API
 void HdAkariFreeDomeImage(HdAkariDomeImage *image);
 
-/// The size and sun threshold the renderer loads domes with.
+/// the size and sun threshold the renderer loads domes with
 constexpr int HdAkariDomeSmallWidth = 1024;
 constexpr float HdAkariDomeSunThreshold = 10.0f;
 
-/// Starts reading `path` in the background for the next HdAkariLoadDomeImage of it.
+/// starts reading `path` in the background for the next `HdAkariLoadDomeImage` of it
 HDAKARI_API
 void HdAkariPrefetchDomeImage(std::string const &path, int smallWidth, float sunThreshold);
 

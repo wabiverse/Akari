@@ -47,8 +47,9 @@
 # include <Tf/sharedPtrRetainReleaseHelper.h>
 #else
 # include <pxr/pxr.h>
+# include <HdAkari/swiftInterop.h>
 # include <pxr/base/gf/vec3f.h>
-# include <pxr/base/tf/sharedPtrRetainReleaseHelper.h>
+# include <HdAkari/sharedPtrRetainReleaseHelper.h>
 #endif
 
 #include "HdAkari/api.h"
@@ -68,8 +69,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 class HdSceneDelegate;
 
-/// One material's assigned region within
-/// the shared material atlas texture.
+/// one material's region in the shared material atlas
 struct HdAkariAtlasCell
 {
   float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;   // atlas-space rect, [0,1].
@@ -79,60 +79,50 @@ struct HdAkariAtlasCell
   int constantIndex = -1;                             // untextured: its constants row, the rect unused.
 };
 
-/// The constants rows changed since the last drain, `count` from `first`.
+/// the constants rows changed since the last drain, `count` from `first`.
 struct HdAkariConstantRange
 {
   int first = 0, count = 0;
 };
 
-/// A square pixel region of the atlas
-/// baked since the last drain.
-struct HdAkariAtlasRect
+/// a rect of the atlas baked since the last upload, in texels.
+struct HdAkariAtlasRegion
 {
-  int x = 0, y = 0, size = 0;
+  int x = 0, y = 0, width = 0, height = 0;
 };
 
-/// Which component of each scalar texture feeds it, a UsdUVTexture's r, g, b or a output.
+/// which component of each scalar texture feeds it, a UsdUVTexture's r, g, b or a output.
 struct HdAkariScalarSources
 {
   int roughness = 0, metallic = 0, opacity = 0;
 };
 
-/// @class HdAkariTextureAtlas
-///
-/// Bakes UsdPreviewSurface roughness/metallic/opacity maps, including
-/// multi-tile UDIM sets, into one shared RGBA8 CPU pixel buffer (R =
-/// roughness, G = metallic, B = opacity), laid out as a fixed grid of
-/// square cells in discovery order.
+/// bakes preview surface maps into shared rgba8 atlases, each material packed at its own texture size
 class SWIFT_SHARED_REFERENCE(HdAkariTextureAtlasRetain, HdAkariTextureAtlasRelease)
 HdAkariTextureAtlas
 {
 public:
-  static constexpr int kCellPixels = 256;      // minimum resolution per cell.
-  static constexpr int kMaxCellPixels = 2048;  // cells grow up to this when few materials.
-  static constexpr int kMaxAtlasPixels = 4096; // largest atlas grown cells may fill.
-  static constexpr int kDefaultGridSize = 4;   // fallback if never sized.
-  // the atlas is a fixed 16384x16384 square (supported by all Metal devices),
-  // if we run out of slots, extra materials will share cells via round-robin.
+  // the largest atlas side, which every metal device supports.
   static constexpr int kMaxTexturePixels = 16384;
-  static constexpr int kMaxGridSize = kMaxTexturePixels / kCellPixels;
 
-  // Border reserved inside each cell so mip
-  // levels only sample individual cells.
+  // the border inside each region so mips only sample their own region
   static constexpr int kCellPadding = 16;
   static constexpr int kMaxMipLevel = 3;
 
-  /// Whether a prim has given this material a constants row yet.
+  // regions start and size on this, so every mip level stays on whole BC7 blocks.
+  static constexpr int kRegionAlign = 4 << kMaxMipLevel;
+
+  /// whether a prim has given this material a constants row yet.
   bool HasConstants(std::string const &materialKey)
   {
     std::lock_guard<std::mutex> lock(_mutex);
     return _constantIndex.count(materialKey) != 0;
   }
 
-  /// Sizes the grid to fit the scene's actual unique material count.
+  /// packs every material the scene has at its texture's own size, before the first bake.
   void EnsureGridSized(HdSceneDelegate *sceneDelegate);
 
-  /// Finds (or bakes, on first use) the atlas cell for one material.
+  /// finds or bakes on first use one material's atlas cell
   HdAkariAtlasCell GetOrBakeCell(std::string const &materialKey,
                                  std::string const &roughnessPath, float roughnessConst,
                                  std::string const &metallicPath, float metallicConst,
@@ -141,29 +131,28 @@ public:
                                  std::string const &colorPath, GfVec3f const &colorConst,
                                  std::string const &normalPath,
                                  std::string const &emissivePath, GfVec3f const &emissiveConst,
-                                 HdAkariScalarSources const &sources = HdAkariScalarSources());
+                                 HdAkariScalarSources const &sources = HdAkariScalarSources(),
+                                 GfVec3f const &specularConst = GfVec3f(0.04f));
 
-  /// Rewrites an untextured material's constants row when its emission or opacity changed,
-  /// for either animated over time. Null leaves that one as is. False when there's nothing to do.
+  /// rewrites an untextured material's constants row when its emission or opacity animates, false when there's nothing to do
   bool UpdateConstants(std::string const &materialKey, GfVec3f const *emissive, float const *opacity);
 
-  /// Rewrites an untextured material's row in place, false when it has none.
+  /// rewrites an untextured material's row in place, false when it has none.
   bool UpdateConstantMaterial(std::string const &materialKey, GfVec3f const &color, float opacity, float roughness,
-                              float metallic, float opacityThreshold, GfVec3f const &emissive);
+                              float metallic, float opacityThreshold, GfVec3f const &emissive,
+                              GfVec3f const &specular = GfVec3f(0.04f));
 
-  /// An untextured material's row, false when it has none.
+  /// an untextured material's row, false when it has none.
   bool GetConstants(std::string const &materialKey, float *out);
 
-  /// Drops a material's cell, so its next use bakes it again.
+  /// drops a material's cell, so its next use bakes it again.
   void ForgetCell(std::string const &materialKey);
 
-  /// Marks an untextured material's row with the Ptex map its color streams from, one past its id.
+  /// marks an untextured material's row with the ptex map its color streams from, one past its id.
   void SetConstantsPtexMap(std::string const &materialKey, int map);
 
-  /// Untextured materials skip the atlas, the shaders read their constants from a small
-  /// float table by index instead, kConstantTexels RGBA texels a row: color and opacity,
-  /// roughness, metallic and opacity threshold, emission. Animating one rewrites its row.
-  static constexpr int kConstantTexels = 3;
+  /// untextured materials read constants from a small float table by index instead of the atlas
+  static constexpr int kConstantTexels = 4;
 
   int ConstantCount() const
   {
@@ -171,7 +160,7 @@ public:
     return int(_constants.size() / (kConstantTexels * 4));
   }
 
-  /// Copies `count` rows from `first` into `dst`, kConstantTexels * 4 floats a row.
+  /// copies `count` rows from `first` into `dst`
   void CopyConstants(int first, int count, float *dst) const
   {
     std::lock_guard<std::mutex> lock(_mutex);
@@ -179,7 +168,7 @@ public:
     std::copy(_constants.begin() + first * row, _constants.begin() + (first + count) * row, dst);
   }
 
-  /// The rows written since the last call, empty when none were.
+  /// the rows written since the last call, empty when none were.
   HdAkariConstantRange DrainDirtyConstants()
   {
     std::lock_guard<std::mutex> lock(_mutex);
@@ -190,97 +179,69 @@ public:
     return out;
   }
 
-  /// True once new cells have been baked since the last call.
+  /// true once new cells have been baked since the last call.
   bool ConsumeDirty() { return _dirty.exchange(false, std::memory_order_acq_rel); }
 
-  /// The regions baked since the last
-  /// call, for uploading just those.
-  std::vector<HdAkariAtlasRect> DrainDirtyRects()
-  {
-    std::lock_guard<std::mutex> lock(_mutex);
-    std::vector<HdAkariAtlasRect> out;
-    out.swap(_dirtyRects);
-    return out;
-  }
+  /// hands the regions baked since the last call to the uploader, so the atlas never holds a full size copy
+  int TakeBakedRegions();
 
-  /// Frees the CPU pixels once they're uploaded and nothing is mid bake,
-  /// a later bake starts from zeroed buffers and only its rect uploads.
-  void ReleasePixelsIfIdle()
-  {
-    std::lock_guard<std::mutex> lock(_mutex);
-    if (!_pending.empty() || !_dirtyRects.empty()) return;
-    std::vector<uint8_t>().swap(_pixels);
-    std::vector<uint8_t>().swap(_colorPixels);
-    std::vector<uint8_t>().swap(_normalPixels);
-    std::vector<uint8_t>().swap(_emissivePixels);
-  }
+  HdAkariAtlasRegion BakedRegion(int i) const;
 
-  /// Raw pointer to the RGBA8 (GL_UNSIGNED_BYTE) pixel buffer.
-  uint8_t const SWIFT_RETURNS_INDEPENDENT_VALUE *PixelData() const
-  {
-    std::lock_guard<std::mutex> lock(_mutex);
-    return _pixels.empty() ? nullptr : _pixels.data();
-  }
+  /// one taken region's texels for the material, color, normal or emissive atlas
+  uint8_t const SWIFT_RETURNS_INDEPENDENT_VALUE *BakedPixels(int i, int atlas) const;
 
-  int Width() const { return _gridSize * _cellPixels; }
-  int Height() const { return _gridSize * _cellPixels; }
+  /// frees the regions the uploader took once they're on the gpu.
+  void ReleaseUploaded();
 
-  /// Raw pointer to the diffuseColor RGBA8 pixel buffer.
-  uint8_t const SWIFT_RETURNS_INDEPENDENT_VALUE *ColorPixelData() const
-  {
-    std::lock_guard<std::mutex> lock(_mutex);
-    return _colorPixels.empty() ? nullptr : _colorPixels.data();
-  }
-
-  /// Raw pointer to the tangent space normal RGBA8 pixel buffer.
-  uint8_t const SWIFT_RETURNS_INDEPENDENT_VALUE *NormalPixelData() const
-  {
-    std::lock_guard<std::mutex> lock(_mutex);
-    return _normalPixels.empty() ? nullptr : _normalPixels.data();
-  }
-
-  /// Raw pointer to the emissiveColor RGBA8 pixel buffer.
-  uint8_t const SWIFT_RETURNS_INDEPENDENT_VALUE *EmissivePixelData() const
-  {
-    std::lock_guard<std::mutex> lock(_mutex);
-    return _emissivePixels.empty() ? nullptr : _emissivePixels.data();
-  }
+  int Width() const { return _width.load(std::memory_order_relaxed); }
+  int Height() const { return _height.load(std::memory_order_relaxed); }
 
 private:
-  /// What a cell bakes from.
+  /// what a cell bakes from.
   struct BakeInputs
   {
     std::string roughnessPath, metallicPath, opacityPath, colorPath, normalPath, emissivePath;
     float roughnessConst = 0.0f, metallicConst = 0.0f, opacityConst = 1.0f, opacityThreshold = 0.0f;
+    GfVec3f specularConst{0.04f};
     GfVec3f colorConst{0.0f}, emissiveConst{0.0f};
-    int px0 = 0, py0 = 0, regionSize = 0, contentPx0 = 0, contentPy0 = 0, contentSize = 0;
+    int px0 = 0, py0 = 0, regionW = 0, regionH = 0, contentPx0 = 0, contentPy0 = 0, contentW = 0, contentH = 0;
     int tileMinU = INT_MAX, tileMinV = INT_MAX, tileMaxU = INT_MIN, tileMaxV = INT_MIN;
     HdAkariScalarSources sources;
   };
 
+  /// bakes a region into its own buffers and queues them for upload.
   void BakeRegion(BakeInputs const &in);
-  /// Writes one untextured material's row, the lock held.
+  /// writes one untextured material's row, the lock held.
   void WriteConstants(int index, GfVec3f const &color, float opacity, float roughness, float metallic,
-                      float opacityThreshold, GfVec3f const &emissive);
-  void BakeChannel(int px0, int py0, int regionSize, int channelIndex,
+                      float opacityThreshold, GfVec3f const &emissive, GfVec3f const &specular);
+  void BakeChannel(uint8_t *target, int stride, int px0, int py0, int regionW, int regionH, int channelIndex,
                     std::string const &texPath, float fallbackConst,
                     int tileMinU, int tileMinV, int tileMaxU, int tileMaxV, int sourceChannel = 0);
-  void BakeColorChannel(std::vector<uint8_t> &target, bool decodeSRGB,
-                         int px0, int py0, int regionSize,
+  void BakeColorChannel(uint8_t *target, int stride, bool decodeSRGB,
+                         int px0, int py0, int regionW, int regionH,
                          std::string const &texPath, GfVec3f const &fallbackConst,
                          int tileMinU, int tileMinV, int tileMaxU, int tileMaxV);
 
   mutable std::mutex _mutex;
   std::unordered_map<std::string, HdAkariAtlasCell> _cells;
-  // Materials currently being baked by some other thread.
+
+  // materials currently being baked by some other thread.
   std::unordered_map<std::string, std::shared_future<HdAkariAtlasCell>> _pending;
-  int _nextCell = 0;
-  bool _warnedOverflow = false;      // guards a one-time stderr warning if cells wrap.
-  std::vector<uint8_t> _pixels;      // lazily sized to Width()*Height()*4 on first bake.
-  std::vector<uint8_t> _colorPixels; // same thing, for diffuseColor.
-  std::vector<uint8_t> _normalPixels;   // tangent space normal, flat where untextured.
-  std::vector<uint8_t> _emissivePixels; // emissiveColor.
-  std::vector<HdAkariAtlasRect> _dirtyRects;
+
+  // each planned material's region, and the shelf later materials pack onto below them.
+  std::unordered_map<std::string, HdAkariAtlasRegion> _plan;
+  int _planCap = kMaxTexturePixels;
+  int _shelfX = 0, _shelfY = 0, _shelfRowH = 0;
+  bool _warnedFull = false;
+  /// a baked region's texels for each of the four atlases, held only until uploaded.
+  struct Baked
+  {
+    HdAkariAtlasRegion rect;
+    std::vector<uint8_t> pixels[4];
+  };
+
+  std::vector<Baked> _baked;     // waiting for the uploader.
+  std::vector<Baked> _uploading; // taken by the uploader.
   std::unordered_map<std::string, int> _constantIndex;
   std::vector<float> _constants;
   int _constantsDirtyLo = INT_MAX, _constantsDirtyHi = INT_MIN;
@@ -289,15 +250,18 @@ private:
   SdfPathVector _sizeMaterials;
   std::atomic<size_t> _sizeNext{0};
   std::atomic<size_t> _sizeTextured{0};
+
+  // each textured material's key and native texture size, gathered for the plan.
+  std::vector<std::pair<std::string, HdAkariAtlasRegion>> _sizeItems;
   size_t _sizeFinished = 0;
   std::atomic<bool> _sized{false};
   std::mutex _sizeMutex;
   std::condition_variable _sizeDone;
-  std::atomic<int> _gridSize{kDefaultGridSize};
-  std::atomic<int> _cellPixels{kCellPixels};
+  std::atomic<int> _width{256};
+  std::atomic<int> _height{256};
 };
 
-/// The RGBA texels in each row of the atlas's constants table.
+/// the rgba texels in each row of the atlas's constants table.
 inline int HdAkariConstantTexels() { return HdAkariTextureAtlas::kConstantTexels; }
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -48,35 +48,35 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// Call once, right after opening the usd stage.
+  /// call once right after opening the usd stage
   public func setStageUpAxis(isZUp: Bool)
   {
     stageIsZUp = isZUp
   }
 
-
-  /// Call once, right after opening the usd stage.
+  /// call once right after opening the usd stage
   public func setStageMetersPerUnit(_ metersPerUnit: Double)
   {
     stageMetersPerUnit = metersPerUnit > 0 ? Float(metersPerUnit) : 1
   }
 
-  /// Compute sun direction based on the opened usd stages's upAxis.
+  /// the sun direction in world space, following the opened usd stage's up axis
   func worldSpaceSunDirection(_ light: LightSettings) -> SIMD3<Float>
   {
     guard let swung = swungSun(light)
     else
     {
       if let authored = authoredSunDirection { return Akari.Math.normalize(authored) }
+
       let sky = light.sunDirection
       return stageIsZUp ? SIMD3(sky.x, -sky.z, sky.y) : sky
     }
 
-    let t = Akari.Math.smoothstep(-0.3, 0.05, light.sunHeight)
-    return Akari.Math.normalize(swung.moon + (swung.sun - swung.moon) * t)
+    let blend = Akari.Math.smoothstep(-0.3, 0.05, light.sunHeight)
+    return Akari.Math.normalize(swung.moon + (swung.sun - swung.moon) * blend)
   }
 
-  /// The stage's own sun, its distant light's or its dome's.
+  /// the stage's own sun, from its distant light or its dome
   var authoredSunDirection: SIMD3<Float>?
   {
     environment.distantSun?.direction ?? dome?.sunDirection
@@ -87,10 +87,11 @@ extension Akari.LabFXEngine
     stageIsZUp ? SIMD3(0, 0, 1) : SIMD3(0, 1, 0)
   }
 
-  /// The stage sun's bearing at Sun Height's elevation, and the moon rising opposite it.
+  /// the stage sun's bearing raised to the sun height elevation, plus the moon rising opposite it
   func swungSun(_ light: LightSettings) -> (sun: SIMD3<Float>, moon: SIMD3<Float>)?
   {
     guard light.overridesStageSun, let authored = authoredSunDirection else { return nil }
+
     let up = stageUp
     let level = authored - up * simd_dot(authored, up)
     let bearing = simd_length(level) > 1e-4 ? simd_normalize(level) : (stageIsZUp ? SIMD3(0, -1, 0) : SIMD3(0, 0, 1))
@@ -98,7 +99,7 @@ extension Akari.LabFXEngine
     return (bearing * cos(elevation) + up * sin(elevation), -bearing * cos(elevation) + up * sin(elevation))
   }
 
-  /// Sun Height where the stage's own sun stands, unless the HUD's sliders replace it.
+  /// the sun height of the stage's own sun unless the hud sliders replace it
   func effectiveSunHeight(_ light: LightSettings) -> Float
   {
     guard !light.overridesStageSun, let authored = authoredSunDirection else { return light.sunHeight }
@@ -106,7 +107,7 @@ extension Akari.LabFXEngine
     return min(max(elevation / 75 - 0.01, 0.01), 1)
   }
 
-  /// The sun disk's angular diameter, the stage's distant light's or its dome's, unless the HUD's sliders replace it.
+  /// the sun disk's angular diameter from the stage's distant light or dome unless the hud sliders replace it
   func effectiveSunAngle(_ light: LightSettings) -> Float
   {
     guard !light.overridesStageSun else { return light.sunAngle }
@@ -115,7 +116,7 @@ extension Akari.LabFXEngine
     return light.sunAngle
   }
 
-  /// Where the stage's sun comes from, a rect light far outside the scene or the dome's file.
+  /// where the stage's sun comes from, a rect light far outside the scene or the dome's file
   enum StageSun: Equatable
   {
     case none
@@ -123,12 +124,14 @@ extension Akari.LabFXEngine
     case dome(String)
   }
 
-  /// Starts the HUD's sun sliders where the stage authored its sun, the first frame each stage sun shows.
+  /// starts the hud sun sliders where the stage authored its sun, on the first frame each stage sun shows
   func adoptAuthoredSun()
   {
     guard let authored = authoredSunDirection else { return }
+
     let sun: StageSun = environment.rectSunKey.map { .rect($0) } ?? dome.map { .dome($0.file) } ?? .none
     guard sun != environment.authoredSun else { return }
+
     environment.authoredSun = sun
     let elevation = asin(min(max(simd_dot(authored, stageUp), -1), 1)) * 180 / .pi
     onAuthoredSun?(min(max(elevation / 75 - 0.01, 0.01), 1), environment.distantSun?.angle ?? Float(4 * Double.pi / 180))

@@ -45,7 +45,7 @@ import simd
 
 extension Akari.ShadowAtlas
 {
-  /// What one draw of the atlas renders, the runs each capture plays, and how it's culled to them.
+  /// what one draw of the atlas renders, the runs each capture plays, and how it's culled to them.
   private struct DrawPlan
   {
     var captures: [OpaquePointer]
@@ -56,9 +56,7 @@ extension Akari.ShadowAtlas
     var viewProjection: (Int) -> Akari.Matrix4
   }
 
-  /// The views in `forced` plus those the GPU last reported with tiles to render. The
-  /// static captures redraw only the pages whose static depth went stale, into the
-  /// static atlas, which then seeds every page the dynamic captures draw over.
+  /// the forced views and those the gpu reported tiles for, static captures redraw only stale static pages, which seed the dynamic draws
   func drawViews(staticCaptures: [OpaquePointer], dynamicCaptures: [OpaquePointer],
                  dynamicDrawBounds: [[Float]?],
                  directional: [Cascade], directionalSlots: [Int],
@@ -83,8 +81,8 @@ extension Akari.ShadowAtlas
 
     ensureCulling(count: captures.count)
     let punctualSelected = views.filter { $0 >= Self.punctualViewBase }
-    // Draw each mesh once per shadow view it lands in, so it isn't drawn into views it misses.
-    // If that isn't possible, fall back to drawing each mesh into every view of a group.
+
+    // draws each mesh once per shadow view it lands in, or into every view of a group when that isn't possible
     let bounded = captures.indices.map { ensureDrawBounds(capture: captures[$0], culling: $0, bounds: drawBounds[$0]) }
     var runs: [[Int]] = []
     var culled = [Bool](repeating: true, count: captures.count)
@@ -108,6 +106,7 @@ extension Akari.ShadowAtlas
 
     let instancesCulled = cullInstances(captures: captures, rects: rects, runs: runs, culled: culled,
                                         viewProjection: viewProjection)
+
     // every run's cull of a capture runs as one pass.
     for capture in captures
     {
@@ -126,7 +125,7 @@ extension Akari.ShadowAtlas
     return views
   }
 
-  /// Every view, or once the GPU has reported, the forced ones and those with tiles to render.
+  /// every view, or once the gpu has reported, the forced ones and those with tiles to render.
   private func selectViews(directional: [Cascade], directionalSlots: [Int], punctualViews: Range<Int>,
                            forced: Set<Int>) -> [Int]
   {
@@ -156,7 +155,7 @@ extension Akari.ShadowAtlas
     return views
   }
 
-  /// A capture of GPU instanced draws has no per draw bounds, its instances are culled to each run instead.
+  /// a capture of gpu instanced draws has no per draw bounds, its instances are culled to each run instead.
   private func cullInstances(captures: [OpaquePointer], rects: [GLuint], runs: [[Int]], culled: [Bool],
                              viewProjection: (Int) -> Akari.Matrix4) -> [[Bool]]
   {
@@ -166,6 +165,7 @@ extension Akari.ShadowAtlas
       runs.indices.map
       { r in
         guard !culled[i], r < Self.maxInstanceCullRuns else { return false }
+
         // each view keeps what it sees of the pages it redraws at its own texel size, a run spans many times the finest's scale.
         let matrices = runs[r].map { viewProjection($0).simd }
         let pixelScales = matrices.map
@@ -239,10 +239,13 @@ extension Akari.ShadowAtlas
     gl.useShader(depthShader)
     gl.setShaderBuffer(depthShader, index: 0, buffer: renderMap)
     gl.setShaderImageArgument(depthShader, bufferIndex: 1, texture: image)
-    // LabGL lays uniforms out in first set order, so set them in `U`'s.
+
+    // labgl lays uniforms out in first set order, the order of `U`
     let test: Int32 = (alphaTest && materialAtlas != 0 ? 1 : 0) | (styles != 0 ? 2 : 0)
     gl.setShaderUniform(depthShader, .viewBase, Int32(0))
     gl.setShaderUniform(depthShader, .alphaTest, test)
+    gl.setShaderUniform(depthShader, .glassSun, Int32(glassSun ? 1 : 0))
+    gl.setShaderUniform(depthShader, .glassSlots, Int32(bitPattern: glassSlots))
     if test & 1 != 0
     {
       gl.setShaderImageArgument(depthShader, bufferIndex: 5, texture: materialConstants != 0 ? materialConstants : materialAtlas)
@@ -276,7 +279,7 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// Views culled per instance, each instance drawing to its own view.
+  /// views culled per instance, each instance drawing to its own view.
   private func drawInstanced(_ plan: DrawPlan, _ indices: Range<Int>, res: GLsizei)
   {
     var identity: [Float] = []
@@ -291,8 +294,7 @@ extension Akari.ShadowAtlas
     gl.disableVertexAmplification()
   }
 
-  /// Groups consecutive directional levels, or consecutive lods of one
-  /// punctual face, into amplified runs.
+  /// groups consecutive directional levels or one punctual face's lods into amplified runs
   private static func buildRuns(_ views: [Int]) -> [[Int]]
   {
     func face(_ view: Int) -> Int
@@ -401,7 +403,7 @@ extension Akari.ShadowAtlas
     return culled
   }
 
-  /// Culls each draw against `views`, writing its instance count and the view for each instance.
+  /// culls each draw against `views`, writing its instance count and the view for each instance.
   private func cullPerView(captures: [OpaquePointer], rects: [GLuint], views: [Int], slot: Int,
                            viewProjection: (Int) -> Akari.Matrix4) -> Bool
   {
@@ -446,7 +448,7 @@ extension Akari.ShadowAtlas
     return true
   }
 
-  /// One culling state per capture drawn, in the same order.
+  /// one culling state per capture drawn, in the same order.
   private func ensureCulling(count: Int)
   {
     while culling.count > count
@@ -520,7 +522,7 @@ extension Akari.ShadowAtlas
     return entry.count > 0
   }
 
-  /// Retires every tile to render of the views just drawn, covered by a caster or not.
+  /// retires every tile to render of the views just drawn, covered by a caster or not.
   func retireDrawn(views: [Int])
   {
     guard
@@ -543,7 +545,7 @@ extension Akari.ShadowAtlas
     kernel.dispatch((Self.maxViews * Self.tilemapRes * Self.tilemapRes + 63) / 64)
   }
 
-  /// Resets the static pages about to be redrawn to the far value.
+  /// resets the static pages about to be redrawn to the far value.
   private func dispatchPageClear()
   {
     guard
@@ -556,7 +558,7 @@ extension Akari.ShadowAtlas
     kernels[.pageClear].dispatch(indirect: buffers[.clearArgsStatic])
   }
 
-  /// Seeds every page about to be redrawn with its static depth.
+  /// seeds every page about to be redrawn with its static depth.
   private func dispatchPageCopy()
   {
     guard
@@ -570,7 +572,7 @@ extension Akari.ShadowAtlas
     kernels[.pageCopy].dispatch(indirect: buffers[.clearArgs])
   }
 
-  /// Lists the pages a render map draws into, as the indirect page kernels' z.
+  /// lists the pages a render map draws into, as the indirect page kernels' z.
   private func buildPageList(renderMap: GLuint, list: GLuint, args: GLuint) -> Bool
   {
     guard

@@ -64,21 +64,34 @@ extension Kraken.SceneEdit
                      components: count == 1 || count == 3 ? count : 0, values: numbers)
   }
 
-  /// `shader`'s definition in the Sdr registry, nil when none is registered.
+  /// `shader`'s definition in the sdr registry, nil when none is registered.
   nonisolated static func definition(_ shader: Pixar.UsdShadeShader) -> Pixar.SdrShaderNode?
   {
     var id = Tf.Token()
     guard shader.GetShaderId(&id) else { return nil }
-    return Pixar.SdrRegistry.GetInstance().GetShaderNodeByIdentifier(id, Pixar.TfTokenVector())
+
+    #if compiler(>=6.4) && canImport(Usd)
+      return Pixar.SdrRegistry.GetInstance().GetShaderNodeByIdentifier(id, Pixar.TfTokenVector())
+    #else
+      return Pixar.SdrRegistry.GetInstance().__GetShaderNodeByIdentifierUnsafe(id, Pixar.TfTokenVector()).pointee
+    #endif
   }
 
-  /// The type `name` takes when `prim` is a shader whose definition has that input.
+  /// the type `name` takes when `prim` is a shader whose definition has that input.
   nonisolated static func definedType(_ prim: UsdPrim, _ name: Tf.Token) -> Sdf.ValueTypeName?
   {
     let namespace = Tf.Token.inputs.string
-    guard prim.isA(.shader), name.string.hasPrefix(namespace),
-          let property = definition(Pixar.UsdShadeShader(prim))?.GetShaderInput(Tf.Token(String(name.string.dropFirst(namespace.count))))
-    else { return nil }
+    
+    #if compiler(>=6.4) && canImport(Usd)
+      guard prim.isA(.shader), name.string.hasPrefix(namespace),
+            let property = definition(Pixar.UsdShadeShader(prim))?.GetShaderInput(Tf.Token(String(name.string.dropFirst(namespace.count))))
+      else { return nil }
+    #else
+      guard prim.isA(.shader), name.string.hasPrefix(namespace),
+            let property = definition(Pixar.UsdShadeShader(prim))?.__GetShaderInputUnsafe(Tf.Token(String(name.string.dropFirst(namespace.count)))).pointee
+      else { return nil }
+    #endif
+    
     return property.sdfType
   }
 
@@ -141,7 +154,7 @@ extension Kraken.SceneEdit
     out.materialRoute = Kraken.Authoring.site(stage, out.shader)?.label ?? ""
     func described(_ input: Pixar.UsdShadeInput) -> Attribute
     {
-      #if compiler(>=6.4)
+      #if compiler(>=6.4) && canImport(Usd)
         var a = describe(input.GetAttrConsuming(), t)
       #else
         var a = describe(input.GetAttr(), t)
@@ -149,13 +162,19 @@ extension Kraken.SceneEdit
       a.texture = source(of: input, t)
       return a
     }
+
     // every input the definition has, at its default until authored, on the page the definition puts it.
     var listed = Set<Tf.Token>()
     if let node = definition(shader)
     {
       for name in node.shaderInputNames
       {
-        guard let property = node.GetShaderInput(name) else { continue }
+        #if compiler(>=6.4) && canImport(Usd)
+          guard let property = node.GetShaderInput(name) else { continue }
+        #else
+          let property = node.__GetShaderInputUnsafe(name).pointee
+        #endif
+        
         let input = shader.GetInput(name)
         var a = input.IsDefined() ? described(input)
           : describe(Tf.Token(Tf.Token.inputs.string + name.string), property.defaultValueAsSdfType,
@@ -177,7 +196,7 @@ extension Kraken.SceneEdit
     return out
   }
 
-  /// The texture file, or else the shader, feeding `input`, empty when nothing does.
+  /// the texture file, or else the shader, feeding `input`, empty when nothing does.
   nonisolated static func source(of input: Pixar.UsdShadeInput, _ t: Pixar.UsdTimeCode) -> String
   {
     guard input.HasConnectedSource() else { return "" }
@@ -221,7 +240,7 @@ extension Kraken.SceneEdit
     }
   }
 
-  /// Animated attributes get a key at `time`, since their time samples would override a default value.
+  /// animated attributes get a key at `time`, since their time samples would override a default value.
   @discardableResult
   nonisolated static func setValue(_ stage: UsdStage, _ path: String, _ name: Tf.Token, _ values: [Double],
                                    type: Sdf.ValueTypeName, time timeCode: Double? = nil) -> Bool
@@ -247,7 +266,7 @@ extension Kraken.SceneEdit
     return wrote
   }
 
-  /// Writes up to three numbers to `attribute`, converted to its type, at `time`.
+  /// writes up to three numbers to `attribute`, converted to its type, at `time`.
   nonisolated static func assign(_ attribute: Usd.Attribute, _ values: [Double], _ time: Pixar.UsdTimeCode) -> Bool
   {
     guard !values.isEmpty else { return false }
@@ -288,7 +307,7 @@ extension Kraken.SceneEdit
     Kraken.Authoring.edit(stage, path) { prim, _ in prim.SetInstanceable(instanceable) }
   }
 
-  /// The UsdPreviewSurface on the universal surface of the material whose ri surface is `shader`.
+  /// the UsdPreviewSurface on the universal surface of the material whose ri surface is `shader`.
   nonisolated static func previewOf(_ shader: UsdPrim) -> UsdPrim?
   {
     var p = shader.GetParent()
@@ -309,13 +328,14 @@ extension Kraken.SceneEdit
     return source(.universalRenderContext, .usdPreviewSurface)
   }
 
-  /// Writes `shader`'s PxrSurface onto its preview with HdAkari's mapping, skipping connected inputs.
+  /// writes `shader`'s PxrSurface onto its preview with HdAkari's mapping, skipping connected inputs.
   nonisolated static func syncPreview(_ stage: UsdStage, _ shader: UsdPrim)
   {
     guard let preview = previewOf(shader) else { return }
     let t = Pixar.UsdTimeCode.Default()
     let pxr = Pixar.UsdShadeShader(shader), surface = Pixar.UsdShadeShader(preview)
-    // an input a shader doesn't have comes back without a prim, which USD throws on, not just invalid.
+
+    // an input a shader doesn't have comes back without a prim, which usd throws on, not just invalid.
     func authored(_ s: Pixar.UsdShadeShader, _ input: Kraken.ShaderInput) -> Pixar.UsdShadeInput?
     {
       let found = s.GetInput(input.token)
@@ -330,7 +350,7 @@ extension Kraken.SceneEdit
     var pxrSurface = Pixar.HdAkariPxrSurface()
     for input in pxr.GetInputs(true)
     {
-      #if compiler(>=6.4)
+      #if compiler(>=6.4) && canImport(Usd)
         let attribute = input.GetAttrConsuming()
       #else
         let attribute = input.GetAttr()
@@ -372,20 +392,45 @@ extension Kraken.SceneEdit
     }
   }
 
-  /// A PxrSurface material for `path` on the ri surface, its UsdPreviewSurface on the universal one, in the department layer.
+  /// every material on the stage by path
+  nonisolated static func materials(_ stage: UsdStage) -> [String]
+  {
+    stage.traverse().filter { $0.isA(.material) }.map { $0.GetPath().string }
+  }
+
+  /// binds the material at `material` to the prim at `path`.
+  @discardableResult
+  nonisolated static func bindMaterial(_ stage: UsdStage, _ path: String, _ material: String) -> Bool
+  {
+    let found = stage.GetPrimAtPath(Sdf.Path(material))
+    guard found.isValid, found.isA(.material) else { return false }
+    return Kraken.Authoring.edit(stage, path)
+    { prim, _ in
+      guard !prim.IsInstanceProxy() else { return false }
+      return UsdShade.MaterialBindingAPI.apply(prim).bind(Pixar.UsdShadeMaterial(found))
+    }
+  }
+
   nonisolated static func newMaterial(_ stage: UsdStage, _ path: String) -> String
   {
     guard let target = prim(stage, path), !target.IsInstanceProxy() else { return "" }
+    return newMaterial(stage, binding: target)
+  }
+
+  /// a new material in a scope, bound to a prim when given
+  nonisolated static func newMaterial(_ stage: UsdStage, binding target: UsdPrim?, named name: String = "Material",
+                                      in scopePath: String = "") -> String
+  {
     let department = Kraken.Authoring.department(stage)
     Pixar.HdAkariJournalWatch(department)
     let previous = Kraken.Authoring.editTarget(stage)
-    stage.SetEditTarget(Kraken.Authoring.target(department))
+    stage.SetEditTarget(Kraken.Authoring.departmentTarget(stage))
     defer { stage.SetEditTarget(previous) }
     let home = stage.GetDefaultPrim()
     let owner: Pixar.SdfPath = home.isValid ? home.getPath() : Sdf.Path.absoluteRootPath()
-    let scope = owner.AppendChild(Tf.Token("Materials"))
+    let scope = scopePath.isEmpty ? owner.AppendChild(Tf.Token("Materials")) : Sdf.Path(scopePath)
     if !stage.GetPrimAtPath(scope).isValid { _ = stage.DefinePrim(scope, .scope) }
-    let materialPath = uniqueChild(stage, scope, "Material")
+    let materialPath = uniqueChild(stage, scope, name.isEmpty ? "Material" : name)
     let material = UsdShade.Material.define(stage, path: materialPath)
     var shader = UsdShade.Shader.define(stage, path: materialPath.AppendChild(UsdShade.Shader.ShaderId.pxrSurface.getToken()))
     _ = shader.createIdAttr(.pxrSurface)
@@ -410,7 +455,7 @@ extension Kraken.SceneEdit
     _ = preview.createIdAttr(.usdPreviewSurface)
     let surface = preview.CreateOutput(.surface, .token)
     _ = material.createSurfaceOutput().ConnectToSource(surface)
-    _ = UsdShade.MaterialBindingAPI.apply(target).bind(material)
+    if let target, !target.IsInstanceProxy() { _ = UsdShade.MaterialBindingAPI.apply(target).bind(material) }
     syncPreview(stage, shader.GetPrim())
     return materialPath.string
   }

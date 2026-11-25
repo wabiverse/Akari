@@ -40,6 +40,12 @@
 
 import Foundation
 
+#if !canImport(Usd)
+  @_exported import HydraKit
+
+  public typealias Pixar = pxr
+#endif
+
 public extension Bundle
 {
   /**
@@ -57,21 +63,21 @@ public extension Bundle
   }
 
   static let akari: Bundle = {
-    // a bundled app nests compiled resources under Contents/Resources, so look there before .module.
+    // a bundled app keeps compiled resources under contents resources, so look there before the module bundle
     if let bundle = akariBundle("Akari_AkariRender")
     { return bundle }
     return .module
   }()
 
   static let hdAkari: Bundle = {
-    // a bundled app nests compiled resources under Contents/Resources, so look there before .module.
+    // a bundled app keeps compiled resources under contents resources, so look there before the module bundle
     if let bundle = akariBundle("Akari_HdAkari")
     { return bundle }
     return .module
   }()
 
   static let fonts: Bundle = {
-    // a bundled app nests compiled resources under Contents/Resources, so look there before .module.
+    // a bundled app keeps compiled resources under contents resources, so look there before the module bundle
     if let bundle = akariBundle("SwiftLabGL_LabGL")
     { return bundle }
     return .module

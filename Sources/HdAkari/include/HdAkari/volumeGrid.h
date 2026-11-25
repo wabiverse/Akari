@@ -53,9 +53,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// A VDB float grid resampled to a dense box of at most `maxResolution` voxels on its
-/// longest side, box filtered. `localFromTexture` (row major, row vectors) takes the
-/// box's [0, 1] texture coordinates to the grid's own space.
+/// a vdb float grid resampled to a dense box at most `maxResolution` voxels long, with the matrix to the grid's own space
 struct HdAkariVolumeGrid
 {
   int width = 0;
@@ -66,8 +64,7 @@ struct HdAkariVolumeGrid
   double localFromTexture[16] = {};
 };
 
-/// Reads `gridName` (or the first float grid) from the VDB at `path`, nullptr when it can't,
-/// free it with HdAkariFreeVolumeGrid.
+/// reads a float grid from the vdb at `path`, null when it can't, freed with `HdAkariFreeVolumeGrid`
 HDAKARI_API
 HdAkariVolumeGrid *HdAkariLoadVolumeGrid(std::string const &path, std::string const &gridName, int maxResolution);
 

@@ -43,7 +43,7 @@ import LabGL
 
 extension Akari
 {
-  /// Uniforms the compute and depth kernels declare, `index` naming one of a numbered family.
+  /// uniforms the compute and depth kernels declare, `index` picks one of a numbered family
   enum ComputeUniform: String, CaseIterable
   {
     case alphaTest = "u_alphaTest"
@@ -59,11 +59,18 @@ extension Akari
     case dst = "u_dst"
     case eyeToFitEye = "u_eyeToFitEye"
     case eyeToLightRotation = "u_eyeToLightRotation"
+    case glassLight = "u_glassLight"
+    case glassMatrix = "u_glassMatrix"
+    case glassShapeX = "u_glassShapeX"
+    case glassShapeY = "u_glassShapeY"
+    case glassSlots = "u_glassSlots"
+    case glassSun = "u_glassSun"
     case grid
     case gridMax = "u_gridMax"
     case gridMin = "u_gridMin"
     case gridSize = "u_gridSize"
     case invProj = "u_invProj"
+    case ior = "u_ior"
     case invView = "u_invView"
     case l
     case layer
@@ -76,23 +83,28 @@ extension Akari
     case lightY = "u_lightY"
     case lightZ = "u_lightZ"
     case lodRange = "u_lodRange"
+    case march = "u_march"
     case maxViewPerTilemap = "u_max_view_per_tilemap"
     case mode = "u_mode"
     case noise
     case origin
     case params = "u_params"
+    case proj = "u_proj"
     case screen = "u_screen"
     case sim
     case sky = "u_sky"
     case slotCount = "u_slotCount"
     case src = "u_src"
     case step
+    case strength = "u_strength"
     case sun = "u_sun"
     case sunColor = "u_sunColor"
     case sunMap = "u_sunMap"
     case skyTint = "u_skyTint"
     case sunMatrix = "u_sunMatrix"
+    case tile = "u_tile"
     case value = "u_value"
+    case view = "u_view"
     case vgrid
     case viewBase = "u_viewBase"
     case viewProj = "u_viewProj"

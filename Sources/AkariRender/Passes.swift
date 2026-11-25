@@ -43,7 +43,7 @@ import HdAkari
 
 public extension Akari
 {
-  /// Virtual shadow maps for the sun and point lights.
+  /// virtual shadow maps for the sun and point lights.
   struct ShadowPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .shadow
@@ -60,12 +60,12 @@ public extension Akari
                               camera: ctx.camera,
                               settings: ctx.settings,
                               frameIndex: ctx.frameIndex)
-      // TODO: punctual and area lights, once they arrive as Sprims, take
-      // their own tiles out of the same atlas.
+
+      // todo, punctual and area lights take their own tiles of the same atlas once they arrive as sprims
     }
   }
 
-  /// Volume + sphere light probes for indirect diffuse and reflections.
+  /// volume and sphere light probes for indirect diffuse and reflections
   struct LightProbePass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .lightProbes
@@ -81,16 +81,14 @@ public extension Akari
     }
   }
 
-  /// Opaque geometry into a compact G-buffer (deferred) or forward+ shaded.
+  /// opaque geometry into a compact gbuffer or forward shaded
   struct GeometryPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .geometry
     public init() {}
     public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
-      // geometry stage: open the frame, rerecord the synced meshes
-      // into the capture buffers (the selected ones into the outline's),
-      // and set the per frame view matrix.
+      // opens the frame, rerecords changed meshes into the captures and sets the frame's view matrix
       ctx.labfx.beginFrame(width: ctx.target.width,
                            height: ctx.target.height,
                            hgi: ctx.gpu.hgi)
@@ -101,14 +99,15 @@ public extension Akari
                                selection: ctx.selection,
                                planetCloudMarchSteps: ctx.isFinalRender
                                  ? ctx.settings.renderPlanetCloudMarchSteps
-                                 : ctx.settings.planetCloudMarchSteps)
+                                 : ctx.settings.planetCloudMarchSteps,
+                               showsSky: ctx.settings.light.showsSky)
       ctx.labfx.cullStaticGeometry(projection: ctx.unjitteredCamera.projection, view: ctx.camera.view)
 
       ctx.labfx.renderGbufferEarly(wireframe: ctx.settings.shading == .wireframe)
     }
   }
 
-  /// Direct + image based lighting.
+  /// direct and image based lighting
   struct LightingPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .lighting
@@ -119,8 +118,8 @@ public extension Akari
                     Akari.GPU.RenderTargetDesc(width: ctx.target.width,
                                                height: ctx.target.height,
                                                format: .rgba16f))
-      // lighting stage: the deferred resolve shades the G-buffer
-      // with split sum IBL into the scene HDR color.
+
+      // the deferred resolve shades the gbuffer with split sum ibl into the scene's hdr color
       ctx.labfx.setLighting(
         iblEnabled: ctx.settings.features.contains(.imageBasedLighting),
         projection: ctx.camera.projection,
@@ -128,12 +127,13 @@ public extension Akari
         light: ctx.settings.light,
         shadowsEnabled: ctx.settings.features.contains(.shadowMaps),
         shading: ctx.settings.shading,
-        grid: ctx.settings.overlays && !ctx.isFinalRender
+        grid: ctx.settings.overlays && !ctx.isFinalRender,
+        gridProjection: ctx.unjitteredCamera.projection
       )
     }
   }
 
-  /// Screen space global illumination (indirect diffuse bounce).
+  /// screen space global illumination, an indirect diffuse bounce
   struct ScreenSpaceGIPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .screenSpaceGI
@@ -153,7 +153,7 @@ public extension Akari
     }
   }
 
-  /// Screen space reflections with hardware RT as the off screen fallback.
+  /// screen space reflections with hardware rt as the off screen fallback.
   struct ReflectionsPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .reflections
@@ -173,20 +173,22 @@ public extension Akari
       {
         ctx.labfx.setScreenSpaceReflections(maxRoughness: ctx.settings.reflection.maxRoughness)
       }
-      // TODO: hardware RT fill on miss.
+
+      // todo: hardware rt fill on miss.
     }
   }
 
-  /// Sorted forward transparency over the resolved opaque HDR color.
+  /// sorted forward transparency over the resolved opaque hdr color.
   struct TransparencyPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .transparency
     public init() {}
     public func execute(_: inout Akari.GPU.FrameState, _: Akari.GPU.FrameContext) {}
-    // TODO: back to front (or OIT) forward shade transparent prims.
+
+    // todo, forward shade transparent prims back to front
   }
 
-  /// Froxel volumetrics (fog, light shafts).
+  /// froxel volumetrics for fog and light shafts
   struct VolumetricsPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .volumetrics
@@ -207,7 +209,7 @@ public extension Akari
     }
   }
 
-  /// Temporal anti aliasing / reprojection, also stabilizes the SS effects.
+  /// temporal anti aliasing and reprojection, it also steadies the screen space effects
   struct TemporalResolvePass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .temporalResolve
@@ -230,7 +232,7 @@ public extension Akari
     }
   }
 
-  /// Physically based bloom.
+  /// physically based bloom.
   struct BloomPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .bloom
@@ -250,7 +252,7 @@ public extension Akari
     }
   }
 
-  /// Apply view transformation (AgX by default).
+  /// applies the view transform, agx by default
   struct TonemapPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .tonemap
@@ -266,7 +268,7 @@ public extension Akari
     }
   }
 
-  /// Depth of field (bokeh) over the resolved HDR color.
+  /// depth of field over the resolved hdr color
   struct DepthOfFieldPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .depthOfField
@@ -282,25 +284,22 @@ public extension Akari
     }
   }
 
-  /// Hand the final image to the bound color AOV (Hydra composites / presents).
+  /// hands the final image to the bound color aov for hydra to present
   struct PresentPass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .present
     public init() {}
     public func execute(_: inout Akari.GPU.FrameState, _ ctx: Akari.GPU.FrameContext)
     {
-      // present stage: execute the deferred graph, outline the
-      // selection, present, and wrap the final color and the id
-      // + depth textures into the AOVs.
+      // runs the deferred graph, outlines the selection, presents and wraps the color, id and depth into the aovs
       ctx.labfx.present(target: ctx.target,
                         projection: ctx.unjitteredCamera.projection,
                         hgi: ctx.gpu.hgi,
-                        fireflies: ctx.settings.features.contains(.fireflies),
                         lightProbes: ctx.settings.features.contains(.lightProbes) && !ctx.isFinalRender)
     }
   }
 
-  /// Depth-only prepass (Hi-Z seed, overdraw kill, SS-effect input).
+  /// a depth only prepass that seeds the hi z and feeds the screen space effects
   struct DepthPrepass: Akari.GPU.RenderPassNode
   {
     public let id: RenderPassID = .depthPrepass

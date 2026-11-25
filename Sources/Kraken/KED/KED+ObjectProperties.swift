@@ -50,15 +50,68 @@ import class SwiftCrossUI.Published
 
 extension Kraken
 {
-  /// The Object properties, for the active prim.
+  /// the object properties, for the active prim.
   @MainActor
   struct ObjectProperties: View
   {
     @State private var inspector: Inspector
+    /// a new variant typed as set and variant joined by an equals sign
+    @State private var newVariant = ""
 
     init(inspector: Inspector)
     {
       _inspector = State(wrappedValue: inspector)
+    }
+
+    /// the name field, renaming the prim when editing ends
+    @ViewBuilder
+    private var nameField: some View
+    {
+      #if os(macOS)
+        NativeTextField(text: Binding(get: { inspector.name }, set: { _ in }), width: Double(Properties.controlWidth),
+                        onCommit:
+                        { name in
+                          let trimmed = name.trimmingCharacters(in: .whitespaces)
+                          guard let path = inspector.path, !trimmed.isEmpty, trimmed != inspector.name else { return }
+                          inspector.layout?.rename(path, to: trimmed)
+                        })
+      #else
+        Readout(inspector.name)
+      #endif
+    }
+
+    /// the prims variant sets with a field that adds one
+    @ViewBuilder
+    private var variants: some View
+    {
+      ForEach(Array(inspector.variantSets.indices), id: \.self)
+      { i in
+        let set = inspector.variantSets[i]
+        Properties.row(set.name)
+        {
+          Dropdown(options: set.variants,
+                   selection: Binding(get: { set.selection.isEmpty ? nil : set.selection },
+                                      set: { if let v = $0 { inspector.layout?.selectVariant(set: set.name, variant: v) } }))
+        }
+
+        Properties.check("Edit Inside Variant",
+                         Binding(get: { inspector.layout?.editingVariant?.hasSuffix("{\(set.name)=\(set.selection)}") ?? false },
+                                 set: { on in inspector.layout?.editVariant(set: set.name, variant: on ? set.selection : nil) }))
+      }
+
+      #if os(macOS)
+        Properties.row("Add")
+        {
+          NativeTextField(text: $newVariant, width: Double(Properties.controlWidth),
+                          onCommit:
+                          { text in
+                            let parts = text.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                            guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return }
+                            inspector.layout?.addVariant(set: parts[0], variant: parts[1])
+                            newVariant = ""
+                          })
+        }
+      #endif
     }
 
     private func vector(_ title: String, _ keyPath: ReferenceWritableKeyPath<Inspector, SIMD3<Double>>, step: Double,
@@ -84,7 +137,7 @@ extension Kraken
       {
         VStack(alignment: .leading, spacing: 4)
         {
-          Properties.row("Name") { Readout(inspector.name) }
+          Properties.row("Name") { nameField }
           Properties.row("Path") { Readout(inspector.path ?? "") }
           Properties.row("Edits To") { Readout(inspector.route) }
           PropertiesPanel("Transform")
@@ -120,6 +173,11 @@ extension Kraken
             Properties.check("Active", inspector.flag(.active))
           }
 
+          PropertiesPanel("Variants", expanded: !inspector.variantSets.isEmpty)
+          {
+            variants
+          }
+
           PropertiesPanel("Instancing", expanded: false)
           {
             Properties.check("Instanceable", inspector.flag(.instanceable))
@@ -138,7 +196,7 @@ extension Kraken
     }
   }
 
-  /// The Object Data properties, a camera's lens or a light's.
+  /// the object data properties, a camera's lens or a light's.
   @MainActor
   struct DataProperties: View
   {
@@ -149,7 +207,7 @@ extension Kraken
       _inspector = State(wrappedValue: inspector)
     }
 
-    /// A number row, keyable when `name` is set.
+    /// a number row, keyable when `name` is set.
     private func field(_ label: String, _ name: Tf.Token, _ binding: Binding<Double>, step: Double,
                        range: ClosedRange<Double> = -1e9 ... 1e9, _ format: @escaping (Double) -> String) -> some View
     {

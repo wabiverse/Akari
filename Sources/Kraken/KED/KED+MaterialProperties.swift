@@ -50,7 +50,7 @@ import class SwiftCrossUI.Published
 
 extension Kraken
 {
-  /// The Material properties, the surface the active geometry is bound to.
+  /// the material properties, the surface the active geometry is bound to.
   @MainActor
   struct MaterialProperties: View
   {
@@ -67,21 +67,19 @@ extension Kraken
       {
         VStack(alignment: .leading, spacing: 4)
         {
-          if inspector.material.isEmpty
+          Properties.row("Material") { Dropdown(options: choices, selection: chosen) }
+          Properties.row("")
           {
-            Properties.row("Material")
-            {
-              Text("+ New")
-                .font(Properties.font)
-                .foregroundColor(Properties.text)
-                .frame(width: Double(Properties.controlWidth), height: Double(Properties.rowHeight))
-                .background(RoundedRectangle(cornerRadius: 4).fill(Properties.field))
-                .onTapGesture { inspector.newMaterial() }
-            }
+            Text("+ New")
+              .font(Properties.font)
+              .foregroundColor(Properties.text)
+              .frame(width: Double(Properties.controlWidth), height: Double(Properties.rowHeight))
+              .background(RoundedRectangle(cornerRadius: 4).fill(Properties.field))
+              .onTapGesture { inspector.newMaterial() }
           }
-          else
+
+          if !inspector.material.isEmpty
           {
-            Properties.row("Material") { Readout(inspector.material.split(separator: "/").last.map(String.init) ?? "") }
             Properties.row("Surface") { Readout(inspector.shader.split(separator: "/").last.map(String.init) ?? "—") }
             Properties.row("Edits To") { Readout(inspector.materialRoute) }
             PropertiesPanel("Preview")
@@ -111,6 +109,24 @@ extension Kraken
         }
         .padding(6)
       }
+    }
+
+    /// a stage material as the browse dropdown lists it, by its name.
+    struct Choice: Equatable, CustomStringConvertible
+    {
+      var path: String
+      var description: String { path.split(separator: "/").last.map(String.init) ?? path }
+    }
+
+    private var choices: [Choice]
+    {
+      inspector.materials.map(Choice.init)
+    }
+
+    private var chosen: Binding<Choice?>
+    {
+      Binding(get: { inspector.material.isEmpty ? nil : Choice(path: inspector.material) },
+              set: { if let choice = $0 { inspector.bind(material: choice.path) } })
     }
 
     private func page(_ page: Inspector.Page, expanded: Bool) -> some View

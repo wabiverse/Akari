@@ -66,10 +66,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// @class HdAkariSphere
-///
-/// Represents a sphere prim that can be rendered natively by Akari.
-///
+/// a sphere prim akari draws natively
 class HdAkariSphere final : public HdRprim
 {
 public:
@@ -80,7 +77,7 @@ public:
 
   HDAKARI_API
   TfTokenVector const &GetBuiltinPrimvarNames() const override;
-  
+
   HDAKARI_API
   HdDirtyBits GetInitialDirtyBitsMask() const override;
 
@@ -102,9 +99,9 @@ protected:
 
   HdAkariSphere(const HdAkariSphere &) = delete;
   HdAkariSphere &operator=(const HdAkariSphere &) = delete;
-  
+
 private:
-  uint64_t _dataGeneration = 0; // bumped each Sync for GPU cache invalidation
+  uint64_t _dataGeneration = 0; // bumped each sync so gpu caches invalidate
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

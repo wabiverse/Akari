@@ -102,10 +102,12 @@ bool ReadFloat(VtValue const &value, float &out)
   double d = 0.0;
   int i = 0;
   bool b = false;
+
   if (First(value, out)) return true;
   if (First(value, d)) { out = float(d); return true; }
   if (First(value, i)) { out = float(i); return true; }
   if (First(value, b)) { out = b ? 1.0f : 0.0f; return true; }
+
   return false;
 }
 
@@ -113,8 +115,10 @@ bool ReadVec3(VtValue const &value, float &x, float &y, float &z)
 {
   GfVec3f f;
   GfVec3d d;
+
   if (First(value, f)) { x = f[0]; y = f[1]; z = f[2]; return true; }
   if (First(value, d)) { x = float(d[0]); y = float(d[1]); z = float(d[2]); return true; }
+
   return false;
 }
 
@@ -122,8 +126,10 @@ bool ReadVec4(VtValue const &value, float &x, float &y, float &z, float &w)
 {
   GfVec4f f;
   GfVec4d d;
+
   if (First(value, f)) { x = f[0]; y = f[1]; z = f[2]; w = f[3]; return true; }
   if (First(value, d)) { x = float(d[0]); y = float(d[1]); z = float(d[2]); w = float(d[3]); return true; }
+
   return false;
 }
 
@@ -132,8 +138,10 @@ bool ReadVec4(VtValue const &value, float &x, float &y, float &z, float &w)
 void HdAkariSyncStyle(HdSceneDelegate *sceneDelegate, SdfPath const &id, int32_t primId, HdAkariScene *scene)
 {
   auto get = [&](TfToken const &name) { return sceneDelegate->Get(id, name); };
+
   HdAkariStyleData data;
   data.primId = primId;
+
   bool styled = false;
   styled |= ReadFloat(get(_tokens->shadingModel), data.shadingModel);
   styled |= ReadFloat(get(_tokens->color), data.color);
@@ -151,8 +159,10 @@ void HdAkariSyncStyle(HdSceneDelegate *sceneDelegate, SdfPath const &id, int32_t
   ReadVec3(get(_tokens->wireColor), data.wireR, data.wireG, data.wireB);
   ReadFloat(get(_tokens->wireGlow), data.wireGlow);
   ReadFloat(get(_tokens->wireSpacing), data.wireSpacing);
+
   data.hasCenter = ReadVec3(get(_tokens->assembleCenter), data.centerX, data.centerY, data.centerZ);
   ReadFloat(get(_tokens->assembleSize), data.size);
+
   scene->UpdateStyle(data);
 }
 

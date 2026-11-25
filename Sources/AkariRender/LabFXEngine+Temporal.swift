@@ -48,16 +48,27 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// Turns the temporal resolve on for this frame.
+  /// turns the temporal resolve on for this frame
   public func setTemporal(camera: Akari.Camera, samples: Int, moving: Bool)
   {
     let viewProjection = camera.projection * camera.view
     let limit = max(samples, 1)
     let previous = temporal.prevViewProjection
-    let restart = previous == nil || temporal.restart
+
+    // a cut starts every history over, since reprojecting the shot before it ghosts that shot over this one until it fades
+    let cut = temporal.prevView.map { cameraCut(from: $0, to: camera.view) } ?? false
+    if cut
+    {
+      ssgi.needsReset = true
+      ssr.needsReset = true
+    }
+
+    let restart = previous == nil || temporal.restart || cut
+
     let now = ProcessInfo.processInfo.systemUptime
     let elapsed = max(now - temporal.lastFrame, 1e-3)
     temporal.lastFrame = now
+
     let moved = min(10, limit, max(2, Int(Self.movingHistorySeconds / elapsed)))
     temporal.samples = restart ? 1
       : moving && motionBlur.subframes == 0 ? moved
@@ -67,24 +78,36 @@ extension Akari.LabFXEngine
     setMatrix(.currViewProj, viewProjection)
     setVector(.taa, SIMD4(1, restart ? 1 : 0, 1 / Float(temporal.samples), motionBlur.subframes > 0 ? 1 : 0))
     setVector(.taaJitter, SIMD4(taaJitter.x, taaJitter.y, 0, 0))
+
     temporal.reset = restart
     temporal.restart = false
     temporal.prevViewProjection = viewProjection
+    temporal.prevView = camera.view
     temporal.thisFrame = true
   }
 
-  /// Starts every temporal accumulation over on the next frame,
-  /// so a final render frame never blends in the one before it.
+  /// whether the camera jumped between two frames rather than moved, a tenth of the scene or 15 degrees in one frame
+  private func cameraCut(from before: Akari.Matrix4, to now: Akari.Matrix4) -> Bool
+  {
+    let a = before.inverse(), b = now.inverse()
+    let eyeA = a.transform(.zero), eyeB = b.transform(.zero)
+    let aheadA = simd_normalize(a.transform(SIMD3(0, 0, -1)) - eyeA)
+    let aheadB = simd_normalize(b.transform(SIMD3(0, 0, -1)) - eyeB)
+    let extent = sceneBounds.map { simd_length($0.max - $0.min) } ?? 1
+    return simd_distance(eyeA, eyeB) > extent * 0.1 || simd_dot(aheadA, aheadB) < cos(Float.pi / 12)
+  }
+
+  /// starts every temporal accumulation over next frame so a final render frame never blends the one before
   public func resetHistory()
   {
     temporal.prevViewProjection = nil
+    temporal.prevView = nil
     volumetrics.previousViewProjection = nil
     ssgi.needsReset = true
     ssr.needsReset = true
   }
 
-  /// Starts the temporal accumulation over on the next frame, keeping this frame's
-  /// camera and geometry as the previous ones so the next frame still has motion.
+  /// restarts temporal accumulation next frame but keeps this frame's camera and geometry as previous for motion
   public func restartAccumulation()
   {
     temporal.restart = true
@@ -92,7 +115,7 @@ extension Akari.LabFXEngine
     ssr.needsReset = true
   }
 
-  /// Turns on screen space GI for this frame.
+  /// turns on screen space gi for this frame
   public func setScreenSpaceGI(maxRoughness: Float = 0.5)
   {
     let diagonal = sceneBounds.map { $0.max - $0.min } ?? SIMD3(repeating: 1)
@@ -102,16 +125,18 @@ extension Akari.LabFXEngine
     let size = SIMD2<Float>(Float(sizes.half.width * 2), Float(sizes.half.height * 2))
     setVector(.ssgiSize, SIMD4(size.x, size.y, 1 / size.x, 1 / size.y))
     setVector(.horizonScan, SIMD4(maxRoughness, 1, 0, 0))
+
     ssgi.needsReset = false
     ssgi.thisFrame = true
   }
 
-  /// Turns on screen space reflections for this frame.
+  /// turns on screen space reflections for this frame
   public func setScreenSpaceReflections(maxRoughness: Float = 0.5)
   {
     let diagonal = sceneBounds.map { $0.max - $0.min } ?? SIMD3(repeating: 1)
     let distance = max((diagonal * diagonal).sum().squareRoot(), 1e-3)
     setVector(.ssr, SIMD4(maxRoughness, distance, 1, ssr.needsReset || !ssr.passesActive ? 1 : 0))
+
     ssr.needsReset = false
     ssr.thisFrame = true
   }

@@ -45,18 +45,16 @@ import simd
 
 public extension Akari
 {
-  /// Volume (irradiance grid) and sphere (reflection) light probes. The scene
-  /// capture is rasterized once into amplified cube faces, then relit on the
-  /// GPU whenever the sun or lights change.
+  /// volume and sphere light probes, the scene is rasterized once into cube faces then relit on the gpu when the sun or lights change
   final class LightProbes
   {
-    /// A probe authored in USD, as a world space box.
+    /// a probe authored in usd, as a world space box.
     public struct Override: Sendable
     {
       public var min: SIMD3<Float>
       public var max: SIMD3<Float>
       public var isSphere: Bool
-      /// Volume probe counts per axis, zero picks them from the settings.
+      /// volume probe counts per axis, zero picks them from the settings.
       public var resolution: SIMD3<Int32>
 
       public init(min: SIMD3<Float>, max: SIMD3<Float>, isSphere: Bool, resolution: SIMD3<Int32> = .zero)
@@ -68,20 +66,20 @@ public extension Akari
       }
     }
 
-    /// What the relight shades the captured surfaces with.
+    /// what the relight shades the captured surfaces with.
     public struct Lighting: Equatable
     {
       public var sunDirection: SIMD3<Float>
       public var sunHeight: Float
       public var zUp: Bool
       public var iblEnabled: Bool
-      /// The sun's color when `w` is 2, the procedural sky's scaled by `w` otherwise.
+      /// the sun's color when `w` is 2, the procedural sky's scaled by `w` otherwise.
       public var sunColor: SIMD4<Float>
-      /// Changes with the environment cube so the probes relight from it.
+      /// changes with the environment cube so the probes relight from it.
       public var environment: UInt64
-      /// Per point light, position + intensity then color + radius.
+      /// per point light, position and intensity then color and radius
       public var lights: [SIMD4<Float>]
-      /// Scales the environment cube by the dome color, rounded the same way as `environment`.
+      /// scales the environment cube by the dome color, rounded the same way as `environment`.
       public var skyTint = SIMD3<Float>(repeating: 1)
     }
 
@@ -90,7 +88,7 @@ public extension Akari
       var gridMin = SIMD3<Float>(repeating: 0)
       var gridMax = SIMD3<Float>(repeating: 0)
       var dims = SIMD3<Int32>(repeating: 0)
-      /// Center + radius, largest first so smaller ones blend over them.
+      /// center and radius, largest first so smaller ones blend over them
       var spheres: [SIMD4<Float>] = []
 
       var volumeCount: Int
@@ -108,7 +106,7 @@ public extension Akari
         (gridMax - gridMin) / SIMD3<Float>(Akari.Math.max(dims &- 1, SIMD3(repeating: 1)))
       }
 
-      /// How far along the normal a shading point steps before picking its probes.
+      /// how far along the normal a shading point steps before picking its probes.
       var normalBias: Float
       {
         cell.min() * 0.25
@@ -124,7 +122,7 @@ public extension Akari
 
     enum Kernel: Akari.ComputeKernelName
     {
-      case clear, project, sphereBase, sphereFilter
+      case clear, project, sphereBase, sphereFilter, combine
 
       static let label = "probe"
 
@@ -136,6 +134,7 @@ public extension Akari
           case .project: projectMSL
           case .sphereBase: sphereBaseMSL
           case .sphereFilter: sphereFilterMSL
+          case .combine: combineMSL
         }
       }
 
@@ -158,28 +157,41 @@ public extension Akari
     static let octTilesPerRow = 4
     static let sunResolution = 2048
     static let shProbesPerRow = 256
+    /// width and height of a texture holding the volume probes' spherical harmonics.
+    static let shTextureSize = SIMD2(shProbesPerRow * 4, maxVolumeProbes / shProbesPerRow)
 
-    /// Volume probe L1 spherical harmonics, four texels per probe.
+    /// the lights a probe bake gathers.
+    struct LightLayers: OptionSet
+    {
+      let rawValue: Int
+
+      static let sky = LightLayers(rawValue: 1)
+      static let sun = LightLayers(rawValue: 2)
+      static let local = LightLayers(rawValue: 4)
+      static let all: LightLayers = [.sky, .sun, .local]
+    }
+
+    /// volume probe L1 spherical harmonics, four texels per probe.
     public var volumeSH: GLuint
     {
       sh[shIndex]
     }
 
-    /// Octahedral sphere probe radiance, one tile of roughness levels per probe.
+    /// octahedral sphere probe radiance, one tile of roughness levels per probe.
     public private(set) var sphereAtlas: GLuint = 0
-    /// Per sphere probe, center + radius then validity.
+    /// per sphere probe, center and radius then validity
     public private(set) var sphereInfo: GLuint = 0
-    /// Set once every probe has been captured and lit.
-    public private(set) var isReady = false
-    /// Authored probes are in view, set each frame, true until the first frame says otherwise.
+    /// set once every probe has been captured and lit.
+    public internal(set) var isReady = false
+    /// authored probes are in view, set each frame, true until the first frame says otherwise.
     public var inView = true
-    /// Probes in view still baking, which a final render waits out.
+    /// probes in view still baking, which a final render waits out.
     public var isBaking: Bool
     {
       inView && !isReady
     }
 
-    /// Cube faces the current layout needs captured, zero before the first layout.
+    /// cube faces the current layout needs captured, zero before the first layout.
     public var captureTotal: Int
     {
       layoutKey == nil ? 0 : layout.probeCount * 6
@@ -192,7 +204,7 @@ public extension Akari
     var captureShader: GLuint = 0
     var captureTarget: GLuint = 0
     var captureDepth: GLuint = 0
-    /// Albedo + facing, normal + depth, emission + metallic.
+    /// albedo and facing, normal and depth, emission and metallic
     var captureTextures: [GLuint] = []
     var sunTarget: GLuint = 0
     var sunDepth: GLuint = 0
@@ -203,19 +215,39 @@ public extension Akari
     var sh: [GLuint] = [0, 0]
     var shIndex = 0
     var amplification = Akari.ShadowAtlas.Amplification()
-    /// One projection per amplified view, read by the combined instanced
-    /// entry point whose buffer(1) carries the instance transforms.
+    /// one projection per amplified view for the combined instanced entry point
     var captureViewXf: GLuint = 0
     var near: Float = 1e-3
 
     private var resourcesReady = false
     private var failed = false
-    /// Cube faces captured so far out of `captureTotal`.
+    /// cube faces captured so far out of `captureTotal`.
     public private(set) var captured = 0
-    /// Relight dispatches left before the current bake settles.
+    /// relight dispatches left before the current bake settles.
     public private(set) var relightFrames = 0
     private var sunKey: SIMD3<Float>?
     private var lastLighting: Lighting?
+
+    /// bounce light from the sky and from the point lights, baked apart from the sun.
+    var skyLayer: GLuint = 0
+    var localLayer: GLuint = 0
+    /// the sphere probes' base level lit by the sky alone and by the point lights alone
+    var skySpheres: GLuint = 0
+    var localSpheres: GLuint = 0
+    /// ping pong textures for the bounces of a bake.
+    var bounceScratch: [GLuint] = [0, 0]
+    /// sun bounce light for each baked sun direction.
+    var sunBakes: [SunBake] = []
+    /// sun directions from the stage still waiting to be baked ahead of playback.
+    public var plannedSunDirections: [SIMD3<Float>] = []
+    /// whether planned sun directions may bake now.
+    public var bakesAhead = true
+    var skyKey: SkyKey?
+    var localKey: [SIMD4<Float>]?
+    var combineKey: CombineKey?
+    /// bumped each time the sky or local layer bakes
+    var layerBakes = 0
+    var layerFrame: UInt64 = 0
 
     public init()
     {}
@@ -225,7 +257,7 @@ public extension Akari
       release()
     }
 
-    /// Advances the bake by one frame and relights when the lights changed, true when the probes can be sampled.
+    /// advances the bake by one frame and relights when the lights changed, true when the probes can be sampled.
     func update(captures: [OpaquePointer],
                 sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
                 overrides: [Override],
@@ -260,7 +292,7 @@ public extension Akari
           uploadSphereInfo()
           for tex in sh
           {
-            clear(tex, width: Self.shProbesPerRow * 4, height: Self.maxVolumeProbes / Self.shProbesPerRow)
+            clear(tex, width: Self.shTextureSize.x, height: Self.shTextureSize.y)
           }
 
           clear(sphereAtlas, width: Self.octTile.x * Self.octTilesPerRow,
@@ -276,6 +308,7 @@ public extension Akari
 
         captured = 0
         sunKey = nil
+        resetLayers()
       }
 
       let total = layout.probeCount * 6
@@ -287,30 +320,11 @@ public extension Akari
         guard captured == total else { return isReady }
       }
 
-      if sunKey != lighting.sunDirection
-      {
-        drawSunMap(captures, sceneBounds: sceneBounds, direction: lighting.sunDirection, materials: materials)
-        sunKey = lighting.sunDirection
-        lastLighting = nil
-      }
-
-      if lighting != lastLighting
-      {
-        lastLighting = lighting
-        relightFrames = max(settings.bounces, 0) + 1
-      }
-
-      if relightFrames > 0
-      {
-        relight(lighting, environment: environment)
-        relightFrames -= 1
-        isReady = true
-      }
-
-      return isReady
+      return updateLayers(captures, sceneBounds: sceneBounds, materials: materials, environment: environment,
+                          lighting: lighting, bounces: settings.bounces)
     }
 
-    /// Where `view` (probe * 6 + face) lands in the capture atlas.
+    /// where a capture view lands in the capture atlas
     func faceRect(_ view: Int) -> SIMD4<Int32>
     {
       let probe = view / 6
@@ -348,7 +362,7 @@ public extension Akari
       return layout.gridMin + c * layout.cell
     }
 
-    /// Forward and up of each cube face, matching the kernels' `faceBasis`.
+    /// forward and up of each cube face, matching the kernels' `faceBasis`.
     static let faces: [(forward: SIMD3<Float>, up: SIMD3<Float>)] = [
       (SIMD3(1, 0, 0), SIMD3(0, 1, 0)),
       (SIMD3(-1, 0, 0), SIMD3(0, 1, 0)),
@@ -358,7 +372,7 @@ public extension Akari
       (SIMD3(0, 0, -1), SIMD3(0, 1, 0))
     ]
 
-    /// The authored volume's grid, and the authored sphere probes.
+    /// the authored volume's grid, and the authored sphere probes.
     static func place(overrides: [Override],
                       resolution: Int,
                       upAxis _: Int) -> Layout
@@ -408,6 +422,18 @@ public extension Akari
       return layout
     }
 
+    /// forgets the scene the probes were captured in so the next update places, captures and lights them again
+    public func forgetScene()
+    {
+      layoutKey = nil
+      layout = Layout()
+      isReady = false
+      captured = 0
+      sunKey = nil
+      lastLighting = nil
+      resetLayers()
+    }
+
     public func release()
     {
       for target in [captureTarget, sunTarget] where target != 0
@@ -415,7 +441,9 @@ public extension Akari
         gl.deleteRenderTarget(target)
       }
 
-      for var tex in captureTextures + sh + [captureDepth, sunMap, sunDepth, sphereAtlas, sphereInfo] where tex != 0
+      resetLayers()
+      for var tex in captureTextures + sh + bounceScratch + [skyLayer, localLayer, skySpheres, localSpheres, captureDepth, sunMap, sunDepth, sphereAtlas, sphereInfo]
+        where tex != 0
       {
         gl.deleteTextures(count: 1, textures: &tex)
       }
@@ -438,6 +466,7 @@ public extension Akari
       captureTarget = 0; captureDepth = 0; captureTextures = []
       sunTarget = 0; sunDepth = 0; sunMap = 0
       sh = [0, 0]; shIndex = 0
+      skyLayer = 0; localLayer = 0; skySpheres = 0; localSpheres = 0; bounceScratch = [0, 0]
       sphereAtlas = 0; sphereInfo = 0
       captureShader = 0
       captureViewXf = 0
@@ -452,17 +481,17 @@ public extension Akari
       lastLighting = nil
     }
 
-    /// Starts the capture and relight shaders compiling in the background.
+    /// starts the capture and relight shaders compiling in the background.
     func precompileShaders()
     {
       guard captureShader == 0, !failed else { return }
 
       kernels = .precompile()
-      captureShader = gl.precompileShader(name: "akari-probe-capture",
-                                          vertexGLSL: "",
-                                          fragmentGLSL: "",
-                                          vertexMSL: Self.captureMSL,
-                                          fragmentMSL: nil)
+      captureShader = Akari.ShaderSource.shader("akari-probe-capture", msl: Self.captureMSL, owner: self)
+      { owner, fresh in
+        defer { owner.captureShader = fresh }
+        return owner.captureShader
+      }
     }
 
     private func ensureResources() -> Bool
@@ -492,30 +521,24 @@ public extension Akari
         makeTexture(width: Self.atlasWidth, height: Self.atlasHeight, internalFormat: GLint(GL_RGBA16F))
       }
 
-      captureDepth = gl.createMemorylessDepthTexture(width: GLsizei(Self.atlasWidth),
-                                                     height: GLsizei(Self.atlasHeight),
-                                                     layers: 1,
-                                                     internalFormat: GLenum(GL_DEPTH_COMPONENT32F))
+      // both passes draw the whole scene into many views, so their depth stays in memory for the gpu to spill tiles.
+      captureDepth = makeTexture(width: Self.atlasWidth, height: Self.atlasHeight, internalFormat: GLint(GL_DEPTH_COMPONENT32F))
       sunMap = makeTexture(width: Self.sunResolution, height: Self.sunResolution, internalFormat: GLint(GL_R32F))
-      sunDepth = gl.createMemorylessDepthTexture(width: GLsizei(Self.sunResolution),
-                                                 height: GLsizei(Self.sunResolution),
-                                                 layers: 1,
-                                                 internalFormat: GLenum(GL_DEPTH_COMPONENT32F))
-      sh = (0 ..< 2).map
-      { _ in
-        makeTexture(width: Self.shProbesPerRow * 4,
-                    height: Self.maxVolumeProbes / Self.shProbesPerRow,
-                    internalFormat: GLint(GL_RGBA16F))
-      }
+      sunDepth = makeTexture(width: Self.sunResolution, height: Self.sunResolution, internalFormat: GLint(GL_DEPTH_COMPONENT32F))
+      sh = (0 ..< 2).map { _ in makeSHTexture() }
 
-      sphereAtlas = makeTexture(width: Self.octTile.x * Self.octTilesPerRow,
-                                height: Self.octTile.y * Self.maxSphereProbes / Self.octTilesPerRow,
-                                internalFormat: GLint(GL_RGBA16F))
+      bounceScratch = (0 ..< 2).map { _ in makeSHTexture() }
+      skyLayer = makeSHTexture()
+      localLayer = makeSHTexture()
+
+      sphereAtlas = makeSphereAtlas()
+      skySpheres = makeSphereAtlas()
+      localSpheres = makeSphereAtlas()
       sphereInfo = makeTexture(width: Self.maxSphereProbes, height: 2, internalFormat: GL_RGBA32F)
       guard
-        !captureTextures.contains(0), !sh.contains(0),
+        !captureTextures.contains(0), !sh.contains(0), !bounceScratch.contains(0), skyLayer != 0, localLayer != 0,
         captureDepth != 0, sunMap != 0, sunDepth != 0,
-        sphereAtlas != 0, sphereInfo != 0
+        sphereAtlas != 0, sphereInfo != 0, skySpheres != 0, localSpheres != 0
       else { return fail("probe texture allocation failed") }
 
       var rt: GLuint = 0
@@ -541,7 +564,7 @@ public extension Akari
       return true
     }
 
-    /// Every amplified run the capture and sun passes replay, direct and indirect.
+    /// every amplified run the capture and sun passes replay, direct and indirect.
     private func precompileCaptureVariants()
     {
       let runs = [(captureTarget, Akari.ShadowAtlas.maxAmplificationViews), (sunTarget, 1)]
@@ -563,7 +586,7 @@ public extension Akari
       }
     }
 
-    /// Row 0 of the sphere info, row 1 is the validity `project` writes.
+    /// row 0 of the sphere info, row 1 is the validity `project` writes.
     private func uploadSphereInfo()
     {
       var texels = [Float](repeating: 0, count: Self.maxSphereProbes * 2 * 4)
@@ -590,6 +613,19 @@ public extension Akari
       }
 
       gl.bindTexture(target: GL_TEXTURE_2D, texture: 0)
+    }
+
+    /// a texture laid out like `sphereAtlas`, every sphere probe's levels side by side
+    func makeSphereAtlas() -> GLuint
+    {
+      makeTexture(width: Self.octTile.x * Self.octTilesPerRow,
+                  height: Self.octTile.y * Self.maxSphereProbes / Self.octTilesPerRow,
+                  internalFormat: GLint(GL_RGBA16F))
+    }
+
+    func makeSHTexture() -> GLuint
+    {
+      makeTexture(width: Self.shTextureSize.x, height: Self.shTextureSize.y, internalFormat: GLint(GL_RGBA16F))
     }
 
     private func makeTexture(width: Int, height: Int, internalFormat: GLint) -> GLuint

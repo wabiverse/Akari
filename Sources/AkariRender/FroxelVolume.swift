@@ -45,9 +45,9 @@ public extension Akari
 {
   final class FroxelVolume
   {
-    /// Per froxel column, the farthest view depth it shows.
+    /// the farthest view depth each froxel column shows
     public private(set) var depthTexture: GLuint = 0
-    /// Whether `historyTexture` holds last frame's scatter.
+    /// whether `historyTexture` holds the scatter from last frame
     public private(set) var hasHistory = false
     private var depthSize = SIMD2<Int>(0, 0)
     private var history: [GLuint] = [0, 0]
@@ -86,7 +86,7 @@ public extension Akari
       release()
     }
 
-    /// Starts the kernels compiling in the background.
+    /// starts the kernels compiling in the background
     public func precompileShaders()
     {
       guard kernels.isEmpty, !failed else { return }
@@ -94,7 +94,7 @@ public extension Akari
       kernels = .precompile()
     }
 
-    /// Waits for the kernels, once.
+    /// waits for the kernels the first time it is called
     public func prepare() -> Bool
     {
       if built { return true }
@@ -114,7 +114,7 @@ public extension Akari
       return true
     }
 
-    /// Reduces the G-buffer to `depthTexture`, one threadgroup per froxel column.
+    /// reduces the gbuffer to `depthTexture` with one threadgroup per froxel column
     public func reduceDepth(gbufferPosition: GLuint,
                             gridWidth: Int,
                             gridHeight: Int,
@@ -133,20 +133,21 @@ public extension Akari
       kernels[.depth].image(depthTexture, at: 0, format: GL_RGBA32F)
       kernels[.depth].sample(gbufferPosition, at: 1)
       kernels[.depth].dispatch(gridWidth, gridHeight)
+
       return true
     }
 
-    /// Last frame's scatter atlas, which the scatter pass reprojects.
+    /// the scatter atlas from last frame, which the scatter pass reprojects
     public var historyTexture: GLuint
     {
       history[historyRead]
     }
 
-    /// Composites each column's slabs front to back into the integrated atlas the deferred
-    /// resolve samples, and keeps the scatter as next frame's history.
+    /// composites each column's slabs front to back into the atlas the deferred resolve samples, and keeps the scatter as history
     public func integrate(scatter: GLuint, integrated: GLuint, gridWidth: Int, gridHeight: Int)
     {
       let historyWrite = history[1 - historyRead]
+
       guard
         built,
         scatter != 0,
@@ -173,10 +174,11 @@ public extension Akari
       built = false
     }
 
-    /// Only reallocates when the froxel grid itself changes size.
+    /// only reallocates when the froxel grid itself changes size
     private func ensureTextures(width: Int, height: Int) -> Bool
     {
       if depthTexture != 0, depthSize == SIMD2(width, height) { return true }
+
       releaseTextures()
 
       depthTexture = makeTexture(width: width, height: height, internalFormat: GL_RGBA32F)
@@ -234,7 +236,7 @@ public extension Akari
       return tex
     }
 
-    /// Farthest view depth under each froxel column.
+    /// the farthest view depth under each froxel column
     private static let depthCommon = """
       ivec2 regionStart(ivec2 froxel, ivec2 grid, ivec2 screen)
       {
@@ -323,7 +325,7 @@ public extension Akari
       }
       """
 
-    /// One thread per froxel column.
+    /// one thread per froxel column
     private static let integrateGLSL = """
       #version 430
       layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;

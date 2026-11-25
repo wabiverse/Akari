@@ -48,8 +48,7 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// Sets the tonemap stage state: exposure, gamma,
-  /// view transform, and the dithering frame seed.
+  /// sets the tonemap state, exposure, gamma, view transform and the dithering frame seed
   public func setTonemap(exposure: Float,
                          gamma: Float,
                          viewTransform: Akari.Color.ViewTransform,
@@ -64,23 +63,18 @@ extension Akari.LabFXEngine
     if viewTransform.uniform != lastTonemap
     {
       lastTonemap = viewTransform.uniform
-
       runtime.setPassTonemap(.tonemap, tonemap: viewTransform.uniform)
     }
   }
 
-  /// Executes the deferred graph, outlines the selection, presents, and wraps the
-  /// final color, prim id and depth textures into the AOV render buffers Hydra
-  /// presents and picks with (LabGL's present stage).
+  /// runs the deferred graph, outlines the selection, presents and wraps the color, prim id and depth into the aovs hydra uses
   public func present(target: Akari.GPU.HydraTarget,
                       projection: Akari.Matrix4,
                       hgi: Pixar.HgiMetal,
-                      fireflies enableFireflies: Bool = false,
                       lightProbes showLightProbes: Bool = false)
   {
     guard let windowHandle else { return }
 
-    fireflies.update(enabled: enableFireflies)
     probeBake.update(enabled: showLightProbes, probes: lightProbes)
 
     ensureShadowBindings()
@@ -106,35 +100,40 @@ extension Akari.LabFXEngine
 
     prepareUpscale()
     syncPtex()
+
     if environment.iblNeedsBake { setIBLPasses(active: true) }
     runtime.render()
     finishAtmosphereFrame()
 
-    // bake the IBL once.
+    // the ibl only needs to bake once
     if environment.iblNeedsBake
     {
       setIBLPasses(active: false)
       environment.dfgNeedsBake = false
       environment.iblNeedsBake = false
+      environment.bakedRevision = environment.revision
     }
 
     labgl.present(windowHandle)
 
-    // hand the graph's final color and id/depth
-    // textures to the AOVs through Hgi.
+    // hand the graph's final color, id and depth textures to the aovs through hgi
     let outputs = [
       (target.color, outlinedTexture),
       (target.primId, runtime.texture(.aov, named: .aovPrimId)),
       (target.instanceId, runtime.texture(.aov, named: .aovInstanceId)),
       (target.depth, runtime.texture(.aov, named: .aovDepth))
     ]
+
     for case let (renderBuffer?, texture) in outputs where texture != 0
     {
       let native = lglGetTextureNativeHandle(texture)
-      if native != 0
-      {
+      guard native != 0 else { continue }
+
+      #if canImport(HgiMetal)
         Pixar.AkariRenderBufferSetExternalTexture(renderBuffer, hgi, native)
-      }
+      #else
+        print("Hydra lacks support for using an external texture...")
+      #endif
     }
   }
 }

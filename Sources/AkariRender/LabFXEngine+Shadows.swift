@@ -39,28 +39,34 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
+import Foundation
 import HdAkari
 import LabGL
 
 public extension Akari.LabFXEngine
 {
-  /// The shadow atlas as the deferred pass sees it, and the casters it draws.
+  /// the shadow atlas as the deferred pass sees it and the casters it draws
   struct Shadows
   {
     var boundAtlas: GLuint = 0
-    /// The static and instanced batches' shadow casters, and the deformed ones, read in place from the batches.
+
+    /// shadow casters of the static and instanced batches and of the deformed ones, read in place from the batches
     var staticCasters: [Akari.ShadowAtlas.Casters] = []
     var dynamicCasters: [Akari.ShadowAtlas.Casters] = []
-    /// Set once the atlas has tiles the deferred pass can sample.
+
+    /// set once the atlas has tiles the deferred pass can sample
     var ready = false
+
+    /// the shadow sun glided toward the animated one this frame, as the viewport does and final renders do not
+    var glidesSun = false
   }
 
-  /// Fits the shadow views to this frame and marks the shadow pages it uses,
-  /// final renders snap the sun direction instead of gliding to it like the
-  /// viewport does.
+  /// fits the shadow views to this frame and marks the pages it uses, final renders snap the sun instead of gliding
   func markShadowPageUsage(camera: Akari.Camera, settings: RenderSettings, isFinalRender: Bool = false)
   {
+    shadows.glidesSun = false
     guard settings.features.contains(.shadowMaps) else { return }
+
     measureLightImportance(camera: camera)
 
     let posTex = runtime.texture(.gbuffer, named: .position)
@@ -76,7 +82,7 @@ public extension Akari.LabFXEngine
                               footprintHeight: max(sizes.render.height, sizes.target.height),
                               lightDirection: Akari.Math.normalize(worldSpaceSunDirection(settings.light)),
                               sceneBounds: sceneBounds,
-                              settings: settings.light.shadow,
+                              settings: sunShadowSettings(settings.light),
                               lights: pointLights.shadowed,
                               punctualFarDistance: Self.punctualFarDistance(sceneBounds),
                               sceneRevision: shadowCasterRevision,
@@ -84,30 +90,32 @@ public extension Akari.LabFXEngine
                               dynamicCasters: shadows.dynamicCasters,
                               volume: volumetrics.froxels,
                               snapSun: isFinalRender)
+    shadows.glidesSun = !isFinalRender
   }
 
+  /// wide suns use coarser shadow tiles so their soft edges fit and the screen blur widens them the rest of the way
+  func sunShadowSettings(_ light: LightSettings) -> ShadowSettings
+  {
+    var shadow = light.shadow
+    let halfAngle = min(effectiveSunAngle(light) * 0.5, 1.5)
+    shadow.levelLodBias += min(max(log2(tan(halfAngle) / tan(2 * .pi / 180)), 0), 1).rounded()
+    return shadow
+  }
 
-  /// Changes with the scene and whenever a capture the shadows draw records again, a reframe
-  /// choosing other meshes or details without the scene changing.
+  /// changes with the scene but not when a capture rerecords, a settling reframe would make every page stale and blink the shadows
   private var shadowCasterRevision: UInt64
   {
-    var revision = lastGeometryRevision
-    for capture in geometry.shadowCaptures
-    {
-      revision = (revision ^ labgl.captureGeneration(capture)) &* 1_099_511_628_211
-    }
-
-    return revision
+    lastGeometryRevision
   }
 
-  /// Redraws whichever tiles `markShadowPageUsage` found
-  /// stale, then binds them for the deferred resolve.
+  /// redraws whichever tiles `markShadowPageUsage` found stale, then binds them for the deferred resolve
   func renderShadows(renderParam: Pixar.HdAkariRenderParam,
                      camera: Akari.Camera,
                      settings: RenderSettings,
                      frameIndex _: UInt64)
   {
     shadows.ready = false
+
     var staticCaptures: [OpaquePointer] = []
     if !geometry.staticBatch.isEmpty, let capture = geometry.staticShadow
     {
@@ -118,13 +126,28 @@ public extension Akari.LabFXEngine
     {
       staticCaptures.append(capture)
     }
-    // the deformed capture's draws move without a rerecord, so their bounds come along.
+
+    // the deformed capture's draws move without a rerecord so their bounds are passed along
     var dynamicCaptures: [OpaquePointer] = []
     var dynamicDrawBounds: [[Float]?] = []
     if !geometry.dynamicBatch.isEmpty, let capture = geometry.deformer.shadowCapture ?? geometry.dynamicCapture
     {
       dynamicCaptures.append(capture)
-      dynamicDrawBounds.append(geometry.dynamicBatch.casterBounds)
+      var bounds = geometry.deformer.drawBounds
+
+      // glass every shadowed light already sees through its glass map is culled here rather than drawn into each view
+      typealias Atlas = Akari.RenderGraph.GlassAtlas
+      let glassMapped = transparency.glass.contains { $0.tile == Atlas.sunTile }
+        && pointLights.shadowed.count <= Atlas.localLights
+      if glassMapped
+      {
+        for draw in geometry.deformer.glassDrawIndices where draw * 6 + 6 <= bounds.count
+        {
+          bounds.replaceSubrange(draw * 6 ..< draw * 6 + 6, with: Akari.Geom.Deformer.nowhere)
+        }
+      }
+
+      dynamicDrawBounds.append(bounds.isEmpty ? geometry.dynamicBatch.casterBounds : bounds)
     }
 
     guard
@@ -133,9 +156,10 @@ public extension Akari.LabFXEngine
       renderParam.GetScene() != nil
     else { return }
 
-    let shadow = settings.light.shadow
+    let shadow = sunShadowSettings(settings.light)
     shadowAtlas.materialAtlas = probes.materials.material
     shadowAtlas.materialConstants = probes.materials.constants
+
     let views = shadowAtlas.render(staticCaptures: staticCaptures,
                                    dynamicCaptures: dynamicCaptures,
                                    dynamicDrawBounds: dynamicDrawBounds,
@@ -143,15 +167,14 @@ public extension Akari.LabFXEngine
     bindShadowViews(views, settings: shadow)
     shadows.ready = true
 
-    // the atlas draws left the light's matrices on the stack,
-    // so put the camera back before the captured replay.
+    // the atlas draws left the light matrices on the stack so put the camera back before the captured replay
     gl.matrixMode(GL_PROJECTION)
     gl.loadMatrix(Akari.Matrix4.reversedDepth(camera.projection).m)
     gl.matrixMode(GL_MODELVIEW)
     gl.loadMatrix(camera.view.m)
   }
 
-  /// A power of two, so animated bounds don't move the cube far planes and restale them.
+  /// rounded up to a power of two so animated bounds do not move the cube far planes and mark them stale
   private static func punctualFarDistance(_ bounds: (min: SIMD3<Float>, max: SIMD3<Float>)) -> Float
   {
     let diagonal = bounds.max - bounds.min
@@ -195,10 +218,7 @@ public extension Akari.LabFXEngine
     importanceGrid.width * importanceGrid.height
   }
 
-  /// Sums each shadowed lights shadowed irradiance over a grid of last frames
-  /// gbuffer, so lights blocked where they stand never count as main, and the
-  /// animated meshes in view, the characters whose shadows move every frame,
-  /// count the most.
+  /// sums each shadowed light's irradiance over last frame's gbuffer so blocked lights never count as main, animated meshes count most
   func measureLightImportance(camera: Akari.Camera)
   {
     if pointLights.onScreen.readback == 0
@@ -233,6 +253,7 @@ public extension Akari.LabFXEngine
       pointLights.texture
     ] + ([.pointShadow0, .pointShadow1, .pointShadow2, .pointShadow3] as [Attachment]).map { runtime.texture(.pointShadow, named: $0) }
     guard textures.allSatisfy({ $0 != 0 }) else { return }
+
     let kernel = pointLights.onScreen.kernel
     kernel.set(.invView, camera.view.inverse())
 
@@ -249,15 +270,15 @@ public extension Akari.LabFXEngine
     let boxes = pointLights.onScreen.boxes[pointLights.onScreen.cursor]
     let bounds = geometry.dynamicBatch.casterBounds
     let boxCount = min(bounds.count / 6, Self.importanceMaxBoxes)
-    if boxes != 0, let p = gl.mapBuffer(boxes)
+    if boxes != 0, let mapped = gl.mapBuffer(boxes)
     {
-      let out = p.assumingMemoryBound(to: Float.self)
-      for b in 0 ..< boxCount
+      let out = mapped.assumingMemoryBound(to: Float.self)
+      for box in 0 ..< boxCount
       {
-        for c in 0 ..< 3
+        for axis in 0 ..< 3
         {
-          out[b * 8 + c] = bounds[b * 6 + c]
-          out[b * 8 + 4 + c] = bounds[b * 6 + 3 + c]
+          out[box * 8 + axis] = bounds[box * 6 + axis]
+          out[box * 8 + 4 + axis] = bounds[box * 6 + 3 + axis]
         }
       }
 
@@ -266,9 +287,10 @@ public extension Akari.LabFXEngine
 
     kernel.set(.params, SIMD4<Float>(Float(min(pointLights.shadowed.count, 16)),
                                      Float(Self.importanceGrid.width), Float(Self.importanceGrid.height), Float(boxCount)))
-    for (i, texture) in textures.enumerated()
+
+    for (index, texture) in textures.enumerated()
     {
-      kernel.sample(texture, at: i, sampler: i)
+      kernel.sample(texture, at: index, sampler: index)
     }
 
     kernel.bind(gl.computeReadbackCurrentBuffer(pointLights.onScreen.readback), boxes)

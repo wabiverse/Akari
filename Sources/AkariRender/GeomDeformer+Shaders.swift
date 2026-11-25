@@ -46,8 +46,7 @@ import LabGL
 
 extension Akari.Geom.Deformer
 {
-  /// Per point of a GPU skinned mesh, its rest point blended by its joints' matrices,
-  /// UsdSkel's linear blend skinning, into the points the rest of the deform reads.
+  /// each point of a gpu skinned mesh blended by its joints' matrices into the points the deform reads
   static let skinBody = """
       if (int(gid) >= PARAMS.x) return;
       INT2 r = skin_ranges[gid];
@@ -92,7 +91,51 @@ extension Akari.Geom.Deformer
     }
     """
 
-  /// Per triangle: its unit normal, and its doubled area for the smooth weighting.
+  /// per refined point of a subdivision surface, its stencil's weighted sum of this frame's cage points.
+  static let subdivideBody = """
+      if (int(gid) >= PARAMS.x) return;
+      int s = stencil_starts[gid], e = stencil_starts[gid + 1];
+      VEC3 p = VEC3(0.0);
+      for (int i = s; i < e; ++i)
+      {
+        int c = stencil_indices[i] * 3;
+        p += stencil_weights[i] * VEC3(cage[c], cage[c + 1], cage[c + 2]);
+      }
+      int o = stencil_targets[gid] * 3;
+      points[o] = p.x;
+      points[o + 1] = p.y;
+      points[o + 2] = p.z;
+    """
+
+  static let subdivideGLSL = glslPrelude + """
+    layout(std430, binding = 0) buffer StencilTargets { int stencil_targets[]; };
+    layout(std430, binding = 1) buffer StencilStarts { int stencil_starts[]; };
+    layout(std430, binding = 2) buffer StencilIndices { int stencil_indices[]; };
+    layout(std430, binding = 3) buffer StencilWeights { float stencil_weights[]; };
+    layout(std430, binding = 4) buffer Cage { float cage[]; };
+    layout(std430, binding = 5) buffer Points { float points[]; };
+    void main()
+    {
+      uint gid = gl_GlobalInvocationID.x;
+      \(subdivideBody)
+    }
+    """
+
+  static let subdivideMSL = mslPrelude + """
+    kernel void compute_main(constant U& u [[buffer(0)]],
+                             device const int* stencil_targets [[buffer(1)]],
+                             device const int* stencil_starts [[buffer(2)]],
+                             device const int* stencil_indices [[buffer(3)]],
+                             device const float* stencil_weights [[buffer(4)]],
+                             device const float* cage [[buffer(5)]],
+                             device float* points [[buffer(6)]],
+                             uint gid [[thread_position_in_grid]])
+    {
+      \(subdivideBody)
+    }
+    """
+
+  /// per triangle: its unit normal, and its doubled area for the smooth weighting.
   static let faceBody = """
       if (int(gid) >= PARAMS.x) return;
       INT4 f = faces[gid];
@@ -105,7 +148,7 @@ extension Akari.Geom.Deformer
       face_normals[gid] = l > 1e-8 ? VEC4(n / l, l) : VEC4(0.0);
     """
 
-  /// Per point: the area weighted smooth normal, and whether its faces meet within 30°.
+  /// per point: the area weighted smooth normal, and whether its faces meet within 30°.
   static let pointBody = """
       if (int(gid) >= PARAMS.x) return;
       int s = face_start[gid], e = face_start[gid + 1];
@@ -128,7 +171,7 @@ extension Akari.Geom.Deformer
       point_normals[gid] = VEC4(smooth_n, is_smooth ? 1.0 : 0.0);
     """
 
-  /// Per triangle corner: the world space vertex `Batch` lays out.
+  /// per triangle corner: the world space vertex `Batch` lays out.
   static let emitBody = """
       if (int(gid) >= PARAMS.x) return;
       INT2 c = corners[gid];
@@ -138,7 +181,29 @@ extension Akari.Geom.Deformer
       VEC3 lp = VEC3(points[p * 3], points[p * 3 + 1], points[p * 3 + 2]);
       VEC4 pn = point_normals[p];
       VEC4 fn = face_normals[face];
+
+      // slot 38 is how the mesh shades: 1 smooth, 2 flat per face, 3 its own normals, 0 smooth up to 30 degrees
+      float shading = xf[base + 38];
       VEC3 n = (pn.w > 0.5 || fn.w <= 0.0) ? pn.xyz : fn.xyz;
+      if (shading > 2.5)
+      {
+        // an authored normal turns the way the surface around its point turned since it was laid out
+        VEC3 given = corner_normals[gid].xyz;
+        VEC3 was = rest_normals[p].xyz;
+        VEC3 axis = cross(was, pn.xyz);
+        float turn = dot(was, pn.xyz);
+        n = turn > -0.9999 ? given * turn + cross(axis, given) + axis * (dot(axis, given) / (1.0 + turn)) : given;
+        float nl = length(n);
+        n = nl > 1e-8 ? n / nl : pn.xyz;
+      }
+      else if (shading > 1.5)
+      {
+        n = fn.w > 0.0 ? fn.xyz : pn.xyz;
+      }
+      else if (shading > 0.5)
+      {
+        n = pn.xyz;
+      }
       int o = int(gid) * 14;
       VEC3 wp = VEC3(xf[base + 0] * lp.x + xf[base + 4] * lp.y + xf[base + 8] * lp.z + xf[base + 12],
                      xf[base + 1] * lp.x + xf[base + 5] * lp.y + xf[base + 9] * lp.z + xf[base + 13],
@@ -161,6 +226,7 @@ extension Akari.Geom.Deformer
         float angle = 1.5707963 + float(k) * 2.0943951;
         VEC3 target = center + (side * cos(angle) + lift * sin(angle)) * size;
         float hash = fract(sin(float(int(gid) / 3) * 12.9898) * 43758.5453);
+
         // ensures that a dense mesh isn't drawn a few hundred thousand times over the same pixels.
         int local = int(gid) / 3 - int(xf[base + 35]);
         bool spare = local != 0;
@@ -180,10 +246,12 @@ extension Akari.Geom.Deformer
         float t = clamp(xf[base + 26] * 1.6 - 0.6 * (0.35 * hash + 0.65 * reach), 0.0, 1.0);
         s = t * t * (3.0 - 2.0 * t);
         wp = mix(target, wp, s) + fwd * (sin(3.14159265 * s) * size * 0.5);
+
         // still in its slot, under the collapsed triangle: nothing to draw.
         if (spare && s < 0.02) wp = slot;
         nw = mix(fwd, nw, s);
       }
+
       // hidden meshes points are never written, it collapses to the origin.
       if (xf[base + 37] > 0.5) { wp = VEC3(0.0); nw = VEC3(0.0, 0.0, 1.0); }
       VEC3 prev = PARAMS.y != 0 && xf[base + 37] < 0.5 ? VEC3(out_verts[o + 0], out_verts[o + 1], out_verts[o + 2]) : wp;
@@ -203,7 +271,7 @@ extension Akari.Geom.Deformer
       out_verts[o + 13] = float(int(gid) / 3);
     """
 
-  /// Per point, its world position once, for the shadows indexed draws.
+  /// per point, its world position once, for the shadows indexed draws.
   static let shadowBody = """
       if (int(gid) >= PARAMS.x) return;
       int p = int(gid);
@@ -325,6 +393,8 @@ extension Akari.Geom.Deformer
     layout(std430, binding = 5) buffer PointMesh { int point_mesh[]; };
     layout(std430, binding = 6) buffer Xf { float xf[]; };
     layout(std430, binding = 7) buffer OutVerts { float out_verts[]; };
+    layout(std430, binding = 8) buffer CornerNormals { vec4 corner_normals[]; };
+    layout(std430, binding = 9) buffer RestNormals { vec4 rest_normals[]; };
     void main()
     {
       uint gid = gl_GlobalInvocationID.x;
@@ -368,6 +438,8 @@ extension Akari.Geom.Deformer
                              device const int* point_mesh [[buffer(6)]],
                              device const float* xf [[buffer(7)]],
                              device float* out_verts [[buffer(8)]],
+                             device const float4* corner_normals [[buffer(9)]],
+                             device const float4* rest_normals [[buffer(10)]],
                              uint gid [[thread_position_in_grid]])
     {
       \(emitBody)

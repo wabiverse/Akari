@@ -45,13 +45,13 @@ import SwiftCrossUI
 #if os(macOS)
   import AppKit
   import AppKitBackend
+#else
+  import UIKit
 #endif
 
 extension Kraken
 {
-  /// A gray SF Symbol, or its first letter where there are none,
-  /// the name is read as the icon updates, AppKit's representables
-  /// keep the values they were made with.
+  /// a gray sf symbol whose name is read on each update since native views keep their first values
   @MainActor
   struct SymbolIcon: View
   {
@@ -68,21 +68,60 @@ extension Kraken
 
     var body: some View
     {
-      VStack(spacing: 0)
-      {
-        #if os(macOS)
-          NativeSymbol(name: name, size: size, white: white)
-        #else
-          Text(String(name().prefix(1)).uppercased())
-            .font(.system(size: Int(size), weight: .semibold))
-            .foregroundColor(Color(white: white))
-        #endif
-      }
+      NativeView(make: { SymbolImageView() },
+                 update: { [name, size, white] view in view.show(name(), size: size, white: white) },
+                 size: { [size] _ in ViewSize(size + 4, size + 4) })
     }
   }
 
-  /// A sphere, a cube and a cone, tinted as the theme
-  /// tints it, on a `background` gray it cuts gaps into.
+  /// shows one sf symbol, reloading it only when the name changes.
+  final class SymbolImageView: PlatformView
+  {
+    private var shown: (name: String, size: Double, white: Double)?
+    #if os(macOS)
+      private let image = NSImageView()
+    #else
+      private let image = UIImageView()
+    #endif
+
+    init()
+    {
+      super.init(frame: .zero)
+      image.translatesAutoresizingMaskIntoConstraints = false
+      addSubview(image)
+      NSLayoutConstraint.activate([image.centerXAnchor.constraint(equalTo: centerXAnchor),
+                                   image.centerYAnchor.constraint(equalTo: centerYAnchor)])
+      #if os(macOS)
+        image.imageScaling = .scaleProportionallyDown
+      #else
+        image.contentMode = .center
+        isUserInteractionEnabled = false
+      #endif
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder)
+    {
+      fatalError("init(coder:) is not supported")
+    }
+
+    func show(_ name: String, size: Double, white: Double)
+    {
+      guard shown?.name != name || shown?.size != size || shown?.white != white else { return }
+      shown = (name, size, white)
+      #if os(macOS)
+        let config = NSImage.SymbolConfiguration(pointSize: size, weight: .regular)
+        image.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
+        image.contentTintColor = NSColor(white: white, alpha: 1)
+      #else
+        let config = UIImage.SymbolConfiguration(pointSize: size, weight: .regular)
+        image.image = UIImage(systemName: name, withConfiguration: config)
+        image.tintColor = UIColor(white: white, alpha: 1)
+      #endif
+    }
+  }
+
+  /// a sphere, a cube and a cone tinted with the theme on a gray `background` it cuts gaps into
   @MainActor
   struct SceneIcon: View
   {
@@ -145,7 +184,7 @@ extension Kraken
     }
   }
 
-  /// A ring's outline from the top, clockwise, `progress` of the way around.
+  /// a ring's outline from the top, clockwise, `progress` of the way around.
   struct ProgressRing: Shape
   {
     var progress: Double
@@ -169,12 +208,12 @@ extension Kraken
     }
   }
 
-  /// Reloads the stage, its outline filling in with the reload's progress.
+  /// reloads the stage, its outline filling in with the reload's progress.
   @MainActor
   struct ReloadButton: View
   {
     let reload: () -> Void
-    /// Whether the reload is still running, and how far along.
+    /// whether the reload is still running, and how far along.
     let status: () -> (pending: Bool, progress: Double)
 
     @State private var reloading = false
@@ -224,7 +263,7 @@ extension Kraken
     }
   }
 
-  /// The viewport dimmed outside the camera's render frame.
+  /// the viewport dimmed outside the camera's render frame.
   @MainActor
   struct Passepartout: View
   {

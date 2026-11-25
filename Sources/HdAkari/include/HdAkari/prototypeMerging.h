@@ -60,7 +60,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 TF_DECLARE_REF_PTRS(HdAkariPrototypeMergingSceneIndex);
 
-/// Merges the meshes of each instancer prototype into a few meshes.
+/// merges the meshes of each instancer prototype into a few meshes
 class HDAKARI_API HdAkariPrototypeMergingSceneIndex final : public HdSingleInputFilteringSceneIndexBase
 {
 public:

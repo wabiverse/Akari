@@ -55,7 +55,9 @@
 #endif
 
 #include "HdAkari/api.h"
+#include "HdAkari/sceneData.h"
 #include "HdAkari/textureAtlas.h"
+#include "HdAkari/subdivision.h"
 
 #include <string>
 #include <vector>
@@ -67,8 +69,7 @@ class HdMeshUtil;
 class HdMeshTopology;
 struct HdAkariMeshData;
 
-/// Resolved per-material texture info for
-/// the channels Akari samples.
+/// the resolved textures of one material for the channels akari samples
 struct HdAkariMaterialTextures
 {
   std::string roughnessPath;
@@ -77,15 +78,19 @@ struct HdAkariMaterialTextures
   std::string colorPath;
   std::string normalPath;
   std::string emissivePath;
-  std::string ptexPath; // a Ptex color map, drawn as each face's average color.
-  GfVec3f emissiveColor = GfVec3f(0.0f); // used when emissive isn't textured.
-  HdAkariScalarSources sources;   // the r/g/b/a output each scalar texture is read through.
+  std::string ptexPath; // a ptex color map, drawn as each face's average color
+  GfVec3f emissiveColor = GfVec3f(0.0f); // used when emissive isn't textured
+  GfVec3f specular = GfVec3f(0.04f); // what the surface reflects facing the eye while it is not a metal
+  HdAkariScalarSources sources;   // the r, g, b or a output each scalar texture is read through
   TfToken uvVarname = TfToken("st");
   bool hasAny = false;
 };
 
-/// Reads UsdPreviewSurface's diffuseColor/opacity/roughness/metallic
-/// from the prim's bound material.
+/// decides how a resolved material draws, the same way for full syncs and look only updates
+HdAkariSurface HdAkariClassifySurface(HdAkariMaterialTextures const &textures, GfVec3f const &color, float opacity,
+                                      float opacityThreshold);
+
+/// reads the preview surface color, opacity, roughness and metallic from the prim's bound material
 void HdAkariApplyMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
                           GfVec3f &color, float &opacity,
                           float &roughness, float &metallic,
@@ -93,7 +98,7 @@ void HdAkariApplyMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
                           HdAkariMaterialTextures &textures,
                           SdfPath &materialIdOut);
 
-/// Reads UsdPreviewSurface's inputs from a given material.
+/// reads the preview surface inputs from a given material
 void HdAkariApplyMaterialId(HdSceneDelegate *sceneDelegate, SdfPath const &materialId,
                             GfVec3f &color, float &opacity,
                             float &roughness, float &metallic,
@@ -101,25 +106,28 @@ void HdAkariApplyMaterialId(HdSceneDelegate *sceneDelegate, SdfPath const &mater
                             HdAkariMaterialTextures &textures,
                             SdfPath &materialIdOut);
 
-/// Drops a material's parsed inputs after its network changes.
+/// drops a material's parsed inputs after its network changes
 void HdAkariForgetMaterial(SdfPath const &materialId);
 
-/// The rprims whose triangles last took the material keyed `materialKey`.
+/// the rprims whose triangles last took the material keyed `materialKey`
 std::vector<SdfPath> HdAkariMaterialUsers(std::string const &materialKey);
 
-/// Fetches the prim's raw UV primvar, remapped into its atlas cell.
+/// fetches the prim's raw uv primvar, remapped into its atlas cell
 void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, HdMeshUtil &meshUtil,
                             HdAkariMaterialTextures const &textures, HdAkariAtlasCell const &cell,
-                            VtVec3iArray const &triangleIndices, VtVec2fArray &outUvs);
+                            VtVec3iArray const &triangleIndices, VtVec2fArray &outUvs,
+                            HdAkariRefinedPrimvars const *refined = nullptr);
 
-/// Resolves the prim's bound material into `data`, bakes its atlas
-/// cell, and fills one atlas UV per triangle corner, triangles of
-/// material bound face subsets take their subset's material instead.
+/// whether the gprim's bound material reads its displayColor through a primvar reader
+bool HdAkariShowsDisplayColor(HdSceneDelegate *sceneDelegate, SdfPath const &id);
+
+/// resolves the prim's material into `data`, bakes its atlas cell and fills a uv per corner, honoring face subset bindings
 void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
                          HdAkariTextureAtlas *atlas, HdMeshUtil &meshUtil,
                          HdAkariMeshData &data,
                          HdMeshTopology const *topology = nullptr,
-                         VtIntArray const *primitiveParams = nullptr);
+                         VtIntArray const *primitiveParams = nullptr,
+                         HdAkariRefinedPrimvars const *refined = nullptr);
 
 PXR_NAMESPACE_CLOSE_SCOPE
 

@@ -48,34 +48,41 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// Sets the deferred lighting stage state: the split sum IBL toggle,
-  /// the inverse projection, and the Hosek-Wilkie sky parameters.
+  /// sets the deferred lighting state, the split sum ibl toggle, the inverse projection and the sky parameters
   public func setLighting(iblEnabled: Bool,
                           projection: Akari.Matrix4,
                           view: Akari.Matrix4,
                           light: LightSettings,
                           shadowsEnabled: Bool,
                           shading: ViewportShading = .rendered,
-                          grid: Bool = false)
+                          grid: Bool = false,
+                          gridProjection: Akari.Matrix4? = nil)
   {
     setFloat(.iblEnabled, iblEnabled ? 1 : 0)
     setMatrix(.proj, projection)
     setMatrix(.invProj, projection.inverse())
 
     adoptAuthoredSun()
-    // the stage's dome and sun hand over to the procedural sky's sunset, then its moon, as Sun Height goes down.
+
+    // the stage dome and sun hand over to the procedural sunset and then the moon as sun height goes down
     let sunHeight = effectiveSunHeight(light)
     environment.domeWeight = authoredSunDirection == nil || !light.overridesStageSun ? 1 : Akari.Math.smoothstep(0.05, 0.3, sunHeight)
     setFloat(.sunHeight, sunHeight)
-    // only the procedural sky, or a dome the sliders swing, bakes from Sun Height.
+
+    // only the procedural sky, or a dome the sliders rotate, bakes from sun height
     if atmosphere.planet == nil, dome == nil || light.overridesStageSun { lastSunHeight = sunHeight }
 
     let sun = worldSpaceSunDirection(light)
     setVector(.sunDirection, SIMD4(sun.x, sun.y, sun.z, effectiveSunAngle(light) * 0.5))
     setVector(.sunOverride, environment.distantSun.map { SIMD4($0.irradiance, environment.domeWeight) } ?? .zero)
+
     applyAtmosphere(sun: sun)
     applyVolumes(sun: sun)
     applyTransparency(projection: projection, view: view)
+
+    // the viewport traces caustics toward the gliding shadow sun so they move with the shadows, final renders use their own time's sun
+    let causticSun = shadows.glidesSun ? shadowAtlas.sunMotion.smoothDirection : sun
+    applyGlassShadow(sun: causticSun, sunAngle: effectiveSunAngle(light) * 0.5, castsShadows: shadowsEnabled && shadows.ready)
 
     setFloat(.shadowEnabled, shadowsEnabled && shadows.ready ? 1 : 0)
     setFloat(.zUp, stageIsZUp ? 1 : 0)
@@ -84,26 +91,32 @@ extension Akari.LabFXEngine
     setFloat(.punctualShadowEnabled, shadowsEnabled && shadows.ready ? 1 : 0)
     setFloat(.pointLightCount, Float(pointLights.lit.count))
     setFloat(.shadowedPointLightCount, Float(pointLights.shadowed.count))
+
     for slot in 0 ..< 4
     {
-      let p = slot < pointLights.lit.count ? pointLights.lit[slot] : nil
+      let light = slot < pointLights.lit.count ? pointLights.lit[slot] : nil
       setVector(Uniform.pointLightPosIntensity[slot],
-                SIMD4(p?.position.x ?? 0,
-                      p?.position.y ?? 0,
-                      p?.position.z ?? 0,
-                      p?.intensity ?? 0))
+                SIMD4(light?.position.x ?? 0,
+                      light?.position.y ?? 0,
+                      light?.position.z ?? 0,
+                      light?.intensity ?? 0))
       setVector(Uniform.pointLightColorRadius[slot],
-                SIMD4(p?.color.x ?? 0,
-                      p?.color.y ?? 0,
-                      p?.color.z ?? 0,
-                      p?.radius ?? 1))
+                SIMD4(light?.color.x ?? 0,
+                      light?.color.y ?? 0,
+                      light?.color.z ?? 0,
+                      light?.radius ?? 1))
     }
 
     uploadPointLights()
 
     setVector(.viewShading, SIMD4(Float(3 - shading.rawValue), 0.05, 0, 0))
     setVector(.viewGrid, SIMD4(grid ? 1 : 0, 1 / max(stageMetersPerUnit, 1e-6), 0, 0))
+
+    // the grid draws over the final image with the unjittered camera so its lines hold still
+    setMatrix(.gridInvProj, (gridProjection ?? projection).inverse())
+    runtime.setPassActive(.gridOverlay, active: grid)
     guard shading != .rendered else { return }
+
     runtime.setPassActive(.atmosphereBackground, active: false)
     if shading == .materialPreview
     {
@@ -114,7 +127,7 @@ extension Akari.LabFXEngine
     }
   }
 
-  /// Every lit point light, six texels a light, for the lighting pass.
+  /// uploads every lit point light for the lighting pass, six texels per light
   private func uploadPointLights()
   {
     if pointLights.texture == 0
@@ -131,15 +144,17 @@ extension Akari.LabFXEngine
     guard pointLights.texture != 0 else { return }
 
     let texels: [Float] = pointLights.lit.enumerated().flatMap
-    { i, light in
-      let shadowed = i < pointLights.shadowed.count
-      // a tube's half axis and radius, or a rect's half width and -1, then a rect's half height.
+    { slot, light in
+      let shadowed = slot < pointLights.shadowed.count
+
+      // a tube's half axis and radius, or a rect's half width and -1, then a rect's half height
       let shape = light.halfWidth != .zero ? SIMD4(light.halfWidth, -1) : SIMD4(light.halfAxis, light.tubeRadius)
+
       return [light.position.x, light.position.y, light.position.z, light.intensity,
               light.color.x, light.color.y, light.color.z, light.radius,
               light.diffuse, light.specular,
-              shadowed ? shadowAtlas.lodBias(slot: i) : 0,
-              shadowed && shadowAtlas.mainSlots.contains(i) ? 1 : 0,
+              shadowed ? shadowAtlas.lodBias(slot: slot) : 0,
+              shadowed && shadowAtlas.mainSlots.contains(slot) ? 1 : 0,
               shape.x, shape.y, shape.z, shape.w,
               light.halfHeight.x, light.halfHeight.y, light.halfHeight.z, light.moved,
               light.cameraVisible ? 1 : 0, 0, 0, 0]

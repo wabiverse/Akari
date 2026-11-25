@@ -78,6 +78,7 @@ extension Kraken.Layout
 
     driver?.select(objects: selection)
     if inspector.path != active { inspector.load(active) }
+    if tab == .sculpting { enterSculpt() }
     refresh()
   }
 
@@ -110,7 +111,7 @@ extension Kraken.Layout
     selectable { [weak self] all in self?.select(all.map(\.path).filter { !current.contains($0) }) }
   }
 
-  /// Every object a box or select all can take, with its middle in the world.
+  /// every object a box select or select all can take, with its middle in the world
   func selectable(_ done: @escaping @MainActor @Sendable ([(path: String, center: SIMD3<Double>)]) -> Void)
   {
     let time = hydra.currentTimeCode
@@ -126,8 +127,7 @@ extension Kraken.Layout
     }
   }
 
-  /// Selects what a viewport click hit, or clears the selection for `nil`. The first click
-  /// selects the whole object, clicking it again selects the prim under the cursor.
+  /// selects what a viewport click hit or clears for nil, a first click takes the whole object and another the prim under it
   func picked(_ path: String?, extend: Bool)
   {
     guard let path else
@@ -140,6 +140,7 @@ extension Kraken.Layout
     { [self] stage in
       let object = Kraken.SceneEdit.object(for: path, stage)
       let hit = Kraken.SceneEdit.hit(for: path, stage)
+
       DispatchQueue.main.async
       { [weak self] in
         guard let self else { return }
@@ -148,7 +149,7 @@ extension Kraken.Layout
     }
   }
 
-  /// `hit` if the object or one of its prims is already selected, otherwise `object`.
+  /// `hit` when the object or one of its prims is already selected, otherwise `object`
   private func drilled(object: String, hit: String) -> String
   {
     guard hit != object, selection.count == 1, let active,

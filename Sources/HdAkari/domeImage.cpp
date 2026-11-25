@@ -141,7 +141,7 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
   spec.data = raw.data();
   if (!image->Read(spec)) return nullptr;
 
-  // Past this the dome is box filtered down by a whole factor.
+  // past this the dome is box filtered down by a whole factor.
   int maxWidth = 4096;
   if (const char *env = std::getenv("AKARI_DOME_MAX_WIDTH")) maxWidth = std::max(1, std::atoi(env));
   const int f = std::max(1, (w + maxWidth - 1) / maxWidth);
@@ -214,7 +214,8 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
     out->hasSun = true;
     out->sunX = float(sunDir[0] / len); out->sunY = float(sunDir[1] / len); out->sunZ = float(sunDir[2] / len);
     out->sunR = float(sunE[0]); out->sunG = float(sunE[1]); out->sunB = float(sunE[2]);
-    // the disk that spreads its energy as far, its mean cosine is (1 + cos radius) / 2.
+
+    // the disc that spreads its energy as far, from its mean cosine
     out->sunAngle = float(2.0 * std::acos(std::clamp(2.0 * len / sunWeight - 1.0, -1.0, 1.0)));
   }
 

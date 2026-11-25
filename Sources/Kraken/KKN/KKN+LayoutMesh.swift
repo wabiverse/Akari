@@ -60,26 +60,36 @@ extension Kraken
     case vertex, edge, face
   }
 
-  /// A mesh in edit mode, in its own space, with vertex, edge and face selections. Its connectivity lives
-  /// in a MeshTopology, `faces` and `allEdges` are read off it after every change.
+  /// a mesh in edit mode in its own space with vertex, edge and face selections, its connectivity in a `MeshTopology`
   struct EditMesh
   {
     var path: String
     var points: [SIMD3<Float>]
     private(set) var faces: [[Int]] = []
     private(set) var allEdges: [Edge] = []
+
     var verts = Set<Int>()
     var edges = Set<Edge>()
     var selectedFaces = Set<Int>()
     var mode: SelectMode = .vertex
     var topology: MeshTopology
 
-    init(path: String, points: [SIMD3<Float>], faces: [[Int]])
+    /// how hard subdivision holds each edge, from 0 smooth to 1 fully hard
+    var creases: [Edge: Float] = [:]
+
+    /// edges marked sharp, which the shading normals split along
+    var sharp = Set<Edge>()
+
+    init(path: String, points: [SIMD3<Float>], faces: [[Int]], creases: [Edge: Float] = [:], sharp: Set<Edge> = [])
     {
       self.path = path
       self.points = points
       topology = MeshTopology(vertexCount: points.count, faces: faces)
       snapshot()
+
+      let present = Set(allEdges)
+      self.creases = creases.filter { present.contains($0.key) && $0.value > 0 }
+      self.sharp = sharp.intersection(present)
     }
 
     static func edges(of face: [Int]) -> [Edge]
@@ -118,7 +128,7 @@ extension Kraken
 
     // MARK: topology
 
-    /// Reads the faces and edges off the topology, whose faces are all alive and in order between ops.
+    /// reads the faces and edges off the topology, whose faces are all alive and in order between ops
     mutating func snapshot()
     {
       faces = topology.faces.indices.compactMap { topology.faces[$0].count > 0 ? topology.corners(of: $0) : nil }
@@ -131,16 +141,35 @@ extension Kraken
       return topology.addVert()
     }
 
-    /// Renumbers past the faces an op killed and the verts and edges they left unused.
+    /// renumbers past the faces an op killed and the verts and edges they left unused
     mutating func rebuild() -> (verts: [Int], faces: [Int])
     {
       let (mesh, vertMap, faceMap) = topology.compacted()
       var kept = [SIMD3<Float>](repeating: .zero, count: mesh.verts.count)
       for (old, new) in vertMap.enumerated() where new >= 0 { kept[new] = points[old] }
+
       points = kept
       topology = mesh
       snapshot()
+
+      // creases and sharp edges follow their verts and are dropped with the edges an op removed
+      let present = Set(allEdges)
+      var held = [Edge: Float]()
+      for (e, c) in creases
+      {
+        if let m = remap(edge: e, vertMap), present.contains(m) { held[m] = c }
+      }
+
+      creases = held
+      sharp = Set(sharp.compactMap { remap(edge: $0, vertMap) }).intersection(present)
+
       return (vertMap, faceMap)
+    }
+
+    func remap(edge e: Edge, _ map: [Int]) -> Edge?
+    {
+      guard e.b < map.count, map[e.a] >= 0, map[e.b] >= 0 else { return nil }
+      return Edge(map[e.a], map[e.b])
     }
 
     func remap(_ list: some Sequence<Int>, _ map: [Int]) -> Set<Int>
@@ -157,7 +186,7 @@ extension Kraken
       })
     }
 
-    /// Renumbers after an op and selects the faces it made.
+    /// renumbers after an op and selects the faces it made
     mutating func finish(selecting made: [Int?], verts extra: [Int] = [])
     {
       let map = rebuild()

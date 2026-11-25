@@ -45,7 +45,7 @@ import HydraKit
 
 extension Kraken.SceneEdit
 {
-  /// An animated attribute, as listed in the dope sheet.
+  /// an animated attribute, as listed in the dope sheet.
   struct Channel: Hashable, Sendable
   {
     var path: String
@@ -72,18 +72,18 @@ extension Kraken.SceneEdit
     return value
   }
 
-  /// Writes `value` at `time`, or as the default value when `time` is nil.
+  /// writes `value` at `time`, or as the default value when `time` is nil.
   @discardableResult
   nonisolated static func write(_ attribute: Usd.Attribute, _ value: Pixar.VtValue, at time: Double?) -> Bool
   {
     Pixar.HdAkariSetValue(attribute, value, time ?? .nan)
   }
 
-  /// Whether the edit target's layer has its own keys for the attribute.
+  /// whether the edit target's layer has its own keys for the attribute.
   nonisolated static func localCurve(_ attribute: Usd.Attribute, _ stage: UsdStage) -> Bool
   {
     let target = stage.editTarget
-    #if compiler(>=6.4)
+    #if compiler(>=6.4) && canImport(Usd)
       let layer = target.GetLayerConsuming()
     #else
       let layer = target.GetLayer()
@@ -91,8 +91,7 @@ extension Kraken.SceneEdit
     return layer.pointee.GetNumTimeSamplesForPath(target.MapToSpecPath(attribute.GetPath())) > 0
   }
 
-  /// Copies a curve from a weaker layer into the edit target before its first edit.
-  /// Keys in a stronger layer replace the whole curve below, so editing one key would otherwise drop the rest.
+  /// copies a curve from a weaker layer into the edit target before its first edit, so editing one key keeps the rest
   nonisolated static func localize(_ attribute: Usd.Attribute, _ stage: UsdStage)
   {
     guard attribute.GetNumTimeSamples() > 0, !localCurve(attribute, stage) else { return }
@@ -100,7 +99,7 @@ extension Kraken.SceneEdit
     for (t, v) in keys { write(attribute, v, at: t) }
   }
 
-  /// The animated attributes of the prims at `paths` and their materials, without duplicates.
+  /// the animated attributes of the prims at `paths` and their materials, without duplicates.
   nonisolated static func channels(_ stage: UsdStage, _ paths: [String]) -> [Channel]
   {
     var seen = Set<String>()
@@ -130,7 +129,7 @@ extension Kraken.SceneEdit
 
   // MARK: Keys
 
-  /// Keys `name` at `time` with its current value.
+  /// keys `name` at `time` with its current value.
   @discardableResult
   nonisolated static func insertKey(_ stage: UsdStage, _ path: String, _ name: String, _ time: Double) -> Bool
   {
@@ -140,13 +139,13 @@ extension Kraken.SceneEdit
       localize(attribute, stage)
       return write(attribute, v, at: time)
     }
-    // The value may come from an unkeyed edit held in the session layer, which the key replaces.
+
+    // the value may come from an unkeyed edit held in the session layer, which the key replaces.
     clearSessionValue(stage, path, name)
     return keyed
   }
 
-  /// Deletes the key at `time`. Deleting the last key keeps its value as the default,
-  /// so a weaker layer's curve doesn't show through.
+  /// deletes the key at `time`, the last key's value stays as the default so a weaker curve doesn't show through
   @discardableResult
   nonisolated static func deleteKey(_ stage: UsdStage, _ path: String, _ name: String, _ time: Double) -> Bool
   {
@@ -161,7 +160,7 @@ extension Kraken.SceneEdit
     }
   }
 
-  /// Deletes every key, keeping the value at `time` as the default.
+  /// deletes every key, keeping the value at `time` as the default.
   @discardableResult
   nonisolated static func clearKeys(_ stage: UsdStage, _ path: String, _ name: String, _ time: Double) -> Bool
   {
@@ -173,8 +172,7 @@ extension Kraken.SceneEdit
     }
   }
 
-  /// Moves the keys at `times` to `pivot + (t - pivot) * scale + delta`, rounded to whole frames.
-  /// Leaves the originals in place when `duplicate` is set.
+  /// moves the keys at `times` around `pivot` by `scale` and `delta`, rounded to whole frames, copying them when `duplicate` is set
   @discardableResult
   nonisolated static func retimeKeys(_ stage: UsdStage, _ path: String, _ name: String, _ times: [Double],
                                      delta: Double, scale: Double = 1, pivot: Double = 0, duplicate: Bool = false) -> Bool
@@ -205,8 +203,7 @@ extension Kraken.SceneEdit
     }
   }
 
-  /// Holds an unkeyed edit to an animated attribute as a session layer default, which wins over the
-  /// curves below it, until it's keyed or the frame changes.
+  /// holds an unkeyed edit to an animated attribute as a session default until it is keyed or the frame changes
   @discardableResult
   nonisolated static func setSessionValue(_ stage: UsdStage, _ path: String, _ name: Tf.Token, _ values: [Double]) -> Bool
   {
@@ -225,7 +222,7 @@ extension Kraken.SceneEdit
   // MARK: Transforms
 
   private static let heldLock = NSLock()
-  /// Animated prims with an unkeyed move held in the session layer.
+  /// animated prims with an unkeyed move held in the session layer.
   nonisolated(unsafe) private static var held = Set<String>()
 
   nonisolated static func holdsTransform(_ path: String) -> Bool
@@ -245,7 +242,7 @@ extension Kraken.SceneEdit
     ops(prim).ops.contains { $0.GetNumTimeSamples() > 0 }
   }
 
-  /// The prim's transform as a single matrix op, replacing any op stack.
+  /// the prim's transform as a single matrix op, replacing any op stack.
   private nonisolated static func matrixOp(_ prim: UsdPrim) -> Pixar.UsdGeomXformOp
   {
     let (list, resets) = ops(prim)
@@ -257,8 +254,7 @@ extension Kraken.SceneEdit
     return op
   }
 
-  /// Holds a move of an animated prim in the session layer until it's keyed or the frame changes.
-  /// Returns nil when the prim's transform isn't animated.
+  /// holds a move of an animated prim in the session layer until it is keyed or the frame changes, nil when not animated
   nonisolated static func overrideTransform(_ stage: UsdStage, _ path: String, _ local: [Double]) -> Bool?
   {
     guard let prim = prim(stage, path), holdsTransform(path) || transformAnimated(prim) else { return nil }
@@ -268,8 +264,7 @@ extension Kraken.SceneEdit
     return wrote
   }
 
-  /// Keys the prim's current local transform, including any held move, at `time`.
-  /// An animated op stack is first baked into a single matrix op so the existing motion is kept.
+  /// keys the prim's local transform at `time`, baking an animated op stack into one matrix op first
   @discardableResult
   nonisolated static func keyTransform(_ stage: UsdStage, _ path: String, _ time: Double) -> Bool
   {
@@ -302,7 +297,7 @@ extension Kraken.SceneEdit
     return names.reduce(false) { deleteKey(stage, path, $1, time) || $0 }
   }
 
-  /// Deletes every transform key, leaving the prim where it is at `time`.
+  /// deletes every transform key, leaving the prim where it is at `time`.
   @discardableResult
   nonisolated static func clearTransformKeys(_ stage: UsdStage, _ path: String, _ time: Double) -> Bool
   {
@@ -316,7 +311,7 @@ extension Kraken.SceneEdit
     }
   }
 
-  /// Drops a held move so the prim follows its animation again.
+  /// drops a held move so the prim follows its animation again.
   nonisolated static func releaseTransform(_ stage: UsdStage, _ path: String)
   {
     guard heldLock.withLock({ held.remove(path) }) != nil, let prim = prim(stage, path) else { return }
@@ -327,7 +322,7 @@ extension Kraken.SceneEdit
     }
   }
 
-  /// Drops every held move and returns the affected paths.
+  /// drops every held move and returns the affected paths.
   @discardableResult
   nonisolated static func releaseTransforms(_ stage: UsdStage) -> [String]
   {

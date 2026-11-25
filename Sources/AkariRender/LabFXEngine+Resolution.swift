@@ -44,33 +44,34 @@ import LabGL
 
 extension Akari.LabFXEngine
 {
-  /// A buffer size in pixels.
+  /// a buffer size in pixels
   struct PixelSize: Equatable
   {
     var width: Int
     var height: Int
   }
 
-  /// The sizes a frame renders at, from the target down.
+  /// the sizes a frame renders at, from the target down
   struct FrameSizes
   {
     var target = PixelSize(width: 0, height: 0)
-    /// The G-buffer's size, `renderScale` of the target's.
+
+    /// the gbuffer size, the target size times `renderScale`
     var render = PixelSize(width: 0, height: 0)
-    /// The half res effect buffers size, half of the smaller of the G-buffer and target.
+
+    /// the half res effect buffer size, half of the smaller of the gbuffer and target
     var half = PixelSize(width: 1, height: 1)
     var supersample = PixelSize(width: 1, height: 1)
-    /// What the scene buffers were last staged at.
+
+    /// the scales the scene buffers were last staged at
     var stagedRenderScale: Float = 1
     var stagedSupersampleScale: Float = 1
   }
 
-  /// Steps the render scale down if the GPU cant keep up with the fps,
-  /// and back up, into supersampling as far as it's allowed, once the
-  /// next step up fits it again.
+  /// steps the render scale down when the gpu can't keep up and back up, into supersampling as allowed, once the next step fits
   struct DynamicResolution
   {
-    /// Largest first, from `ceiling` down to `floor`.
+    /// the scales from `ceiling` down to `floor`, largest first
     static func scales(upTo ceiling: Float, downTo floor: Float) -> [Float]
     {
       (RenderSettings.supersamplingSteps.filter { $0 > 1 && $0 <= ceiling }.reversed() + [1, 0.85, 0.75, 0.67, 0.6, 0.5, 0.42, 0.34])
@@ -80,25 +81,33 @@ extension Akari.LabFXEngine
     var scales: [Float] = []
     var step = 0
 
-    /// Smoothed GPU seconds a frame.
+    /// seconds a frame is meant to take, the glass also fits its caustics to this
+    var budget: Double = 1.0 / 60.0
+
+    /// smoothed gpu seconds per frame
     var gpuTime: Double = 0
     var overBudget: Double = 0
     var underBudget: Double = 0
     var sinceChange: Double = 0
     var lastUpdate: Double?
-    /// The GPU time measured at each scale, and when.
+
+    /// the gpu time measured at each scale and when it was measured
     var measured: [Float: (gpuTime: Double, at: Double)] = [:]
-    /// How much finer or coarser than the record's fitted detail the instances pick their levels at,
-    /// following the frames shown toward the frame budget.
+
+    /// when each scale was last given up for running over budget, so it isn't tried again right away
+    var leftForLoad: [Float: Double] = [:]
+
+    /// how much finer or coarser than recorded the instances pick their levels, following shown frames toward the budget
     var geometryScale: Float = 1
-    /// The scale it heads for, `geometryScale` taking it in eighth octave steps so a settled frame culls the same.
+
+    /// the scale `geometryScale` heads for in eighth octave steps so a settled frame culls the same
     var geometryTarget: Float = 1
-    /// Smoothed seconds between the frames shown.
+
+    /// smoothed seconds between shown frames
     var frameTime: Double = 0
   }
 
-  /// Picks this frame's render scale, the supersampling ceiling while `.dynamicResolution` is off.
-  /// With MetalFX temporal on, supersampling upscales to the ceiling from at most the target instead.
+  /// picks this frame's render scale, the supersampling ceiling while dynamic resolution is off with metalfx temporal on
   func updateRenderScale(settings: RenderSettings)
   {
     var res = dynamicResolution
@@ -114,10 +123,10 @@ extension Akari.LabFXEngine
       res.gpuTime = res.gpuTime == 0 ? sample : res.gpuTime + (sample - res.gpuTime) * 0.1
     }
 
-    // the instances' detail follows the frames the viewport shows, everything a frame costs counted:
-    // coarser while they come late, finer only while they come well early, held in between so a
-    // settled view stays as it is.
+    // instance detail follows shown frames, coarser while they come late, finer only while well early, held in between
     let frameBudget = 1 / Double(max(settings.targetFrameRate, 1))
+    res.budget = frameBudget
+
     if dt > 0, dt < 0.25
     {
       res.frameTime = res.frameTime == 0 ? dt : res.frameTime + (dt - res.frameTime) * 0.1
@@ -126,8 +135,8 @@ extension Akari.LabFXEngine
     if res.frameTime > 0
     {
       let frame = Float(min(dt, 0.033))
-      // a display synced frame never comes early, so on time with the GPU well under budget is room too,
-      // or the slow frames of a launch would hold the detail down until something reframes it.
+
+      // a display synced frame is never early, so on time with the gpu well under budget counts as room too
       let room = res.frameTime < frameBudget * 0.8
         || (res.frameTime < frameBudget * 1.1 && res.gpuTime > 0 && res.gpuTime < frameBudget * 0.6)
       let clampedStepFactor: Float = res.frameTime > frameBudget * 1.1
@@ -153,6 +162,7 @@ extension Akari.LabFXEngine
       !upscaling.failed && labgl.upscaleSupported() != 0
 
     supersampleScale = chained ? step : 1
+
     let ceiling = chained ? 1 : step
     guard settings.features.contains(.dynamicResolution)
     else
@@ -164,8 +174,7 @@ extension Akari.LabFXEngine
       return
     }
 
-    // MetalFX upscales by up to 3x and everything else by up to 2x. This follows the chosen upscaler only,
-    // since following MetalFX's short pauses would keep resizing the targets and rebuilding its scaler.
+    // metalfx upscales up to 3x and the rest up to 2x, following only the chosen upscaler so pauses don't rebuild its scaler
     let temporal = settings.upscaler == .metalFX && settings.features.contains(.temporalAA) &&
       !upscaling.failed && labgl.upscaleSupported() != 0
     let scales = DynamicResolution.scales(upTo: ceiling, downTo: temporal ? supersampleScale / 3 : max(supersampleScale / 3, 0.5))
@@ -183,26 +192,30 @@ extension Akari.LabFXEngine
       res.measured[scales[res.step]] = (res.gpuTime, now)
     }
 
-    // Shadows, probes and MetalFX's output pass cost the same at any scale,
-    // so only half the frame is assumed to follow the pixel count.
+    // shadows, probes and the metalfx output cost the same at any scale, so only half the frame follows the pixel count
     func predicted(_ step: Int) -> Double
     {
-      if let known = res.measured[scales[step]], now - known.at < 10 { return known.gpuTime }
+      if let known = res.measured[scales[step]], now - known.at < 30 { return known.gpuTime }
       let ratio = Double(scales[step] / scales[res.step])
       return res.gpuTime * (0.5 + 0.5 * ratio * ratio)
     }
 
-    res.overBudget = res.gpuTime > budget * 0.95 ? res.overBudget + dt : 0
-    res.underBudget = res.step > 0 && predicted(res.step - 1) < budget * 0.8 ? res.underBudget + dt : 0
+    // every change rebuilds buffers and restarts the temporal effects, so the scale only moves after sustained misses with a wide band and a cooldown
+    res.overBudget = res.gpuTime > budget * 0.98 ? res.overBudget + dt : 0
+    let finer = res.step - 1
+    let finerFits = finer >= 0 && predicted(finer) < budget * 0.75
+      && !(res.leftForLoad[scales[finer]].map { now - $0 < 15 } ?? false)
+    res.underBudget = finerFits ? res.underBudget + dt : 0
 
     var next = res.step
-    if res.overBudget > 0.25, res.sinceChange > 0.5, res.step < scales.count - 1
+    if res.overBudget > 1, res.sinceChange > 1, res.step < scales.count - 1
     {
       next = (res.step + 1 ..< scales.count).first { predicted($0) < budget * 0.85 } ?? scales.count - 1
+      res.leftForLoad[scales[res.step]] = now
     }
-    else if res.underBudget > 1.5, res.sinceChange > 2
+    else if res.underBudget > 3, res.sinceChange > 4
     {
-      next = res.step - 1
+      next = finer
     }
 
     if next != res.step

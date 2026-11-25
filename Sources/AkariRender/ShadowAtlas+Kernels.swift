@@ -53,7 +53,7 @@ extension Akari.ShadowAtlas
 
     static let label = "shadow"
 
-    /// What the pipeline can't run without, the rest are skipped when they fail.
+    /// what the pipeline can't run without, the rest are skipped when they fail.
     static let required: Set<Kernel> = [.beginFrame, .tilemapShift, .tagUsagePunctual, .tagUsageDirectional,
                                         .dilateUsageDirectional, .dilateUsagePunctual, .maskLod, .free, .defrag,
                                         .allocate, .pageTable, .pageCopy]

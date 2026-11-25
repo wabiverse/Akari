@@ -43,9 +43,7 @@ import Foundation
 
 public class Atlas
 {
-  /// Semantic RGBA channel (0=R, 1=G, 2=B, 3=A) to its physical byte offset in a
-  /// texel. R and B are swapped: LabGL uploads these atlases with `GL_RGBA` onto a
-  /// BGRA-ordered native format, so the CPU writer pre-swizzles to match.
+  /// a semantic channel's byte offset in a texel, r and b swapped since labgl uploads these onto a bgra format
   @inline(__always)
   public static func physicalChannel(_ semantic: Int32) -> Int
   {
@@ -57,14 +55,14 @@ public class Atlas
     }
   }
 
-  /// Quantizes a [0,1] float to an 8-bit UNORM byte.
+  /// quantizes a [0,1] float to an 8-bit unorm byte.
   @inline(__always)
   public static func quantize(_ v: Float) -> UInt8
   {
     UInt8(min(max(v.isNaN ? 0 : v, 0), 1) * 255 + 0.5)
   }
 
-  /// Averages one destination texel's footprint in source space.
+  /// averages one destination texel's footprint in source space.
   @inline(__always)
   static func boxFilterSample(_ src: UnsafePointer<Float>, _ srcW: Int, _ srcH: Int, _ nComp: Int,
                               _ comp: Int, _ destX: Int, _ destW: Int, _ destY: Int, _ destH: Int) -> Float
@@ -88,7 +86,7 @@ public class Atlas
     return count > 0 ? Float(accum / Double(count)) : 0
   }
 
-  /// Flat-fills one semantic channel of a square region with a constant.
+  /// flat-fills one semantic channel of a square region with a constant.
   public static func fillChannel(_ pixels: UnsafeMutablePointer<UInt8>, atlasWidth: Int32,
                                  px0: Int32, py0: Int32, regionSize: Int32,
                                  channel: Int32, value: Float)
@@ -106,7 +104,7 @@ public class Atlas
     }
   }
 
-  /// Flat-fills a square region of the color atlas with a constant RGB, alpha 255.
+  /// flat-fills a square region of the color atlas with a constant rgb, alpha 255.
   public static func fillColorRegion(_ pixels: UnsafeMutablePointer<UInt8>, atlasWidth: Int32,
                                      px0: Int32, py0: Int32, regionSize: Int32,
                                      r: Float, g: Float, b: Float)
@@ -127,9 +125,7 @@ public class Atlas
     }
   }
 
-  /// Resamples one decoded UDIM tile into a sub-rect of one semantic channel.
-  /// `srcComponent` selects which component of the source image feeds the channel,
-  /// so a packed map (ORM and friends) reads the component it was wired to.
+  /// resamples one udim tile into a rect of one channel, `srcComponent` picking which source component feeds it
   public static func bakeChannelTile(_ pixels: UnsafeMutablePointer<UInt8>, atlasWidth: Int32,
                                      src: UnsafePointer<Float>, srcW: Int32, srcH: Int32, nComp: Int32,
                                      srcComponent: Int32, channel: Int32,
@@ -150,8 +146,7 @@ public class Atlas
     }
   }
 
-  /// Resamples one decoded UDIM tile into a sub-rect of the color atlas.
-  /// Grayscale sources replicate their single component across RGB.
+  /// resamples one udim tile into a rect of the color atlas, gray sources filling all three channels
   public static func bakeColorTile(_ pixels: UnsafeMutablePointer<UInt8>, atlasWidth: Int32,
                                    src: UnsafePointer<Float>, srcW: Int32, srcH: Int32, nComp: Int32,
                                    subX0: Int32, subY0: Int32, subW: Int32, subH: Int32)
@@ -176,8 +171,7 @@ public class Atlas
     }
   }
 
-  /// Replicates the baked interior out into the cell's padding ring so mip
-  /// generation never bleeds between neighbouring cells.
+  /// copies the baked interior into the cell's padding ring so mips never bleed between cells
   public static func fillCellBorder(_ pixels: UnsafeMutablePointer<UInt8>,
                                     colorPixels: UnsafeMutablePointer<UInt8>,
                                     atlasWidth: Int32,
@@ -196,6 +190,7 @@ public class Atlas
         for x in 0 ..< Int(regionSize)
         {
           let px = Int(px0) + x
+
           // interior is already baked.
           if px >= cx0, px < cx1, py >= cy0, py < cy1 { continue }
           let sx = min(max(px, cx0), cx1 - 1)
@@ -213,8 +208,7 @@ public class Atlas
     fill(colorPixels)
   }
 
-  /// Substitutes a UDIM tile number into a "<UDIM>"-templated path.
-  /// `u`/`v` are tile grid coordinates (tile 1001 is u=0, v=0).
+  /// fills a udim tile number into a templated path, tile 1001 being the first at 0 0
   public static func resolveUdimTile(_ templatePath: std.string,
                                      _ u: Int32,
                                      _ v: Int32) -> std.string

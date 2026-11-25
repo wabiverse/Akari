@@ -40,7 +40,7 @@
 
 public extension Akari.Color
 {
-  /// AgX looks, graded in AgX's log space ahead of its curve.
+  /// agx looks, graded in agx's log space ahead of its curve
   enum Look: String, Sendable, CaseIterable, CustomStringConvertible
   {
     case none = "None"
@@ -71,7 +71,7 @@ public extension Akari.Color
       }
     }
 
-    /// "AgX - Punchy" or "None".
+    /// a look from its name like agx punchy, or none
     public init?(lookName: String)
     {
       let name = lookName.hasPrefix("AgX - ") ? String(lookName.dropFirst(6)) : lookName

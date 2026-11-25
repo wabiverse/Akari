@@ -43,14 +43,15 @@ import Foundation
 import HdAkari
 import HydraKit
 import LabGL
+import simd
 
 extension Akari.Geom.Deformer
 {
-  /// Uploads this frame's points and matrices and deforms on the GPU.
-  /// Returns the bounds, per mesh caster bounds and keys, in draw order.
+  /// uploads this frame's points and matrices and deforms them on the gpu, returning the bounds and each mesh's caster bounds and keys
   public func update(_ meshes: [Akari.Geom.Recorder.RawMesh]) -> (bounds: (min: SIMD3<Float>, max: SIMD3<Float>)?,
                                                        casterBounds: [Float], casterKeys: [UInt64])
   {
+    glassBounds = []
     guard
       cornerCount > 0,
       !buffers.points.isEmpty
@@ -78,25 +79,74 @@ extension Akari.Geom.Deformer
       let xfPtr = gl.mapBuffer(buffers.transforms[cursor])?.assumingMemoryBound(to: Float.self)
     else { return (nil, [], []) }
     let palettePtr = buffers.palettes.isEmpty ? nil : gl.mapBuffer(buffers.palettes[cursor])?.assumingMemoryBound(to: Float.self)
+    let cagePtr = buffers.cages.isEmpty ? nil : gl.mapBuffer(buffers.cages[cursor])?.assumingMemoryBound(to: Float.self)
 
     let indexOf = Dictionary(meshes.indices.map { (meshes[$0].key, $0) }, uniquingKeysWith: { a, _ in a })
     var casterBounds: [Float] = []
     var casterKeys: [UInt64] = []
     casterBounds.reserveCapacity(self.meshes.count * 6)
     var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
+    let laidOutCount = self.meshes.count
+    if written.count != Self.ring * laidOutCount
+    {
+      written = [UInt64](repeating: .max, count: Self.ring * laidOutCount)
+      pointBounds = [Float](repeating: 0, count: laidOutCount * 6)
+    }
+
+    let glassPtr = buffers.glassDraws.isEmpty ? nil : gl.mapBuffer(buffers.glassDraws[cursor])?.assumingMemoryBound(to: UInt32.self)
+    var draw = 0
+    drawBounds.removeAll(keepingCapacity: true)
+    drawBounded.removeAll(keepingCapacity: true)
+    glassDrawIndices.removeAll(keepingCapacity: true)
+    var local = [Float](repeating: 0, count: 6)
+
+    // copies a mesh's points into this ring slot only when it holds an older revision of them.
+    let upload = { (index: Int, revision: UInt64, copy: (UnsafeMutablePointer<Float>) -> Void) in
+      let slot = self.cursor * laidOutCount + index
+      self.pointBounds.withUnsafeMutableBufferPointer
+      { cached in
+        let bounds = cached.baseAddress! + index * 6
+        if self.written[slot] != revision
+        {
+          copy(bounds)
+          self.written[slot] = revision
+        }
+
+        local.withUnsafeMutableBufferPointer { $0.baseAddress!.update(from: bounds, count: 6) }
+      }
+    }
 
     for (index, laidOut) in self.meshes.enumerated()
     {
+      let drawn = !undrawn.contains(laidOut.key)
+
       // a mesh laid out but not given this frame collapses to a point, so it draws nothing.
       guard let i = indexOf[laidOut.key]
       else
       {
+        if drawn
+        {
+          glassPtr?[draw] = 0
+          drawBounds += Self.nowhere
+
+          // collapsed to a point it draws nothing anywhere
+          drawBounded.append(true)
+          draw += 1
+        }
+
         (xfPtr + index * Self.xfStride).update(repeating: 0, count: Self.xfStride)
         xfPtr[index * Self.xfStride + 37] = 1
         continue
       }
 
-      var local = [Float](repeating: 0, count: 6)
+      let drawIndex = drawn ? draw : -1
+      if drawn
+      {
+        glassPtr?[draw] = meshes[i].transparent ? 1 : 0
+        if meshes[i].transparent { glassDrawIndices.append(draw) }
+        draw += 1
+      }
+
       if laidOut.jointCount > 0, let palettePtr, meshes[i].skinPalette.count == laidOut.jointCount * 12
       {
         meshes[i].skinPalette.withUnsafeBufferPointer
@@ -106,11 +156,18 @@ extension Akari.Geom.Deformer
 
         local = meshes[i].skinBounds
       }
+      else if laidOut.cageCount > 0, let cagePtr, meshes[i].cagePoints.size() == laidOut.cageCount
+      {
+        // a refined mesh uploads only its cage, the subdivide kernel builds its points from it.
+        upload(index, meshes[i].dataRevision)
+        { Pixar.HdAkariCopyPoints(meshes[i].cagePoints, cagePtr + laidOut.cageBase * 3, $0) }
+      }
       else
       {
         // its palette changed size since the layout, relay out rather than skin with the old one.
         if laidOut.jointCount > 0 { relayout = true }
-        Pixar.HdAkariCopyPoints(meshes[i].points, pointPtr + laidOut.pointBase * 3, &local)
+        upload(index, meshes[i].dataRevision)
+        { Pixar.HdAkariCopyPoints(meshes[i].points, pointPtr + laidOut.pointBase * 3, $0) }
       }
 
       let xf = xfPtr + index * Self.xfStride
@@ -155,7 +212,16 @@ extension Akari.Geom.Deformer
       xf[35] = Float(laidOut.cornerBase / 3)
       xf[36] = Float(laidOut.cornerCount / 3)
       xf[37] = 0
+      xf[38] = Self.shading(meshes[i])
       casterBounds += [wlo.x, wlo.y, wlo.z, whi.x, whi.y, whi.z]
+      if drawIndex >= 0
+      {
+        drawBounds += [wlo.x, wlo.y, wlo.z, whi.x, whi.y, whi.z]
+        drawBounded.append(assemble.x >= 0.9999)
+      }
+
+      // read from this frame's mesh since a material edit can make it glass, a glowing shell is light and casts no tinted light
+      if meshes[i].transparent, !meshes[i].emitter { glassBounds.append((wlo, whi)) }
       lo = pointwiseMin(lo, wlo)
       hi = pointwiseMax(hi, whi)
 
@@ -170,14 +236,83 @@ extension Akari.Geom.Deformer
 
     gl.unmapBuffer(buffers.points[cursor])
     gl.unmapBuffer(buffers.transforms[cursor])
+    if glassPtr != nil
+    {
+      gl.unmapBuffer(buffers.glassDraws[cursor])
+      glassDraws = buffers.glassDraws[cursor]
+    }
     if palettePtr != nil { gl.unmapBuffer(buffers.palettes[cursor]) }
+    if cagePtr != nil { gl.unmapBuffer(buffers.cages[cursor]) }
 
     dispatch()
     return (lo.x <= hi.x ? (lo, hi) : nil, casterBounds, casterKeys)
   }
 
+  /// marks the draws whose bounds reach into the camera's slightly widened frustum, nil when there are none, so replays draw exactly as before
+  public func cameraVisibility(_ viewProjection: Akari.Matrix4) -> GLuint?
+  {
+    let count = drawBounds.count / 6
+    guard count > 0, drawBounded.count == count else { return nil }
+
+    if buffers.cameraDraws.isEmpty { buffers.cameraDraws = [GLuint](repeating: 0, count: Self.ring) }
+    if count > cameraCapacity
+    {
+      for i in 0 ..< Self.ring
+      {
+        if buffers.cameraDraws[i] != 0 { gl.deleteBuffer(buffers.cameraDraws[i]) }
+        buffers.cameraDraws[i] = gl.createBuffer(usage: LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_MAP_WRITE,
+                                                 sizeBytes: GLsizei(count * MemoryLayout<UInt32>.size))
+      }
+
+      cameraCapacity = count
+    }
+
+    cameraCursor = (cameraCursor + 1) % Self.ring
+    let buffer = buffers.cameraDraws[cameraCursor]
+    guard buffer != 0, let mask = gl.mapBuffer(buffer)?.assumingMemoryBound(to: UInt32.self) else { return nil }
+
+    let margin: Float = 1.02
+    let matrix = viewProjection.simd
+    for draw in 0 ..< count
+    {
+      let b = draw * 6
+      let lo = SIMD3(drawBounds[b], drawBounds[b + 1], drawBounds[b + 2])
+      let hi = SIMD3(drawBounds[b + 3], drawBounds[b + 4], drawBounds[b + 5])
+
+      // a box is outside when all eight of its corners are past the same plane
+      var outside = [Int](repeating: 0, count: 6)
+      for corner in 0 ..< 8
+      {
+        let point = SIMD4(corner & 1 != 0 ? hi.x : lo.x, corner & 2 != 0 ? hi.y : lo.y, corner & 4 != 0 ? hi.z : lo.z, 1)
+        let p = matrix * point
+        let w = p.w * margin
+        if p.x < -w { outside[0] += 1 }
+        if p.x > w { outside[1] += 1 }
+        if p.y < -w { outside[2] += 1 }
+        if p.y > w { outside[3] += 1 }
+        if p.z < -w { outside[4] += 1 }
+        if p.z > w { outside[5] += 1 }
+      }
+
+      let culled = drawBounded[draw] && outside.contains(8)
+      mask[draw] = culled ? 0 : 1
+    }
+
+    gl.unmapBuffer(buffer)
+    return buffer
+  }
+
   private func dispatch()
   {
+    let stencilRows = arrays.stencilTargets.count
+    if stencilRows > 0, !buffers.cages.isEmpty
+    {
+      setCount(kernels[.subdivide], stencilRows)
+      kernels[.subdivide].bind(buffers.stencilTargets, buffers.stencilStarts, buffers.stencilIndices, buffers.stencilWeights,
+                               buffers.cages[cursor], buffers.points[cursor])
+      kernels[.subdivide].dispatch((stencilRows + 63) / 64)
+    }
+
     if jointCount > 0
     {
       setCount(kernels[.skin], pointCount)
@@ -198,7 +333,8 @@ extension Akari.Geom.Deformer
     hasHistory = true
     settled = false
     kernels[.emit].bind(buffers.corners, buffers.uvs, buffers.points[cursor], buffers.pointNormals, buffers.faceNormals,
-                        buffers.pointMesh, buffers.transforms[cursor], buffers.vertices)
+                        buffers.pointMesh, buffers.transforms[cursor], buffers.vertices, buffers.cornerNormals,
+                        buffers.restNormals)
     kernels[.emit].dispatch((cornerCount + 63) / 64)
 
     guard buffers.shadowVertices != 0 else { return }
@@ -207,8 +343,7 @@ extension Akari.Geom.Deformer
     kernels[.shadow].dispatch((pointCount + 63) / 64)
   }
 
-  /// Records one draw per mesh, by its corner range of `indices`, against a vertex
-  /// buffer compute fills, the capture takes both over at their unmap. Returns that buffer.
+  /// records one draw per mesh against a vertex buffer compute fills and returns that buffer, the capture takes both at their unmap
   func record(into capture: OpaquePointer, vertexCount: Int, indices indexData: [Int32]) -> GLuint
   {
     let stride = Akari.Geom.Batch.vertexStride
@@ -267,14 +402,14 @@ extension Akari.Geom.Deformer
     return vertices
   }
 
-  /// The first of any meshes sharing an id.
+  /// the first of any meshes sharing an id.
   static func unique(_ meshes: [Akari.Geom.Recorder.RawMesh]) -> [Akari.Geom.Recorder.RawMesh]
   {
     var seen = Set<UInt64>()
     return meshes.filter { seen.insert($0.key).inserted }
   }
 
-  /// Zeroes the motion of a frame nothing deformed in, once.
+  /// zeroes the motion of a frame nothing deformed in, once.
   public func settle()
   {
     guard !settled, hasHistory, kernels[.settle].isBuilt, buffers.vertices != 0, cornerCount > 0 else { return }
@@ -289,20 +424,25 @@ extension Akari.Geom.Deformer
     kernel.set(.params, SIMD4<Int32>(Int32(count), flag ? 1 : 0, 0, 0))
   }
 
-  /// Everything but `vertices`, which the capture owns and frees on its clear.
+  /// everything but `vertices`, which the capture owns and frees on its clear.
   func releaseBuffers()
   {
     for buffer in [buffers.faces, buffers.corners, buffers.uvs, buffers.faceStart, buffers.faceList, buffers.pointMesh, buffers.faceNormals, buffers.pointNormals,
-                   buffers.restPoints, buffers.skinRanges, buffers.skinWeights]
-      + buffers.points + buffers.transforms + buffers.palettes where buffer != 0
+                   buffers.cornerNormals, buffers.restNormals,
+                   buffers.restPoints, buffers.skinRanges, buffers.skinWeights,
+                   buffers.stencilTargets, buffers.stencilStarts, buffers.stencilIndices, buffers.stencilWeights]
+      + buffers.points + buffers.transforms + buffers.palettes + buffers.cages + buffers.glassDraws + buffers.cameraDraws where buffer != 0
     {
       gl.deleteBuffer(buffer)
     }
 
     buffers.faces = 0; buffers.corners = 0; buffers.uvs = 0; buffers.faceStart = 0; buffers.faceList = 0; buffers.pointMesh = 0
-    buffers.faceNormals = 0; buffers.pointNormals = 0; buffers.points = []; buffers.transforms = []; buffers.vertices = 0; buffers.shadowVertices = 0
+    buffers.faceNormals = 0; buffers.pointNormals = 0; buffers.cornerNormals = 0; buffers.restNormals = 0; buffers.points = []; buffers.transforms = []; buffers.vertices = 0; buffers.shadowVertices = 0
     buffers.restPoints = 0; buffers.skinRanges = 0; buffers.skinWeights = 0; buffers.palettes = []
-    pointCount = 0; faceCount = 0; cornerCount = 0; jointCount = 0
+    buffers.stencilTargets = 0; buffers.stencilStarts = 0; buffers.stencilIndices = 0; buffers.stencilWeights = 0; buffers.cages = []
+    buffers.glassDraws = []; glassDraws = 0; written = []
+    buffers.cameraDraws = []; cameraCapacity = 0
+    pointCount = 0; faceCount = 0; cornerCount = 0; jointCount = 0; cagePointCount = 0
     capacities = [:]
   }
 

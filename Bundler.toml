@@ -1,12 +1,17 @@
 format_version = 2
 
 [apps.Kraken]
-identifier = 'foundation.wabi.Kraken'
+identifier = 'foundation.wabi.usd'
 product = 'Kraken'
-version = '0.0.7'
+version = '0.0.8'
 category = 'public.app-category.graphics-design'
 icon = 'Branding/Akari.icon'
 
 [apps.Kraken.plist]
 commit = '$(COMMIT_HASH)'
-CFBundleDocumentTypes = [ { type = "dict", value = { CFBundleTypeExtensions = [ 'usd', 'usda', 'usdc', 'usdz' ], CFBundleTypeName = 'Universal Scene Description File', CFBundleTypeRole = 'Editor', LSIsAppleDefaultForType = true, LSItemContentTypes = [ 'com.pixar.universal-scene-description', 'com.pixar.universal-scene-description-mobile', 'com.pixar.usd.ascii', 'com.pixar.usd.crate' ], CFBundleTypeIconSystemGenerated = true } } ]
+UIFileSharingEnabled = true
+LSSupportsOpeningDocumentsInPlace = true
+ITSAppUsesNonExemptEncryption = false
+UISupportedInterfaceOrientations = [ 'UIInterfaceOrientationPortrait', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight' ]
+"UISupportedInterfaceOrientations~ipad" = [ 'UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUpsideDown', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight' ]
+CFBundleDocumentTypes = [ { type = "dict", value = { CFBundleTypeExtensions = [ 'usd', 'usda', 'usdc', 'usdz' ], CFBundleTypeName = 'Universal Scene Description File', CFBundleTypeRole = 'Editor', LSHandlerRank = 'Default', LSIsAppleDefaultForType = true, LSItemContentTypes = [ 'com.pixar.universal-scene-description', 'com.pixar.universal-scene-description-mobile', 'com.pixar.usd.ascii', 'com.pixar.usd.crate' ], CFBundleTypeIconSystemGenerated = true } } ]

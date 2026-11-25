@@ -44,16 +44,15 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// The timeline's view of playback. Only play state is published, the frame is
-  /// polled by the views that show it so playing doesn't rebuild the view tree.
+  /// the timeline's view of playback, only play state is published so playing doesn't rebuild the view tree
   @MainActor
   final class Timeline: ObservableObject
   {
     @Published var isPlaying = false
     @Published var isReversed = false
-    /// Shows the dope sheet instead of the plain ruler.
+    /// shows the dope sheet instead of the plain ruler.
     @Published var showsDopeSheet = false
-    /// Called on every frame change, with whether playback is running.
+    /// called on every frame change, with whether playback is running.
     var onFrame: ((Bool) -> Void)?
     private var lastFrame = Double.nan
 

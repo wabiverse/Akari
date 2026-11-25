@@ -60,9 +60,7 @@ AkariRenderBufferSetExternalTexture(HdAkariRenderBuffer *renderBuffer,
     return;
   }
 
-  // the wrap is described from the AOV's own dims/format, so the creator's
-  // texture must match the AOV descriptor (Float16Vec4 color, Int32 ids,
-  // Float32 depth).
+  // the wrap is described from the aov's own size and format, so the external texture must match it
   HgiTextureDesc desc;
   desc.debugName = "HdAkari AOV (external)";
   desc.dimensions = GfVec3i((int)renderBuffer->GetWidth(), (int)renderBuffer->GetHeight(), 1);
@@ -72,7 +70,9 @@ AkariRenderBufferSetExternalTexture(HdAkariRenderBuffer *renderBuffer,
   desc.sampleCount = HgiSampleCount1;
   desc.usage = HgiTextureUsageBitsColorTarget | HgiTextureUsageBitsShaderRead;
 
+#if __has_include(<pxr/pxrns.h>)
   renderBuffer->SetWrappedTexture(hgi->CreateExternalTexture(desc, rawResource), rawResource);
+#endif // __has_include(<pxr/pxrns.h>)
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

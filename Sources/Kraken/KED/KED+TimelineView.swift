@@ -45,11 +45,13 @@ import SwiftCrossUI
 #if os(macOS)
   import AppKit
   import AppKitBackend
+#else
+  import UIKit
 #endif
 
 extension Kraken
 {
-  /// Playback controls over a ruler of frames to scrub.
+  /// playback controls over a ruler of frames to scrub.
   @MainActor
   struct TimelineView: View
   {
@@ -57,9 +59,9 @@ extension Kraken
     @State private var job: RenderJob
     @State private var keyframes: Keyframes
     let layout: Layout
-    /// Height below the header. 0 when collapsed to just the header.
+    /// height below the header. 0 when collapsed to just the header.
     let bodyHeight: Double
-    /// Called when switching editors, with true for the dope sheet.
+    /// called when switching editors, with true for the dope sheet.
     var editorChanged: (Bool) -> Void = { _ in }
     let openPlayback: () -> Void
 
@@ -79,7 +81,7 @@ extension Kraken
       self.openPlayback = openPlayback
     }
 
-    /// Switches between the timeline ruler and the dope sheet.
+    /// switches between the timeline ruler and the dope sheet.
     private var editorToggle: some View
     {
       HStack(spacing: 1)
@@ -114,7 +116,7 @@ extension Kraken
       }
     }
 
-    /// Auto Keying keys every edit on the current frame.
+    /// auto keying keys every edit on the current frame.
     private var autoKeyButton: some View
     {
       Circle()
@@ -219,7 +221,7 @@ extension Kraken
     }
   }
 
-  /// Frame numbers along the top, the playhead over them, a click or drag moves it.
+  /// frame numbers along the top, the playhead over them, a click or drag moves it.
   @MainActor
   struct TimelineRuler: View
   {
@@ -239,165 +241,142 @@ extension Kraken
 
     var body: some View
     {
-      VStack(spacing: 0)
-      {
-        #if os(macOS)
-          NativeRuler(frame: frame, start: start, end: end, scrub: scrub)
-        #endif
-      }
+      NativeView(make: { RulerView() },
+                 update: { [frame, start, end, scrub] view in
+                   view.read = { (frame(), start(), max(end(), start())) }
+                   view.onScrub = scrub
+                   view.poll()
+                 },
+                 size: { ViewSize($0.width ?? 400, $0.height ?? Double(TimelineView.rulerHeight)) })
     }
   }
 
-  #if os(macOS)
-    struct NativeRuler: NSViewRepresentable
-    {
-      let frame: () -> Int
-      let start: () -> Int
-      let end: () -> Int
-      let scrub: (Int) -> Void
+  /// draws the ruler and turns a press or drag along it into a frame.
+  final class RulerView: CanvasView
+  {
+    var current = 0
+    var start = 1
+    var end = 250
+    var read: () -> (frame: Int, start: Int, end: Int) = { (0, 1, 250) }
+    var onScrub: (Int) -> Void = { _ in }
 
-      func makeNSView(context _: Context) -> RulerView
-      {
-        RulerView()
-      }
+    private let ticker = Ticker()
 
-      func updateNSView(_ view: RulerView, context _: Context)
-      {
-        view.read = { (frame(), start(), max(end(), start())) }
-        view.onScrub = scrub
-        view.poll()
-      }
-
-      func sizeThatFits(_ proposal: ProposedViewSize, nsView _: RulerView, context _: Context) -> ViewSize
-      {
-        ViewSize(proposal.width ?? 400, proposal.height ?? Double(TimelineView.rulerHeight))
-      }
-    }
-
-    final class RulerView: NSView
-    {
-      var current = 0
-      var start = 1
-      var end = 250
-      var read: () -> (frame: Int, start: Int, end: Int) = { (0, 1, 250) }
-      var onScrub: (Int) -> Void = { _ in }
-
-      private let ticker = Ticker()
-
+    #if os(macOS)
       override func viewDidMoveToWindow()
       {
         super.viewDidMoveToWindow()
         ticker.run(window != nil) { [weak self] in self?.poll() }
       }
-
-      /// Redraws only when what it shows changed.
-      func poll()
+    #else
+      override func didMoveToWindow()
       {
-        let now = read()
-        guard now.frame != current || now.start != start || now.end != end else { return }
-        (current, start, end) = now
-        needsDisplay = true
+        super.didMoveToWindow()
+        ticker.run(window != nil) { [weak self] in self?.poll() }
       }
+    #endif
 
-      private static let numbers = 20.0
-      private static let background = NSColor(white: 0.157, alpha: 1)
-      private static let band = NSColor(white: 0.19, alpha: 1)
-      private static let outside = NSColor(white: 0, alpha: 0.18)
-      private static let tick = NSColor(white: 0.24, alpha: 1)
-      private static let accent = NSColor(srgbRed: 0.278, green: 0.447, blue: 0.702, alpha: 1)
-      private static let label: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: 10),
-        .foregroundColor: NSColor(white: 0.7, alpha: 1),
-      ]
-      private static let playhead: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-        .foregroundColor: NSColor.white,
-      ]
-
-      override var isFlipped: Bool
-      {
-        true
-      }
-
-      override func acceptsFirstMouse(for _: NSEvent?) -> Bool
-      {
-        true
-      }
-
-      /// The frames shown, the scene's range with a little room either side.
-      private var shown: (lo: Double, hi: Double)
-      {
-        let pad = max(Double(end - start) * 0.02, 2)
-        return (Double(start) - pad, Double(end) + pad)
-      }
-
-      private func x(_ frame: Double) -> CGFloat
-      {
-        let shown = shown
-        return CGFloat((frame - shown.lo) / (shown.hi - shown.lo)) * bounds.width
-      }
-
-      override func mouseDown(with event: NSEvent)
-      {
-        scrub(at: event)
-      }
-
-      override func mouseDragged(with event: NSEvent)
-      {
-        scrub(at: event)
-      }
-
-      private func scrub(at event: NSEvent)
-      {
-        let shown = shown
-        let fraction = Double(convert(event.locationInWindow, from: nil).x / max(bounds.width, 1))
-        let frame = Int((shown.lo + fraction * (shown.hi - shown.lo)).rounded())
-        guard frame != current else { return }
-        current = frame
-        needsDisplay = true
-        onScrub(frame)
-      }
-
-      override func draw(_: NSRect)
-      {
-        Self.background.setFill()
-        bounds.fill()
-        Self.band.setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: Self.numbers).fill()
-
-        let pixelsPerFrame = Double(bounds.width) / (shown.hi - shown.lo)
-        let steps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000]
-        let step = steps.first { Double($0) * pixelsPerFrame >= 56 } ?? 10000
-        var frame = (Int(shown.lo.rounded(.up)) / step) * step
-        while Double(frame) <= shown.hi
-        {
-          let px = x(Double(frame)).rounded() + 0.5
-          Self.tick.setFill()
-          NSRect(x: px - 0.5, y: Self.numbers, width: 1, height: bounds.height - Self.numbers).fill()
-          let text = "\(frame)" as NSString
-          let size = text.size(withAttributes: Self.label)
-          text.draw(at: NSPoint(x: px - size.width / 2, y: (Self.numbers - size.height) / 2), withAttributes: Self.label)
-          frame += step
-        }
-
-        Self.outside.setFill()
-        NSRect(x: 0, y: Self.numbers, width: x(Double(start)), height: bounds.height - Self.numbers).fill()
-        let endX = x(Double(end) + 1)
-        NSRect(x: endX, y: Self.numbers, width: bounds.width - endX, height: bounds.height - Self.numbers).fill()
-
-        let px = x(Double(current)).rounded()
-        Self.accent.setFill()
-        NSRect(x: px - 1, y: Self.numbers, width: 2, height: bounds.height - Self.numbers).fill()
-        let text = "\(current)" as NSString
-        let size = text.size(withAttributes: Self.playhead)
-        let tag = NSRect(x: px - size.width / 2 - 6, y: 1, width: size.width + 12, height: Self.numbers - 2)
-        NSBezierPath(roundedRect: tag, xRadius: 4, yRadius: 4).fill()
-        text.draw(at: NSPoint(x: tag.midX - size.width / 2, y: tag.midY - size.height / 2), withAttributes: Self.playhead)
-      }
+    /// redraws only when what it shows changed.
+    func poll()
+    {
+      let now = read()
+      guard now.frame != current || now.start != start || now.end != end else { return }
+      (current, start, end) = now
+      invalidate()
     }
-  #endif
 
-  /// The Timeline editor icon, a clock.
+    private static let numbers = 20.0
+    private static let background = PlatformColor(white: 0.157, alpha: 1)
+    private static let band = PlatformColor(white: 0.19, alpha: 1)
+    private static let outside = PlatformColor(white: 0, alpha: 0.18)
+    private static let tick = PlatformColor(white: 0.24, alpha: 1)
+    private static let accent = PlatformColor(srgbRed: 0.278, green: 0.447, blue: 0.702, alpha: 1)
+    private static let label: [NSAttributedString.Key: Any] = [
+      .font: PlatformFont.systemFont(ofSize: 10),
+      .foregroundColor: PlatformColor(white: 0.7, alpha: 1),
+    ]
+    private static let playhead: [NSAttributedString.Key: Any] = [
+      .font: PlatformFont.systemFont(ofSize: 10, weight: .medium),
+      .foregroundColor: PlatformColor.white,
+    ]
+
+    /// the frames shown, the scene's range with a little room either side.
+    private var shown: (lo: Double, hi: Double)
+    {
+      let pad = max(Double(end - start) * 0.02, 2)
+      return (Double(start) - pad, Double(end) + pad)
+    }
+
+    private func x(_ frame: Double) -> CGFloat
+    {
+      let shown = shown
+      return CGFloat((frame - shown.lo) / (shown.hi - shown.lo)) * bounds.width
+    }
+
+    override func pointerDown(at point: CGPoint)
+    {
+      scrub(at: point)
+    }
+
+    override func pointerDragged(to point: CGPoint)
+    {
+      scrub(at: point)
+    }
+
+    private func scrub(at point: CGPoint)
+    {
+      let shown = shown
+      let fraction = Double(point.x / max(bounds.width, 1))
+      let frame = Int((shown.lo + fraction * (shown.hi - shown.lo)).rounded())
+      guard frame != current else { return }
+      current = frame
+      invalidate()
+      onScrub(frame)
+    }
+
+    override func draw(_: CGRect)
+    {
+      Self.background.setFill()
+      bounds.fill()
+      Self.band.setFill()
+      CGRect(x: 0, y: 0, width: bounds.width, height: Self.numbers).fill()
+
+      let pixelsPerFrame = Double(bounds.width) / (shown.hi - shown.lo)
+      let steps = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000]
+      let step = steps.first { Double($0) * pixelsPerFrame >= 56 } ?? 10000
+      var frame = (Int(shown.lo.rounded(.up)) / step) * step
+      while Double(frame) <= shown.hi
+      {
+        let px = x(Double(frame)).rounded() + 0.5
+        Self.tick.setFill()
+        CGRect(x: px - 0.5, y: Self.numbers, width: 1, height: bounds.height - Self.numbers).fill()
+        let text = "\(frame)" as NSString
+        let size = text.size(withAttributes: Self.label)
+
+        // labels at the ends stay inside the ruler instead of being cut off by its edge.
+        let left = min(max(px - size.width / 2, 2), bounds.width - size.width - 2)
+        text.draw(at: CGPoint(x: left, y: (Self.numbers - size.height) / 2), withAttributes: Self.label)
+        frame += step
+      }
+
+      Self.outside.setFill()
+      CGRect(x: 0, y: Self.numbers, width: x(Double(start)), height: bounds.height - Self.numbers).fill()
+      let endX = x(Double(end) + 1)
+      CGRect(x: endX, y: Self.numbers, width: bounds.width - endX, height: bounds.height - Self.numbers).fill()
+
+      let px = x(Double(current)).rounded()
+      Self.accent.setFill()
+      CGRect(x: px - 1, y: Self.numbers, width: 2, height: bounds.height - Self.numbers).fill()
+      let text = "\(current)" as NSString
+      let size = text.size(withAttributes: Self.playhead)
+      let tagWidth = size.width + 12
+      let tag = CGRect(x: min(max(px - tagWidth / 2, 0), bounds.width - tagWidth), y: 1, width: tagWidth, height: Self.numbers - 2)
+      PlatformBezierPath(roundedRect: tag, xRadius: 4, yRadius: 4).fill()
+      text.draw(at: CGPoint(x: tag.midX - size.width / 2, y: tag.midY - size.height / 2), withAttributes: Self.playhead)
+    }
+  }
+
+  /// the timeline editor icon, a clock.
   struct TimelineIcon: Shape
   {
     nonisolated func path(in bounds: Path.Rect) -> Path
@@ -413,11 +392,11 @@ extension Kraken
     }
   }
 
-  /// The Dope Sheet editor icon, with key diamonds on two rows.
+  /// the dope sheet editor icon, with key diamonds on two rows.
   enum DopeSheetIcon
   {
     static let rows = [0.3, 0.72]
-    /// Each key as (x, row), in fractions of the icon.
+    /// each key's place in fractions of the icon
     static let keys = [(0.3, 0), (0.75, 0), (0.55, 1)]
 
     struct Rows: Shape

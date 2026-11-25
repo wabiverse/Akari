@@ -1,16 +1,14 @@
 #!/usr/bin/env zsh
-#
 # publish-metapackages.zsh
-#
-# Take every split <root>/Meta*/Package.swift package out
-# of local edit mode by rewriting sibling dependencies.
-#
-# Default root: ~/wabi/MetaverseKitSplit
+
+# releases every Meta package changed since its latest tag, raises every from on them to that release, and commits, tags and with publish pushes each one
+# copies of a package in MetaverseKitSplit are fast forwarded to its release, the default workspace is the folder holding this checkout
 
 emulate -L zsh
-setopt pipe_fail
+setopt pipe_fail extended_glob
 
 typeset -r SCRIPT_NAME=${0:t}
+typeset -r SCRIPT_DIR=${0:A:h}
 
 typeset -r STRIP_COMMENTS_PERL=$(cat <<'PERL'
 use strict;
@@ -25,7 +23,7 @@ my $i = 0;
 while ($i < $n) {
   my $c = substr($s, $i, 1);
 
-  # Line comments. Keep only the tools-version directive.
+  # line comments, only the tools version directive stays
   if ($c eq '/' && substr($s, $i, 2) eq '//') {
     my $line_start = rindex($s, "\n", $i) + 1;
     my $prefix = substr($s, $line_start, $i - $line_start);
@@ -46,7 +44,7 @@ while ($i < $n) {
     next;
   }
 
-  # Block comments. Swift permits nesting.
+  # block comments, which swift lets nest
   if ($c eq '/' && substr($s, $i, 2) eq '/*') {
     my $comment_start = $i;
     my $line_start = rindex($s, "\n", $comment_start) + 1;
@@ -84,7 +82,7 @@ while ($i < $n) {
     next;
   }
 
-  # Raw string literal: #"..."# or ##"..."##, including multiline forms.
+  # raw string literals with any number of hashes, multiline ones too
   if ($c eq '#') {
     my $j = $i;
     $j++ while $j < $n && substr($s, $j, 1) eq '#';
@@ -103,7 +101,7 @@ while ($i < $n) {
     }
   }
 
-  # Ordinary string literal, single-line or multiline.
+  # ordinary string literals, single or multiline
   if ($c eq '"') {
     my $multiline = substr($s, $i, 3) eq '"""';
     my $delim = $multiline ? '"""' : '"';
@@ -129,7 +127,7 @@ while ($i < $n) {
   $i++;
 }
 
-# Tidy up whitespace that comment removal leaves behind.
+# tidies the whitespace comment removal leaves behind
 $out =~ s/[ \t]+$//mg;
 $out =~ s/\n{3,}/\n\n/g;
 $out .= "\n" unless $out =~ /\n\z/;
@@ -138,658 +136,527 @@ print $out;
 PERL
 )
 
-# ---------------------------------------------------------------------------
-# Output helpers
-# ---------------------------------------------------------------------------
+# rewrites one Package.swift from stdin, raising from floors to VERSIONS, turning Meta paths into urls with UNPATH and retiring MetaTurboJPEG
+typeset -r REWRITE_PERL=$(cat <<'PERL'
+use strict;
+use warnings;
+
+local $/;
+my $s = <>;
+my %ver = map { my ($k, $v) = split /=/, $_, 2; (lc $k, $v) } grep { length } split /;/, ($ENV{VERSIONS} // '');
+my $org = $ENV{ORG};
+
+sub newer {
+  my @a = split /\./, $_[0];
+  my @b = split /\./, $_[1];
+  for my $i (0 .. 2) {
+    my ($x, $y) = ($a[$i] // 0, $b[$i] // 0);
+    return 1 if $x > $y;
+    return 0 if $x < $y;
+  }
+  return 0;
+}
+
+# MetaTurboJPEG is retired in favor of stackotter's libjpegturbo
+my $jpeg = $ENV{JPEG_VERSION};
+my $old_package = qr{\.package\(\s*(?:name:\s*"[^"]*"\s*,\s*)?(?:url|path):\s*"[^"]*MetaTurboJPEG(?:\.git)?/?"\s*(?:,\s*from:\s*"[^"]*"\s*)?\)};
+my $old_product = qr{\.product\(\s*name:\s*"TurboJPEG"\s*,\s*package:\s*"MetaTurboJPEG"\s*\)};
+if ($s =~ /libjpegturbo/) {
+  $s =~ s{^[ \t]*$old_package,?[ \t]*\n}{}mg;
+  $s =~ s{^[ \t]*$old_product,?[ \t]*\n}{}mg;
+} else {
+  $s =~ s{$old_package}{.package(url: "https://github.com/stackotter/libjpegturbo", from: "$jpeg")}g;
+  $s =~ s{$old_product}{.product(name: "JPEGTurbo", package: "libjpegturbo")}g;
+}
+
+# local paths to Meta packages become their releases
+if ($ENV{UNPATH}) {
+  $s =~ s{\.package\(\s*(?:name:\s*"[^"]*"\s*,\s*)?path:\s*"(?:[^"]*/)?(Meta[A-Za-z0-9_]+)/?"\s*\)}{
+    my $n = $1;
+    defined $ver{lc $n} ? qq{.package(url: "https://github.com/$org/$n.git", from: "$ver{lc $n}")} : $&
+  }ge;
+}
+
+# from floors up to the latest release
+$s =~ s{(\.package\(\s*(?:name:\s*"[^"]*"\s*,\s*)?url:\s*"[^"]*/([A-Za-z0-9_.-]+?)(?:\.git)?/?"\s*,\s*from:\s*")([^"]*)(")}{
+  my ($pre, $n, $v, $post) = ($1, $2, $3, $4);
+  my $t = $ver{lc $n};
+  (defined $t && newer($t, $v)) ? "$pre$t$post" : "$pre$v$post"
+}ge;
+
+print $s;
+PERL
+)
+
+# output helpers
 
 if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
-  C_RESET=$'\e[0m'
-  C_DIM=$'\e[2m'
-  C_RED=$'\e[31m'
-  C_GREEN=$'\e[32m'
-  C_YELLOW=$'\e[33m'
-  C_BLUE=$'\e[34m'
-  C_BOLD=$'\e[1m'
+  C_RESET=$'\e[0m' C_DIM=$'\e[2m' C_RED=$'\e[31m' C_GREEN=$'\e[32m'
+  C_YELLOW=$'\e[33m' C_BLUE=$'\e[34m' C_BOLD=$'\e[1m'
 else
-  C_RESET=''
-  C_DIM=''
-  C_RED=''
-  C_GREEN=''
-  C_YELLOW=''
-  C_BLUE=''
-  C_BOLD=''
+  C_RESET='' C_DIM='' C_RED='' C_GREEN='' C_YELLOW='' C_BLUE='' C_BOLD=''
 fi
 
 info() { print -r -- "${C_BLUE}==>${C_RESET} $*" }
 ok()   { print -r -- "${C_GREEN}  ok${C_RESET} $*" }
+note() { print -r -- "  ${C_DIM}$*${C_RESET}" }
 warn() { print -ru2 -- "${C_YELLOW}warning:${C_RESET} $*" }
 die()  { print -ru2 -- "${C_RED}error:${C_RESET} $*"; exit 1 }
 
 usage() {
   cat <<EOF
-Usage: ${SCRIPT_NAME} [options] [root ...]
+Usage: ${SCRIPT_NAME} [options]
 
-Rewrite every Meta* SwiftPM package under the given roots out of local edit
-mode, strip Package.swift comments, and optionally publish each one to GitHub.
+Release every Meta* SwiftPM package that changed since its latest tag, raise
+every from: on a Meta* package to its latest release across the workspace,
+and release whatever that bump changes in turn.
 
 Options:
-  -r, --root DIR              Root to scan. May be repeated.
-                              Default: ~/wabi/MetaverseKitSplit
-      --dry-run               Print manifest diffs only (default)
-      --apply                 Rewrite manifests, strip comments, then create
-                              the local git history (init, commit, tag).
-                              Does not push.
-      --publish               --apply plus create/push the GitHub repository
-      --comments-only         Strip comments only. No dependency rewrite,
-                              .gitignore, git, or publish.
-      --retag                 Replace local legacy 1.0.0 tags with v1.0.0.
-                              Does not push or alter manifests.
-      --keep-comments         Do not strip comments during --apply/--publish
-      --no-git                Rewrite manifests only, even with --apply/--publish
-      --org ORG               GitHub organization/user (default: wabiverse)
-      --visibility MODE       public or private (default: public)
-      --release-version VER   Version to depend on (default: 1.0.0).
-                              Git tag and GitHub release are vVER.
-      --branch NAME           Initial branch name (default: main)
-      --verify                Run 'swift package dump-package' after each rewrite
-  -h, --help                  Show this help
+      --dry-run            Show what would be released and every manifest
+                           change (default)
+      --apply              Rewrite manifests, commit and tag each release.
+                           Does not push.
+      --publish            --apply, then push each release branch and tag and
+                           create its GitHub release
+      --bump KIND          patch, minor or major (default: patch)
+      --only NAME          Release only these packages and what depends on
+                           them. May be repeated.
+      --skip NAME          Never release this package. May be repeated.
+      --no-cascade         Release only the changed packages. Meta* packages
+                           depending on them keep their from: as is.
+      --unpath             Also turn local path: dependencies on Meta*
+                           packages outside the Meta* packages (Akari's
+                           ../MetaTIFF and so on) into url + from: releases
+      --strip-comments     Strip comments from each released Package.swift
+      --workspace DIR      Folder holding the packages (default: ${SCRIPT_DIR:h:h})
+      --org ORG            GitHub organization (default: wabiverse)
+      --verify             Run 'swift package dump-package' on each release
+  -h, --help               Show this help
 
-Modes are mutually exclusive; the last mode flag on the command line wins.
+Meta* packages released here never keep path: dependencies on other Meta*
+packages, those always become url + from:.
 
 Examples:
   ${SCRIPT_NAME}
-  ${SCRIPT_NAME} --comments-only --verify
-  ${SCRIPT_NAME} --apply --verify
+  ${SCRIPT_NAME} --apply
   ${SCRIPT_NAME} --publish
-  ${SCRIPT_NAME} --root ~/wabi/MetaverseKitSplit/MetaOpenVDB --publish
+  ${SCRIPT_NAME} --publish --only MetaTIFF --bump minor
 EOF
 }
 
-# ---------------------------------------------------------------------------
-# Options
-# ---------------------------------------------------------------------------
+# options
 
-typeset -a roots
 typeset mode=dry
-typeset do_git=1
+typeset bump=patch
 typeset org=wabiverse
-typeset visibility=public
-typeset release_version=1.0.0
-typeset branch=main
-typeset do_verify=0
-typeset do_strip=1
+typeset workspace=${SCRIPT_DIR:h:h}
+typeset -i cascade=1 unpath=0 do_strip=0 do_verify=0
+typeset -a only skip
 
 while (( $# )); do
   case $1 in
-    -r|--root)
+    --dry-run) mode=dry; shift ;;
+    --apply) mode=apply; shift ;;
+    --publish) mode=publish; shift ;;
+    --bump)
+      (( $# >= 2 )) || die "$1 requires patch, minor or major"
+      bump=$2; shift 2 ;;
+    --only)
+      (( $# >= 2 )) || die "$1 requires a package name"
+      only+=("$2"); shift 2 ;;
+    --skip)
+      (( $# >= 2 )) || die "$1 requires a package name"
+      skip+=("$2"); shift 2 ;;
+    --no-cascade) cascade=0; shift ;;
+    --unpath) unpath=1; shift ;;
+    --strip-comments) do_strip=1; shift ;;
+    --workspace)
       (( $# >= 2 )) || die "$1 requires a directory"
-      roots+=("$2")
-      shift 2
-      ;;
-    --dry-run)
-      mode=dry
-      shift
-      ;;
-    --apply)
-      mode=apply
-      shift
-      ;;
-    --publish)
-      mode=publish
-      shift
-      ;;
-    --comments-only)
-      mode=comments
-      shift
-      ;;
-    --retag)
-      mode=retag
-      shift
-      ;;
-    --keep-comments)
-      do_strip=0
-      shift
-      ;;
-    --no-git)
-      do_git=0
-      shift
-      ;;
+      workspace=$2; shift 2 ;;
     --org)
       (( $# >= 2 )) || die "$1 requires a value"
-      org=$2
-      shift 2
-      ;;
-    --visibility)
-      (( $# >= 2 )) || die "$1 requires a value"
-      visibility=$2
-      shift 2
-      ;;
-    --release-version)
-      (( $# >= 2 )) || die "$1 requires a value"
-      release_version=$2
-      shift 2
-      ;;
-    --branch)
-      (( $# >= 2 )) || die "$1 requires a value"
-      branch=$2
-      shift 2
-      ;;
-    --verify)
-      do_verify=1
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    --)
-      shift
-      roots+=("$@")
-      break
-      ;;
-    -*)
-      die "unknown option: $1 (try --help)"
-      ;;
-    *)
-      roots+=("$1")
-      shift
-      ;;
+      org=$2; shift 2 ;;
+    --verify) do_verify=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown option: $1 (try --help)" ;;
   esac
 done
 
-case $visibility in
-  public|private) ;;
-  *) die "--visibility must be 'public' or 'private', got: $visibility" ;;
+case $bump in
+  patch|minor|major) ;;
+  *) die "--bump must be patch, minor or major, got: $bump" ;;
 esac
 
-# Dependency spec stays 1.0.0; git tags/releases use the v-prefixed form.
-release_version=${release_version#v}
-[[ -n $release_version ]] || die "--release-version must not be empty"
-typeset -r release_tag="v${release_version}"
+[[ -d $workspace ]] || die "not a directory: $workspace"
+workspace=${workspace:A}
 
-if [[ $mode == publish && $do_git == 0 ]]; then
-  die "--publish requires git; remove --no-git or use --dry-run"
-fi
-
-if [[ $mode == comments && $do_strip == 0 ]]; then
-  die "--comments-only conflicts with --keep-comments"
-fi
-
-if [[ $mode == retag && $do_git == 0 ]]; then
-  die "--retag requires git; remove --no-git"
-fi
-
-(( ${#roots} )) || roots=("$HOME/wabi/MetaverseKitSplit")
-
-case $mode in
-  dry)      mode_label="dry run (no changes)" ;;
-  apply)    mode_label="apply (manifests + local git commit/tag, no push)" ;;
-  publish)  mode_label="publish (manifests + local git + GitHub push)" ;;
-  comments) mode_label="comments only (strip comments, no deps or git)" ;;
-  retag)    mode_label="retag (replace legacy ${release_version} with ${release_tag})" ;;
-esac
-
-# ---------------------------------------------------------------------------
-# Preflight
-# ---------------------------------------------------------------------------
-
-command -v perl >/dev/null 2>&1 || die "perl is required for manifest rewrites"
-
-if [[ $mode == apply || $mode == publish || $mode == retag ]]; then
-  command -v git >/dev/null 2>&1 || die "git is required for --apply/--publish/--retag"
-fi
+command -v perl >/dev/null 2>&1 || die "perl is required"
+command -v git >/dev/null 2>&1 || die "git is required"
 
 if [[ $mode == publish ]]; then
   command -v gh >/dev/null 2>&1 || die "gh is required for --publish"
-  gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run: gh auth login"
+  gh auth status >/dev/null 2>&1 || die "gh is not signed in, run: gh auth login"
 fi
 
-if (( do_git )) && [[ $mode == apply || $mode == publish || $mode == retag ]]; then
-  [[ -n $(git config --get user.name) ]] \
-    || die "git user.name is not configured; run: git config --global user.name 'Your Name'"
-  [[ -n $(git config --get user.email) ]] \
-    || die "git user.email is not configured; run: git config --global user.email 'you@example.com'"
+if [[ $mode != dry ]]; then
+  [[ -n $(git config --get user.name) ]] || die "git user.name is not set"
+  [[ -n $(git config --get user.email) ]] || die "git user.email is not set"
 fi
 
-# ---------------------------------------------------------------------------
-# Discovery
-# ---------------------------------------------------------------------------
+# discovery
 
-typeset -a packages
+# MetaverseKit is the old monorepo the split replaced, MetaTurboJPEG gave way to stackotter's libjpegturbo
+typeset -r -a RETIRED=(MetaverseKit MetaTurboJPEG)
 
-for root in "${roots[@]}"; do
-  [[ -d $root ]] || die "not a directory: $root"
-  root=${root:A}
+typeset -A pkg_dir duplicate_dir
+typeset -a meta_names manifests
 
-  # Allow passing a package directory directly.
-  if [[ -f $root/Package.swift && ${root:t} == Meta* && ${root:t} != MetaverseKit ]]; then
-    packages+=("$root")
+is_retired() { (( ${RETIRED[(Ie)$1]} )) }
+
+for manifest in "$workspace"/Meta*/Package.swift(N) "$workspace"/MetaverseKitSplit/Meta*/Package.swift(N); do
+  local dir=${manifest:h} name=${manifest:h:t}
+  is_retired $name && continue
+  [[ -d $dir/.git ]] || { warn "$name: not a git repository, left alone"; continue }
+  if [[ -n ${pkg_dir[$name]} ]]; then
+    duplicate_dir[$name]=$dir
+    continue
   fi
-
-  for manifest in "$root"/Meta*/Package.swift(N) "$root"/*/Meta*/Package.swift(N); do
-    [[ -f $manifest ]] || continue
-    pkg=${manifest:h}
-    [[ $pkg == */.build/* ]] && continue
-    [[ ${pkg:t} == MetaverseKit ]] && continue
-    packages+=("$pkg")
-  done
+  pkg_dir[$name]=$dir
+  meta_names+=("$name")
 done
 
-packages=("${(@u)packages}")
-packages=("${(@o)packages}")
+(( ${#meta_names} )) || die "no Meta* packages found in $workspace"
+meta_names=("${(@o)meta_names}")
 
-(( ${#packages} )) || die "no Meta* SwiftPM packages found under: ${roots[*]}"
+for o in "${only[@]}"; do [[ -n ${pkg_dir[$o]} ]] || die "--only: no package named $o"; done
+for o in "${skip[@]}"; do [[ -n ${pkg_dir[$o]} ]] || die "--skip: no package named $o"; done
 
-# ---------------------------------------------------------------------------
-# Manifest rewriting
-# ---------------------------------------------------------------------------
+# every other manifest that may depend on a Meta package
+for manifest in "$workspace"/*/Package.swift(N) "$workspace"/MetaverseKitSplit/*/Package.swift(N); do
+  local dir=${manifest:h} name=${manifest:h:t}
+  is_retired $name && continue
+  [[ ${name:l} == *backup* ]] && continue
+  [[ ${duplicate_dir[$name]} == $dir ]] && continue
+  manifests+=("$manifest")
+done
 
-typeset last_count=0
-typeset comments_changed=0
+latest_tag() {
+  git -C "$1" tag -l 'v[0-9]*' --sort=-v:refname | head -1
+}
 
-# Rewrites .package(path: "../MetaFoo") -> .package(url: "...", from: "...").
-# Also handles .package(name: "...", path: "../MetaFoo"). Returns 0 always;
-# the number of converted path dependencies is left in $last_count.
-rewrite_manifest() {
-  local manifest=$1
-  local before after
+next_version() {
+  local v=${1#v}
+  local -a p=("${(@s:.:)v}")
+  local major=${p[1]:-0} minor=${p[2]:-0} patch=${p[3]:-0}
+  case $bump in
+    major) print -r -- "$(( major + 1 )).0.0" ;;
+    minor) print -r -- "${major}.$(( minor + 1 )).0" ;;
+    patch) print -r -- "${major}.${minor}.$(( patch + 1 ))" ;;
+  esac
+}
 
-  last_count=$(grep -c 'path: "\.\./Meta' "$manifest" 2>/dev/null || true)
-  before=$(cksum < "$manifest")
+# the reason a package needs a release, empty when it doesn't
+change_reason() {
+  local dir=$1 tag=$2 dirty since
+  dirty=$(git -C "$dir" status --porcelain | wc -l | tr -d ' ')
+  [[ -z $tag ]] && { print -r -- "never tagged"; return }
+  since=$(git -C "$dir" rev-list --count "$tag..HEAD" 2>/dev/null || print 0)
+  local -a why
+  (( dirty )) && why+=("${dirty} changed file(s)")
+  (( since )) && why+=("${since} commit(s) since ${tag}")
+  print -r -- "${(j:, :)why}"
+}
 
-  ORG=$org RELEASE_VERSION=$release_version perl -0pi -e '
-    s{
-      \.package\(\s*
-      (?:name:\s*"[^"]*"\s*,\s*)?
-      path:\s*"\.\./(Meta[^"/]+)/?"\s*
-      \)
-    }{
-      qq{.package(url: "https://github.com/$ENV{ORG}/$1.git", from: "$ENV{RELEASE_VERSION}")}
-    }gex
-  ' "$manifest"
+typeset -A tag_of new_version reason
+for name in "${meta_names[@]}"; do
+  tag_of[$name]=$(latest_tag "${pkg_dir[$name]}")
+  reason[$name]=$(change_reason "${pkg_dir[$name]}" "${tag_of[$name]}")
+done
 
-  after=$(cksum < "$manifest")
-  [[ $before == $after ]] && last_count=0
+typeset jpeg_version
+jpeg_version=$(git ls-remote --tags --refs https://github.com/stackotter/libjpegturbo.git 2>/dev/null \
+  | sed -E 's#.*refs/tags/v?##' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+[[ -n $jpeg_version ]] || { jpeg_version=0.1.4; warn "could not reach stackotter/libjpegturbo, using ${jpeg_version}" }
+
+releasable() {
+  local name=$1
+  (( ${skip[(Ie)$name]} )) && return 1
   return 0
 }
 
-# Strips comments in place. Sets $comments_changed to 1 when the file changed.
-strip_comments() {
-  local file=$1
-  local tmp="${file}.strip-comments.$$"
+# plans the changed packages and whatever their from bumps change, until nothing more does, the rewritten manifests wait in a scratch folder
 
-  if ! perl -0 -e "$STRIP_COMMENTS_PERL" "$file" > "$tmp"; then
-    rm -f "$tmp"
-    warn "could not strip comments from $file"
-    return 1
-  fi
+typeset scratch
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/metapublish.XXXXXX") || die "could not make a scratch folder"
+trap 'rm -rf "$scratch"' EXIT
 
-  if cmp -s "$file" "$tmp"; then
-    comments_changed=0
-    rm -f "$tmp"
-  else
-    if ! cat "$tmp" > "$file"; then
-      rm -f "$tmp"
-      warn "could not write $file"
-      return 1
+typeset -a releases
+for name in "${meta_names[@]}"; do
+  [[ -n ${reason[$name]} ]] || continue
+  releasable $name || continue
+  (( ${#only} )) && ! (( ${only[(Ie)$name]} )) && continue
+  releases+=("$name")
+done
+
+versions_env() {
+  local name out=""
+  for name in "${meta_names[@]}"; do
+    if (( ${releases[(Ie)$name]} )); then
+      out+="${name}=$(next_version "${tag_of[$name]:-v0.0.0}");"
+    elif [[ -n ${tag_of[$name]} ]]; then
+      out+="${name}=${tag_of[$name]#v};"
     fi
-    comments_changed=1
-    rm -f "$tmp"
-  fi
-
-  return 0
+  done
+  print -r -- "${out}libjpegturbo=${jpeg_version}"
 }
 
-backup_manifest() {
-  local dir=$1
-  local name=${dir:t}
-  local backup="$backup_dir/$name"
+typeset -A owner_of
+for name in "${meta_names[@]}"; do owner_of[${pkg_dir[$name]}/Package.swift]=$name; done
 
-  mkdir -p "$backup" || {
-    warn "$name: could not create backup directory $backup"
-    return 1
-  }
-  cp "$dir/Package.swift" "$backup/Package.swift" || {
-    warn "$name: could not back up Package.swift"
-    return 1
-  }
-  return 0
-}
-
-verify_package() {
-  local dir=$1
-  local name=${dir:t}
-
-  (( do_verify )) || return 0
-
-  if ! command -v swift >/dev/null 2>&1; then
-    warn "$name: swift not found; skipping --verify"
-    return 0
-  fi
-
-  if ! swift package --package-path "$dir" dump-package >/dev/null; then
-    warn "$name: 'swift package dump-package' failed"
-    return 1
-  fi
-
-  ok "$name: manifest validates"
-  return 0
-}
-
-ensure_gitignore() {
-  local dir=$1
-  local file="$dir/.gitignore"
-  local entry
-  local -a entries=(
-    '.build/'
-    '.swiftpm/'
-    '.index-build/'
-    'DerivedData/'
-    '.DS_Store'
-    'Package.resolved'
-    '*.xcuserstate'
-  )
-
-  if [[ ! -f $file ]]; then
-    print -r -- "# Generated by ${SCRIPT_NAME}" > "$file"
-  fi
-
-  for entry in "${entries[@]}"; do
-    grep -qxF -- "$entry" "$file" || print -r -- "$entry" >> "$file"
+typeset -A rewritten
+rewrite_all() {
+  local versions manifest name out
+  versions=$(versions_env)
+  rewritten=()
+  for manifest in "${manifests[@]}"; do
+    name=${owner_of[$manifest]}
+    out="$scratch/${#rewritten}.swift"
+    local un=$unpath
+    [[ -n $name ]] && un=1
+    VERSIONS=$versions ORG=$org UNPATH=$un JPEG_VERSION=$jpeg_version \
+      perl -0 -e "$REWRITE_PERL" "$manifest" > "$out" || die "could not rewrite $manifest"
+    if cmp -s "$manifest" "$out"; then
+      rm -f "$out"
+    else
+      rewritten[$manifest]=$out
+    fi
   done
 }
 
-# ---------------------------------------------------------------------------
-# Per-package phases
-# ---------------------------------------------------------------------------
+while true; do
+  rewrite_all
+  (( cascade )) || break
+  typeset -i grew=0
+  for manifest in "${(@k)rewritten}"; do
+    name=${owner_of[$manifest]}
+    [[ -n $name ]] || continue
+    (( ${releases[(Ie)$name]} )) && continue
+    releasable $name || continue
+    releases+=("$name")
+    reason[$name]="depends on a new release"
+    grew=1
+  done
+  (( grew )) || break
+done
 
-plan_package() {
-  local dir=$1
-  local name=${dir:t}
-  local manifest="$dir/Package.swift"
-  local tmp dep_count stripped
-  tmp=$(mktemp "${TMPDIR:-/tmp}/metapublish.XXXXXX") || {
-    warn "$name: could not create temporary file"
-    return 1
-  }
+# without the cascade a Meta package that isn't released keeps its manifest
+for manifest in "${(@k)rewritten}"; do
+  name=${owner_of[$manifest]}
+  [[ -n $name ]] && ! (( ${releases[(Ie)$name]} )) && unset "rewritten[$manifest]"
+done
 
-  cp "$manifest" "$tmp"
-  rewrite_manifest "$tmp"
-  dep_count=$last_count
+releases=("${(@o)releases}")
+for name in "${releases[@]}"; do new_version[$name]=$(next_version "${tag_of[$name]:-v0.0.0}"); done
 
-  stripped=0
-  if (( do_strip )); then
-    strip_comments "$tmp" || {
-      rm -f "$tmp"
-      return 1
-    }
-    stripped=$comments_changed
-  fi
+# releases an earlier apply tagged but never pushed
+typeset -a unpushed
+for name in "${meta_names[@]}"; do
+  (( ${releases[(Ie)$name]} )) && continue
+  releasable $name || continue
+  local tag=${tag_of[$name]} branch=
+  [[ -n $tag ]] || continue
+  branch=$(git -C "${pkg_dir[$name]}" symbolic-ref -q --short HEAD) || continue
+  git -C "${pkg_dir[$name]}" merge-base --is-ancestor "$tag" "origin/$branch" 2>/dev/null || unpushed+=("$name")
+done
 
-  if (( dep_count == 0 && stripped == 0 )); then
-    print -r -- "  ${C_DIM}${name}: no local-path Meta dependencies or comments${C_RESET}"
-    rm -f "$tmp"
-    return 0
-  fi
+# show the plan
 
-  local description="$name:"
-  (( dep_count > 0 )) && description+=" would rewrite ${dep_count} path dependency/ies"
-  (( dep_count > 0 && stripped )) && description+=" and"
-  (( stripped )) && description+=" strip comments"
-  print -r -- "  ${C_BOLD}${description}${C_RESET}"
-
-  diff -u -L "a/${name}/Package.swift" -L "b/${name}/Package.swift" "$manifest" "$tmp" \
-    | sed -e '1,2d' -e 's/^/    /'
-  rm -f "$tmp"
-  return 0
-}
-
-apply_package() {
-  local dir=$1
-  local name=${dir:t}
-  local manifest="$dir/Package.swift"
-
-  backup_manifest "$dir" || return 1
-
-  rewrite_manifest "$manifest"
-  if (( last_count > 0 )); then
-    ok "$name: rewrote ${last_count} local-path dependency/ies"
-  else
-    print -r -- "  ${C_DIM}${name}: no local-path Meta dependencies${C_RESET}"
-  fi
-
-  if (( do_strip )); then
-    strip_comments "$manifest" || return 1
-    if (( comments_changed )); then
-      ok "$name: stripped comments"
-    else
-      print -r -- "  ${C_DIM}${name}: no comments to strip${C_RESET}"
-    fi
-  fi
-
-  ensure_gitignore "$dir"
-
-  if grep -q '\.package(path:' "$manifest"; then
-    warn "$name: still has non-Meta path dependencies (left untouched)"
-  fi
-
-  verify_package "$dir" || return 1
-  return 0
-}
-
-comments_package() {
-  local dir=$1
-  local name=${dir:t}
-  local manifest="$dir/Package.swift"
-
-  backup_manifest "$dir" || return 1
-
-  strip_comments "$manifest" || return 1
-  if (( comments_changed )); then
-    ok "$name: stripped comments"
-  else
-    print -r -- "  ${C_DIM}${name}: no comments to strip${C_RESET}"
-  fi
-
-  verify_package "$dir" || return 1
-  return 0
-}
-
-typeset current_branch=$branch
-
-commit_package() {
-  local dir=$1
-  local name=${dir:t}
-  local current
-
-  if [[ ! -d $dir/.git ]]; then
-    if ! git -C "$dir" init -q -b "$branch" 2>/dev/null; then
-      git -C "$dir" init -q || return 1
-      git -C "$dir" symbolic-ref HEAD "refs/heads/$branch" || return 1
-    fi
-    ok "$name: initialized git repository"
-  fi
-
-  if git -C "$dir" rev-parse -q --verify HEAD >/dev/null 2>&1; then
-    current=$(git -C "$dir" symbolic-ref -q --short HEAD) || {
-      warn "$name: repository is in detached HEAD state"
-      return 1
-    }
-  else
-    current=$branch
-    git -C "$dir" symbolic-ref HEAD "refs/heads/$branch" || return 1
-  fi
-
-  git -C "$dir" add -A || return 1
-
-  if git -C "$dir" diff --cached --quiet; then
-    print -r -- "  ${C_DIM}${name}: nothing new to commit${C_RESET}"
-  else
-    git -C "$dir" commit -q -m "Initial commit (${name} ${release_tag})" || return 1
-    ok "$name: committed on ${current}"
-  fi
-
-  if git -C "$dir" rev-parse -q --verify "refs/tags/${release_tag}" >/dev/null 2>&1; then
-    print -r -- "  ${C_DIM}${name}: tag ${release_tag} already exists${C_RESET}"
-  else
-    git -C "$dir" tag -a "$release_tag" -m "${release_tag}" || return 1
-    ok "$name: tagged ${release_tag}"
-  fi
-
-  current_branch=$current
-  return 0
-}
-
-publish_package() {
-  local dir=$1
-  local name=${dir:t}
-  local push_branch=$2
-  local url="https://github.com/${org}/${name}.git"
-
-  if gh repo view "${org}/${name}" >/dev/null 2>&1; then
-    print -r -- "  ${C_DIM}${name}: GitHub repo exists, pushing${C_RESET}"
-    if git -C "$dir" remote get-url origin >/dev/null 2>&1; then
-      git -C "$dir" remote set-url origin "$url" || return 1
-    else
-      git -C "$dir" remote add origin "$url" || return 1
-    fi
-    git -C "$dir" push -q -u origin "$push_branch" || return 1
-  else
-    gh repo create "${org}/${name}" "--${visibility}" \
-      --source "$dir" --remote origin --push >/dev/null || return 1
-  fi
-
-  git -C "$dir" push -q origin "$release_tag" || return 1
-
-  if gh release view "$release_tag" --repo "${org}/${name}" >/dev/null 2>&1; then
-    print -r -- "  ${C_DIM}${name}: GitHub release ${release_tag} already exists${C_RESET}"
-  else
-    gh release create "$release_tag" \
-      --repo "${org}/${name}" \
-      --title "$release_tag" \
-      --notes "Initial release of ${name}." \
-      --verify-tag >/dev/null || return 1
-    ok "$name: created GitHub release ${release_tag}"
-  fi
-
-  ok "$name: published ${org}/${name} (${push_branch} + ${release_tag})"
-  return 0
-}
-
-retag_package() {
-  local dir=$1
-  local name=${dir:t}
-  local legacy=$release_version
-  local legacy_commit v_commit
-
-  if [[ ! -d $dir/.git ]]; then
-    warn "$name: not a git repository"
-    return 1
-  fi
-
-  if git -C "$dir" rev-parse -q --verify "refs/tags/${legacy}" >/dev/null 2>&1; then
-    legacy_commit=$(git -C "$dir" rev-list -n 1 "refs/tags/${legacy}") || return 1
-
-    if git -C "$dir" rev-parse -q --verify "refs/tags/${release_tag}" >/dev/null 2>&1; then
-      v_commit=$(git -C "$dir" rev-list -n 1 "refs/tags/${release_tag}") || return 1
-      if [[ $v_commit != $legacy_commit ]]; then
-        warn "$name: ${release_tag} already exists at ${v_commit}, not ${legacy_commit}; leaving tags alone"
-        return 1
-      fi
-      print -r -- "  ${C_DIM}${name}: ${release_tag} already exists${C_RESET}"
-    else
-      git -C "$dir" tag -a "$release_tag" "$legacy_commit" -m "$release_tag" || return 1
-      ok "$name: tagged ${release_tag} at ${legacy_commit}"
-    fi
-
-    git -C "$dir" tag -d "$legacy" >/dev/null || return 1
-    ok "$name: deleted legacy tag ${legacy}"
-  else
-    if git -C "$dir" rev-parse -q --verify "refs/tags/${release_tag}" >/dev/null 2>&1; then
-      print -r -- "  ${C_DIM}${name}: ${release_tag} already exists; no legacy ${legacy} tag${C_RESET}"
-    else
-      git -C "$dir" tag -a "$release_tag" -m "$release_tag" || return 1
-      ok "$name: tagged ${release_tag}"
-    fi
-  fi
-
-  return 0
-}
-
-process_package() {
-  local dir=$1
-  local push_branch=$branch
-
-  case $mode in
-    dry)
-      plan_package "$dir"
-      return $?
-      ;;
-    comments)
-      comments_package "$dir"
-      return $?
-      ;;
-    retag)
-      retag_package "$dir"
-      return $?
-      ;;
-  esac
-
-  apply_package "$dir" || return 1
-
-  if (( do_git )); then
-    commit_package "$dir" || return 1
-    push_branch=$current_branch
-  fi
-
-  if [[ $mode == publish ]]; then
-    publish_package "$dir" "$push_branch" || return 1
-  fi
-
-  return 0
-}
-
-# ---------------------------------------------------------------------------
-# Run
-# ---------------------------------------------------------------------------
-
-typeset backup_dir=''
-if [[ $mode != dry && $mode != retag ]]; then
-  typeset tmp_base=${TMPDIR:-/tmp}
-  tmp_base=${tmp_base%/}
-  backup_dir="${tmp_base}/metapublish-backups-$(date +%Y%m%d-%H%M%S)"
-  mkdir -p "$backup_dir" || die "could not create backup directory: $backup_dir"
-fi
+case $mode in
+  dry)     mode_label="dry run, nothing changes" ;;
+  apply)   mode_label="apply, commit and tag locally, nothing is pushed" ;;
+  publish) mode_label="publish, commit, tag, push and create GitHub releases" ;;
+esac
 
 print -r -- "${C_BOLD}publish-metapackages${C_RESET}"
-print -r -- "  mode:    ${mode_label}"
-print -r -- "  root(s): ${(j:, :)roots}"
-print -r -- "  found:   ${#packages} package(s)"
-[[ -n $backup_dir ]] && print -r -- "  backup:  ${backup_dir}"
+print -r -- "  mode:         ${mode_label}"
+print -r -- "  workspace:    ${workspace}"
+print -r -- "  libjpegturbo: ${jpeg_version}"
 print -r -- ""
 
-typeset -a succeeded failed
-for dir in "${packages[@]}"; do
-  print -r -- "${C_DIM}--- ${dir}${C_RESET}"
-  if process_package "$dir"; then
-    succeeded+=("${dir:t}")
-  else
-    warn "${dir:t}: failed"
-    failed+=("${dir:t}")
+if (( ${#releases} == 0 && ${#rewritten} == 0 && ${#unpushed} == 0 )); then
+  info "every Meta* package is released and every from: is current"
+  exit 0
+fi
+
+info "releases"
+for name in "${releases[@]}"; do
+  print -r -- "  ${C_BOLD}${name}${C_RESET} ${tag_of[$name]:-untagged} -> v${new_version[$name]}  ${C_DIM}(${reason[$name]})${C_RESET}"
+done
+for name in "${meta_names[@]}"; do
+  [[ -n ${reason[$name]} ]] || continue
+  (( ${releases[(Ie)$name]} )) && continue
+  note "${name} has changes but is left out (${reason[$name]})"
+done
+for name in "${RETIRED[@]}"; do
+  [[ -d $workspace/$name/.git && -n $(git -C "$workspace/$name" status --porcelain) ]] \
+    && note "${name} has changes but is retired, never released"
+done
+for name in "${unpushed[@]}"; do
+  print -r -- "  ${C_BOLD}${name}${C_RESET} ${tag_of[$name]} is tagged but not pushed yet  ${C_DIM}(--publish pushes it)${C_RESET}"
+done
+print -r -- ""
+
+info "manifest changes"
+for manifest in "${(@ok)rewritten}"; do
+  local shown=${manifest#$workspace/}
+  name=${owner_of[$manifest]}
+  if [[ -n $name ]]; then print -r -- "  ${C_BOLD}${shown}${C_RESET}"
+  else print -r -- "  ${C_BOLD}${shown}${C_RESET} ${C_DIM}(not a Meta* package, left uncommitted)${C_RESET}"
   fi
+  diff -u -L "a/$shown" -L "b/$shown" "$manifest" "${rewritten[$manifest]}" | sed -e '1,2d' -e 's/^/    /'
+done
+print -r -- ""
+
+if [[ $mode == dry ]]; then
+  note "nothing changed, run again with --apply to commit and tag or --publish to also push"
+  exit 0
+fi
+
+# preflight for every release before anything is written
+
+typeset -A branch_of
+for name in "${releases[@]}"; do
+  local dir=${pkg_dir[$name]} tag="v${new_version[$name]}"
+  branch_of[$name]=$(git -C "$dir" symbolic-ref -q --short HEAD) || die "$name: detached HEAD, check out a branch first"
+  git -C "$dir" rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "$name: tag $tag already exists"
+
+  if [[ $mode == publish ]]; then
+    git -C "$dir" remote get-url origin >/dev/null 2>&1 || die "$name: has no origin remote"
+    git -C "$dir" fetch -q --tags origin || die "$name: could not fetch origin"
+    local behind=0
+    behind=$(git -C "$dir" rev-list --count "HEAD..origin/${branch_of[$name]}" 2>/dev/null || print 0)
+    (( behind == 0 )) || die "$name: ${behind} commit(s) behind origin/${branch_of[$name]}, pull first"
+    git -C "$dir" ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1 \
+      && die "$name: tag $tag already exists on origin"
+  fi
+done
+
+# writes, commits, tags and publishes
+
+typeset backup="${TMPDIR:-/tmp}"
+backup="${backup%/}/metapublish-backups-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$backup" || die "could not make $backup"
+
+info "writing manifests (originals kept in ${backup})"
+for manifest in "${(@ok)rewritten}"; do
+  local saved="$backup/${manifest#$workspace/}"
+  mkdir -p "${saved:h}" && cp "$manifest" "$saved" || die "could not back up $manifest"
+  cat "${rewritten[$manifest]}" > "$manifest" || die "could not write $manifest"
+  ok "${manifest#$workspace/}"
+done
+print -r -- ""
+
+strip_comments() {
+  local file=$1 tmp="${1}.strip.$$"
+  perl -0 -e "$STRIP_COMMENTS_PERL" "$file" > "$tmp" || { rm -f "$tmp"; return 1 }
+  cmp -s "$file" "$tmp" || cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+# pushes a branch and its release tag and creates the github release
+publish_release() {
+  local name=$1 dir=$2 branch=$3 tag=$4 repo
+  git -C "$dir" push -q origin "$branch" "refs/tags/$tag" || { warn "$name: push failed"; return 1 }
+  ok "pushed ${branch} and ${tag}"
+  repo=$(git -C "$dir" remote get-url origin | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')
+  if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+    note "${repo}@${tag} already has a GitHub release"
+  elif gh release create "$tag" --repo "$repo" --title "$tag" --generate-notes --verify-tag >/dev/null; then
+    ok "created GitHub release ${repo}@${tag}"
+  else
+    warn "$name: could not create the GitHub release"
+    return 1
+  fi
+}
+
+typeset -a done_names failed_names
+for name in "${releases[@]}"; do
+  local dir=${pkg_dir[$name]} tag="v${new_version[$name]}" branch=${branch_of[$name]}
+  info "${name} ${tag}"
+
+  if (( do_strip )); then
+    strip_comments "$dir/Package.swift" || { warn "$name: could not strip comments"; failed_names+=("$name"); continue }
+  fi
+
+  if grep -qE '\.package\(\s*(name:\s*"[^"]*"\s*,\s*)?path:' "$dir/Package.swift"; then
+    warn "$name: still has a path: dependency, a release can't resolve it"
+  fi
+
+  if (( do_verify )) && ! swift package --package-path "$dir" dump-package >/dev/null; then
+    warn "$name: 'swift package dump-package' failed"
+    failed_names+=("$name")
+    continue
+  fi
+
+  git -C "$dir" add -A || { failed_names+=("$name"); continue }
+  if git -C "$dir" diff --cached --quiet; then
+    note "${name}: nothing to commit, tagging ${branch} as it is"
+  else
+    git -C "$dir" commit -q -m "${name} ${tag}" || { failed_names+=("$name"); continue }
+    ok "committed on ${branch}"
+  fi
+
+  git -C "$dir" tag -a "$tag" -m "$tag" || { failed_names+=("$name"); continue }
+  ok "tagged ${tag}"
+
+  if [[ $mode == publish ]]; then
+    publish_release "$name" "$dir" "$branch" "$tag" || { failed_names+=("$name"); continue }
+  fi
+
+  # the copy in MetaverseKitSplit follows the release
+  local copy=${duplicate_dir[$name]}
+  if [[ -n $copy ]]; then
+    if [[ -n $(git -C "$copy" status --porcelain) ]]; then
+      warn "$name: ${copy} has its own changes, not brought up to ${tag}"
+    elif git -C "$copy" fetch -q "$dir" "refs/tags/${tag}:refs/tags/${tag}" \
+         && git -C "$copy" merge -q --ff-only "${tag}^{commit}"; then
+      ok "brought ${copy#$workspace/} up to ${tag}"
+    else
+      warn "$name: ${copy} has diverged, not brought up to ${tag}"
+    fi
+  fi
+
+  done_names+=("$name")
   print -r -- ""
 done
 
+if [[ $mode == publish ]]; then
+  for name in "${unpushed[@]}"; do
+    local dir=${pkg_dir[$name]} tag=${tag_of[$name]} branch=
+    branch=$(git -C "$dir" symbolic-ref -q --short HEAD)
+    info "${name} ${tag}, tagged earlier"
+    if publish_release "$name" "$dir" "$branch" "$tag"; then
+      new_version[$name]=${tag#v}
+      done_names+=("$name")
+    else
+      failed_names+=("$name")
+    fi
+    print -r -- ""
+  done
+fi
+
 info "summary"
-print -r -- "  mode:      ${mode_label}"
-print -r -- "  succeeded: ${#succeeded}"
-if (( ${#failed} )); then
-  print -r -- "  ${C_RED}failed:${C_RESET}    ${(j:, :)failed}"
+print -r -- "  released: ${#done_names}"
+for name in "${done_names[@]}"; do print -r -- "    ${name} v${new_version[$name]}"; done
+local -a others=()
+for manifest in "${(@ok)rewritten}"; do [[ -z ${owner_of[$manifest]} ]] && others+=("${manifest#$workspace/}"); done
+if (( ${#others} )); then
+  print -r -- "  updated, commit these yourself:"
+  for m in "${others[@]}"; do print -r -- "    $m"; done
+fi
+if (( ${#failed_names} )); then
+  print -r -- "  ${C_RED}failed:${C_RESET} ${(j:, :)failed_names}"
   exit 1
 fi
-
-if [[ $mode == dry ]]; then
-  print -r -- "  ${C_DIM}no changes made; re-run with --apply or --publish${C_RESET}"
-fi
-
+[[ $mode == apply ]] && note "nothing was pushed, run again with --publish once you're happy"
 exit 0

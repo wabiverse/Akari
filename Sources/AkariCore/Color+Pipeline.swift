@@ -45,10 +45,10 @@ public extension Akari
 {
   enum Color
   {
-    /// Scene exposure and display mapping applied before/at the view transform.
+    /// scene exposure and the display mapping around the view transform
     public struct Pipeline: Sendable
     {
-      /// The display view transform.
+      /// the display view transform.
       public var viewTransform: Akari.Color.ViewTransform = .agx
       {
         didSet
@@ -61,16 +61,16 @@ public extension Akari
         }
       }
 
-      /// The AgX look graded ahead of the view transform's curve.
+      /// the agx look graded ahead of the view transform's curve.
       public var look: Akari.Color.Look = .punchy
 
-      /// Exposure in stops (EV). 0 is neutral, +1 doubles scene luminance.
+      /// exposure in stops, 0 is neutral and 1 doubles scene luminance
       public var exposure: Float = 0
 
-      /// Post-transform gamma trim (rarely needed, 1.0 = untouched).
+      /// a gamma trim after the view transform, 1 leaves it untouched
       public var gamma: Float = 1
 
-      /// Viewport clear / background color.
+      /// the viewport's clear and background color
       public var background: (Float, Float, Float, Float) = (0.82, 0.40, 0.12, 1)
 
       public init()

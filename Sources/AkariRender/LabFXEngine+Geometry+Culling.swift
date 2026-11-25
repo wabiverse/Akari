@@ -48,7 +48,7 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// Changes whenever the item moves or deforms, for the shadows' moved caster test.
+  /// changes whenever the item moves or deforms, for the shadows' moved caster test.
   static func casterKey(_ item: Akari.Geom.Recorder.Item) -> UInt64
   {
     var key = (14_695_981_039_346_656_037 ^ item.dataRevision) &* 1_099_511_628_211
@@ -56,6 +56,7 @@ extension Akari.LabFXEngine
     {
       key = (key ^ UInt64(value.bitPattern)) &* 1_099_511_628_211
     }
+
     // which instances a set keeps is in each instance cell's key instead.
     for draw in item.instanceDraws
     {
@@ -65,7 +66,7 @@ extension Akari.LabFXEngine
     return key
   }
 
-  /// Hash of what a mesh looks like in the world, changes whenever it animates.
+  /// hash of what a mesh looks like in the world, changes whenever it animates.
   static func changeKey(_ mesh: Akari.Geom.Recorder.RawMesh) -> UInt64
   {
     var key: UInt64 = 14_695_981_039_346_656_037
@@ -85,9 +86,7 @@ extension Akari.LabFXEngine
     return key
   }
 
-  /// Merges instanced prototypes whose object space geometry, material and
-  /// own transform hash the same into one prototype, drawn once per each
-  /// instance set.
+  /// merges instanced prototypes with the same geometry, material and transform into one prototype drawn once per instance set
   static func binInstances(_ meshes: [Akari.Geom.Recorder.RawMesh], budget: Int,
                                    camera: RecordCamera?)
     -> (meshes: [(mesh: Akari.Geom.Recorder.RawMesh, triangles: Int)], detail: Float)
@@ -129,7 +128,7 @@ extension Akari.LabFXEngine
     return instanceLevels(budgetGeometry(visible, budget: budget, area: area), camera: camera)
   }
 
-  /// A meshes bounding sphere, under its own transform.
+  /// a meshes bounding sphere, under its own transform.
   static func boundingSphere(_ mesh: Akari.Geom.Recorder.RawMesh) -> (center: SIMD3<Float>, radius: Float)
   {
     var b = [Float](repeating: 0, count: 6)
@@ -149,8 +148,7 @@ extension Akari.LabFXEngine
         (m[o + 8] * m[o + 8] + m[o + 9] * m[o + 9] + m[o + 10] * m[o + 10]).squareRoot())
   }
 
-  /// The screen a mesh drawn once covers, in pixels, and the most of it any one instance does,
-  /// without a camera its size and no level of detail.
+  /// the pixels a mesh drawn once covers and the most any one instance covers, its plain size without a camera
   static func screenPixels(_ mesh: Akari.Geom.Recorder.RawMesh, camera: RecordCamera?)
     -> (total: Double, largest: Double?)
   {
@@ -160,9 +158,7 @@ extension Akari.LabFXEngine
     return (Double.pi * px * px, Double.pi * px * px)
   }
 
-  /// Keeps each set's instances the camera sees, largest on screen first, against a sphere around
-  /// every prototype drawn with it, so a draw that takes only part of a set keeps what matters most.
-  /// Each prototype is worth the screen its set covers, scaled to its own size, per triangle.
+  /// keeps each set's instances the camera sees, largest on screen first, so a draw taking part of a set keeps what matters most
   private static func cullInstances(_ meshes: [Akari.Geom.Recorder.RawMesh], camera: RecordCamera)
     -> (meshes: [Akari.Geom.Recorder.RawMesh], area: [(total: Double, largest: Double?)])
   {
@@ -242,8 +238,8 @@ extension Akari.LabFXEngine
           largest = max(largest, covered.largest * share * share)
           return kept
         }
-        // a mesh small against its set's bounds, like one of the many sharing an identity set,
-        // covers what its own sphere does through each instance, not a share of the set's.
+
+        // a mesh small against its set's bounds covers what its own sphere does through each instance, not a share of the set
         let xf = kept.transforms, counted = min(kept.count, maxMeasuredInstances)
         var own = 0.0
         for i in 0 ..< counted
@@ -269,7 +265,7 @@ extension Akari.LabFXEngine
     return (visible, screen)
   }
 
-  /// A prototype's content and the transform its vertices are recorded under.
+  /// a prototype's content and the transform its vertices are recorded under.
   private static func geometryKey(_ mesh: Akari.Geom.Recorder.RawMesh) -> UInt64
   {
     var key = mesh.contentKey

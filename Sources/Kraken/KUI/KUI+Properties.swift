@@ -47,7 +47,7 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// Properties editor, with a dark theme and widget metrics.
+  /// properties editor, with a dark theme and widget metrics.
   enum Properties
   {
     static let region = Color(white: 0.188)
@@ -66,21 +66,21 @@ extension Kraken
     static let accent = Color(red: 0.278, green: 0.447, blue: 0.702)
     static let text = Color(white: 0.894)
     static let label = Color(white: 0.79)
-    /// The panel's minimum width. A narrower sidebar collapses.
+    /// the panel's minimum width. a narrower sidebar collapses.
     static let width = 340
     static let labelWidth = 110
-    /// The panel's current width, set from the sidebar.
+    /// the panel's current width, set from the sidebar.
     @MainActor static var panelWidth = width
-    /// Controls take whatever width is left after the label column, spacing and panel padding.
+    /// controls take whatever width is left after the label column, spacing and panel padding.
     @MainActor static var controlWidth: Int
     {
       panelWidth - labelWidth - 54
     }
-    static let rowHeight = 20
-    static let font = Font.system(size: 11)
+    /// rows and text grow under a finger, the same panels serve both.
+    static let rowHeight = FormFactor.isTouch ? 28 : 20
+    static let font = Font.system(size: FormFactor.isTouch ? 13 : 11)
 
-    /// A label in the left column, right
-    /// aligned, beside its control.
+    /// a right aligned label in the left column beside its control
     @MainActor
     static func row(_ label: String, @ViewBuilder _ control: () -> some View) -> some View
     {
@@ -94,8 +94,7 @@ extension Kraken
       }
     }
 
-    /// A checkbox in the control column,
-    /// for boolean properties.
+    /// a checkbox in the control column for boolean properties
     @MainActor
     static func check(_ label: String, _ isOn: Binding<Bool>) -> some View
     {
@@ -105,10 +104,30 @@ extension Kraken
         Checkbox(label: label, isOn: isOn)
       }
     }
+
+    /// a labeled slider row, `format` writing its value
+    @MainActor
+    static func slider(_ label: String, _ binding: Binding<Double>, in range: ClosedRange<Double>, step: Double,
+                       _ format: @escaping (Double) -> String) -> some View
+    {
+      row(label) { SliderField(value: binding, range: range, step: step, format: format) }
+    }
+
+    /// a dim note under the controls, lined up with the control column
+    @MainActor
+    static func note(_ text: String) -> some View
+    {
+      HStack(spacing: 8)
+      {
+        Spacer().frame(width: Double(labelWidth))
+        Text(text)
+          .font(.system(size: 10))
+          .foregroundColor(Color(white: 0.55))
+      }
+    }
   }
 
-  /// A collapsible panel, its header optionally
-  /// carrying the toggle that enables it.
+  /// a collapsible panel, its header can carry the toggle that enables it
   @MainActor
   struct PropertiesPanel<Content: View>: View
   {

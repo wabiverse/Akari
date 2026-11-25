@@ -52,14 +52,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// @class HdAkariRenderPass
-///
-/// The render pass Hydra runs to produce a frame.
-///
-/// It reads the camera + AOV bindings from the pass state and hands
-/// them to the Swift `Akari.RenderEngine`, which owns the actual
-/// frame graph (shadows, PBR / IBL, screen space, post).
-///
+/// the render pass hydra runs per frame, handing the camera and aovs to the swift `Akari.RenderEngine`
 class HdAkariRenderPass final : public HdRenderPass
 {
 public:

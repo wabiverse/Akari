@@ -66,10 +66,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// @class HdAkariImplicit
-///
-/// A cylinder, cone or capsule prim, tessellated about its axis.
-///
+/// a cylinder, cone or capsule prim, tessellated about its axis
 class HdAkariImplicit final : public HdRprim
 {
 public:
@@ -80,7 +77,7 @@ public:
 
   HDAKARI_API
   TfTokenVector const &GetBuiltinPrimvarNames() const override;
-  
+
   HDAKARI_API
   HdDirtyBits GetInitialDirtyBitsMask() const override;
 
@@ -105,7 +102,7 @@ protected:
 
 private:
   TfToken _type;
-  uint64_t _dataGeneration = 0; // bumped each Sync for GPU cache invalidation
+  uint64_t _dataGeneration = 0; // bumped each sync so gpu caches invalidate
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

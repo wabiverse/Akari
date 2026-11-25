@@ -88,19 +88,13 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 namespace {
 
-/// The most tube vertices one curve prim expands into, shared by all of its
-/// curves. A dense scatter can hold millions of tiny curves, which would
-/// otherwise tessellate into billions of vertices and exhaust memory before
-/// the first frame. Curves past the budget are sampled out evenly.
+/// the most tube vertices one curve prim expands into, curves past it are sampled out evenly so a dense scatter can't exhaust memory
 constexpr size_t HdAkariMaxCurveVertices = 1'000'000;
 
-/// The most tube vertices every curve prim in the scene expands into.
+/// the most tube vertices every curve prim in the scene expands into.
 constexpr size_t HdAkariMaxSceneCurveVertices = 12'000'000;
 
-/// `id`'s share of the scene's curve budget, by the square root of how many
-/// control vertices it holds against every curve prim's, counted once per
-/// render index, so a palm's crown keeps its leaflets beside ground cover
-/// with millions of curves.
+/// a prim's share of the scene's curve budget by the square root of its control vertices, so small curve prims keep their detail
 size_t CurveVertexBudget(HdSceneDelegate *delegate, SdfPath const &id)
 {
   constexpr size_t minimum = 4096;
@@ -143,8 +137,7 @@ size_t CurveVertexBudget(HdSceneDelegate *delegate, SdfPath const &id)
   return found == shares.end() ? fallback : found->second;
 }
 
-/// Warns once per prim that its curves were sampled, so a dense scatter is
-/// visible in the log without printing on every sync.
+/// warns once per prim that its curves were sampled
 void WarnCurvesSampled(SdfPath const &id, size_t total, size_t kept)
 {
   static std::mutex mutex;
@@ -191,7 +184,7 @@ CurvePoint Cubic(TfToken const &basis, CurvePoint const *c, float t)
   return out;
 }
 
-/// How many points `Evaluate` produces for one curve, without evaluating it.
+/// how many points `Evaluate` produces for one curve, without evaluating it.
 size_t EvaluatedPointCount(int count, TfToken const &type, TfToken const &basis,
                            bool periodic, int samples)
 {
@@ -242,8 +235,7 @@ std::vector<CurvePoint> Evaluate(std::vector<CurvePoint> const &cv, TfToken cons
 }
 
 // a tube of `sides` around the polyline, frames carried along it so it doesn't twist.
-/// A flat strip along `line`, across the up axis where it can be, two
-/// triangles a segment where a tube takes twelve.
+/// a flat strip along `line` across the up axis where it can be, two triangles a segment where a tube takes twelve
 void Ribbon(std::vector<CurvePoint> const &line, VtVec3fArray &points, VtVec3iArray &tris)
 {
   const size_t base = points.size();
@@ -262,6 +254,72 @@ void Ribbon(std::vector<CurvePoint> const &line, VtVec3fArray &points, VtVec3iAr
     tris.push_back(GfVec3i(a, a + 1, a + 3));
     tris.push_back(GfVec3i(a, a + 3, a + 2));
   }
+}
+
+/// a prim's curve points, widths and vertex counts with any curve indices and segments spelled out.
+struct CurveSource
+{
+  VtVec3fArray points;
+  VtFloatArray widths;
+  VtIntArray counts;
+};
+
+/// hydra's guide lines index their points and draw each vertex pair as its own segment
+CurveSource ExpandCurveSource(HdBasisCurvesTopology const &topology, VtVec3fArray const &points,
+                              VtFloatArray const &widths, float worldScale)
+{
+  CurveSource out{points, widths, topology.GetCurveVertexCounts()};
+  VtIntArray const &indices = topology.GetCurveIndices();
+  const bool segmented = topology.GetCurveWrap() == HdTokens->segmented;
+  if (indices.empty() && !segmented) return out;
+
+  const GfVec3f *p = points.cdata();
+  const float *w = widths.cdata();
+  const bool perVertex = widths.size() == points.size();
+  const size_t total = indices.empty() ? points.size() : indices.size();
+  std::vector<GfVec3f> gathered;
+  std::vector<float> gatheredWidths;
+  std::vector<int> counts;
+  auto push = [&](size_t i) {
+    const int at = indices.empty() ? int(i) : indices.cdata()[i];
+    const bool valid = at >= 0 && size_t(at) < points.size();
+    gathered.push_back(valid ? p[at] : GfVec3f(0.0f));
+    if (perVertex) gatheredWidths.push_back(valid ? w[at] : 0.0f);
+  };
+
+  size_t offset = 0;
+  for (int count : topology.GetCurveVertexCounts()) {
+    if (count <= 0 || offset + size_t(count) > total) break;
+    if (segmented) {
+      for (int k = 0; k + 1 < count; k += 2) {
+        push(offset + size_t(k));
+        push(offset + size_t(k) + 1);
+        counts.push_back(2);
+      }
+    } else {
+      for (int k = 0; k < count; ++k) push(offset + size_t(k));
+      counts.push_back(count);
+    }
+
+    offset += size_t(count);
+  }
+
+  out.points = VtVec3fArray(gathered.begin(), gathered.end());
+  out.counts = VtIntArray(counts.begin(), counts.end());
+  if (perVertex) out.widths = VtFloatArray(gatheredWidths.begin(), gatheredWidths.end());
+  if (segmented && !gathered.empty()) {
+    // storm draws guide lines a pixel wide whatever their width, so they become a hairline of their span.
+    GfVec3f lo = gathered.front(), hi = gathered.front();
+    for (GfVec3f const &q : gathered) {
+      for (int a = 0; a < 3; ++a) { lo[a] = std::min(lo[a], q[a]); hi[a] = std::max(hi[a], q[a]); }
+    }
+
+    // and never thinner than a few millimetres in the world, or short ones like the origin axes vanish.
+    const float span = (hi - lo).GetLength();
+    out.widths = VtFloatArray(1, std::max({span * 0.006f, 0.004f / std::max(worldScale, 1e-6f), 1e-4f}));
+  }
+
+  return out;
 }
 
 void Tube(std::vector<CurvePoint> const &line, int sides, VtVec3fArray &points, VtVec3iArray &tris)
@@ -374,27 +432,31 @@ HdAkariBasisCurves::Sync(HdSceneDelegate *sceneDelegate,
     const HdBasisCurvesTopology topology = GetBasisCurvesTopology(sceneDelegate);
     const VtValue pointsVal = sceneDelegate->Get(id, HdTokens->points);
     const VtValue widthsVal = sceneDelegate->Get(id, HdTokens->widths);
-    // const, a non-const VtArray detaches from Hydra's on its first element access.
-    const VtVec3fArray cv = pointsVal.IsHolding<VtVec3fArray>() ? pointsVal.UncheckedGet<VtVec3fArray>() : VtVec3fArray();
-    const VtFloatArray widths = widthsVal.IsHolding<VtFloatArray>() ? widthsVal.UncheckedGet<VtFloatArray>()
+
+    // const, a non-const VtArray detaches from hydra's on its first element access.
+    const VtVec3fArray authoredCv = pointsVal.IsHolding<VtVec3fArray>() ? pointsVal.UncheckedGet<VtVec3fArray>() : VtVec3fArray();
+    const VtFloatArray authoredWidths = widthsVal.IsHolding<VtFloatArray>() ? widthsVal.UncheckedGet<VtFloatArray>()
                               : widthsVal.IsHolding<float>() ? VtFloatArray(1, widthsVal.UncheckedGet<float>())
                               : widthsVal.IsHolding<double>() ? VtFloatArray(1, float(widthsVal.UncheckedGet<double>()))
                               : VtFloatArray();
 
-    const VtIntArray counts = topology.GetCurveVertexCounts();
+    const GfMatrix4d &xf = data.transform;
+    const float worldScale = float(std::cbrt(std::abs(xf.GetDeterminant3())));
+    const CurveSource source = ExpandCurveSource(topology, authoredCv, authoredWidths, worldScale);
+    const VtVec3fArray cv = source.points;
+    const VtFloatArray widths = source.widths;
+    const VtIntArray counts = source.counts;
     const bool periodic = topology.GetCurveWrap() == HdTokens->periodic;
     const TfToken &type = topology.GetCurveType();
     const TfToken &basis = topology.GetCurveBasis();
     const float maxWidth = widths.empty() ? 0.01f : *std::max_element(widths.begin(), widths.end());
 
-    // Dense scatters (grass, needles, a palm's four thousand leaflets) are
-    // flat ribbons with a sample per segment, so a prim with thousands of
-    // curves stays affordable. Sparse, prominent curves keep round tubes.
+    // dense scatters become flat ribbons so thousands of curves stay affordable, sparse prominent curves keep round tubes
     const size_t curveCount = counts.size();
     const int samples = curveCount > 1000 ? 1 : 8;
     const int sides = curveCount > 1000 ? 2 : maxWidth > 0.02f ? 8 : 6;
 
-    // Bound one prim's tubes, sampling whole curves evenly when they exceed it.
+    // bound one prim's tubes, sampling whole curves evenly when they exceed it.
     const size_t vertexBudget = CurveVertexBudget(sceneDelegate, id);
     const size_t triangleBudget = vertexBudget * 2;
     size_t totalVertices = 0, totalTriangles = 0, offset = 0;
@@ -415,8 +477,7 @@ HdAkariBasisCurves::Sync(HdSceneDelegate *sceneDelegate,
     const size_t kept = (curveCount + stride - 1) / stride;
     if (stride > 1) WarnCurvesSampled(id, curveCount, kept);
 
-    // Reserve the exact selected geometry before appending, so a dense prim
-    // doesn't repeatedly double its buffers while it tessellates.
+    // reserves the selected geometry up front so a dense prim doesn't keep doubling its buffers
     size_t reserveVertices = 0, reserveTriangles = 0;
     offset = 0;
     for (size_t c = 0; c < counts.size(); ++c) {
@@ -467,6 +528,9 @@ HdAkariBasisCurves::Sync(HdSceneDelegate *sceneDelegate,
   const VtValue colorVal = sceneDelegate->Get(id, HdTokens->displayColor);
   if (colorVal.IsHolding<VtVec3fArray>() && !colorVal.UncheckedGet<VtVec3fArray>().empty()) {
     data.displayColor = colorVal.UncheckedGet<VtVec3fArray>()[0];
+  } else if (colorVal.IsHolding<GfVec3f>()) {
+    // a draw mode stand-in gives its drawModeColor as one value, not an array.
+    data.displayColor = colorVal.UncheckedGet<GfVec3f>();
   }
 
   VtIntArray faceCounts(data.triangleIndices.size(), 3);
@@ -481,7 +545,15 @@ HdAkariBasisCurves::Sync(HdSceneDelegate *sceneDelegate,
   if (atlas) atlas->EnsureGridSized(sceneDelegate);
   HdAkariSyncMaterial(sceneDelegate, id, atlas, meshUtil, data);
   data.dataRevision = ++_dataGeneration;
-  data.topologyRevision = data.dataRevision;
+
+  // moving points keep the revision, only new triangles or uvs relay the curves out.
+  if (_topologyRevision == 0 || data.triangleIndices != _topologyTriangles || data.uvs != _topologyUvs) {
+    _topologyTriangles = data.triangleIndices;
+    _topologyUvs = data.uvs;
+    _topologyRevision = data.dataRevision;
+  }
+
+  data.topologyRevision = _topologyRevision;
 
   _UpdateInstancer(sceneDelegate, dirtyBits);
   const SdfPath instancerId = GetInstancerId();

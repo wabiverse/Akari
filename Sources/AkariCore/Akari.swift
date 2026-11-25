@@ -40,16 +40,15 @@
 
 public enum Akari
 {
-  /// Semantic version of Akari.
-  public static let version = "0.0.7"
+  /// semantic version of akari.
+  public static let version = "0.0.8"
 
-  /// For renderer registration display names.
+  /// for renderer registration display names.
   public static let tagline = "A real-time PBR render engine for Hydra."
 
-  /// Human-facing renderer name (the plugInfo `displayName`, shown in menus).
+  /// the renderer's name as menus show it, its plugin display name
   public static let displayName = "Akari"
 
-  /// The token Hydra uses to *select* this renderer: the plugin's registered
-  /// TfType name, not its display name. Pass this as `rendererPluginId`.
+  /// the name hydra picks this renderer by, its registered plugin type rather than its display name
   public static let rendererPluginId = "HdAkariRendererPlugin"
 }

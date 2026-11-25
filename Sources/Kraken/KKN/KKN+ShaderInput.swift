@@ -46,7 +46,7 @@ import simd
 
 extension Kraken
 {
-  /// The shader inputs Akari reads or writes (PxrSurface, UsdPreviewSurface, and the texture reader).
+  /// the shader inputs akari reads or writes
   enum ShaderInput: String, CaseIterable
   {
     case diffuseColor, diffuseGain, specularFaceColor, specularEdgeColor, specularRoughness, specularIor, presence
@@ -55,19 +55,19 @@ extension Kraken
     case occlusion, displacement, useSpecularWorkflow
     case file, filename
 
-    /// The input's name on its shader.
+    /// the input's name on its shader.
     var token: Tf.Token
     {
       Tf.Token(rawValue)
     }
 
-    /// The input's attribute, its name in the `inputs:` namespace.
+    /// the input's attribute, its name in the `inputs:` namespace.
     var attribute: Tf.Token
     {
       Tf.Token(Tf.Token.inputs.string + rawValue)
     }
 
-    /// Human readable label for each PxrSurface property.
+    /// human readable label for each PxrSurface property.
     var label: String
     {
       switch self

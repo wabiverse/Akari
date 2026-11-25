@@ -46,7 +46,7 @@ import LabGL
 
 extension Akari.LabFXEngine
 {
-  /// The deferred graph's uniforms, and the ones LabGL's tonemap and IBL shaders declare.
+  /// the deferred graph's uniforms plus the ones the labgl tonemap and ibl shaders declare
   enum Uniform: String, CaseIterable
   {
     case agxLut = "u_agx_lut"
@@ -94,6 +94,9 @@ extension Akari.LabFXEngine
     case froxelDepth = "u_froxelDepth"
     case froxelHistory = "u_froxelHistory"
     case gamma
+    case glass = "u_glass"
+    case glassLights = "u_glassLights"
+    case gridInvProj = "u_gridInvProj"
     case halfScale = "u_halfScale"
     case horizonScan = "u_horizonScan"
     case iblEnabled = "u_iblEnabled"
@@ -192,15 +195,17 @@ extension Akari.LabFXEngine
                                                    .pointLightColorRadius2, .pointLightColorRadius3]
   }
 
-  /// The deferred graph's passes, plus the IBL and DFG passes the runtime adds itself.
+  /// the deferred graph's passes plus the ibl and dfg passes the runtime adds itself
   enum Pass: String, CaseIterable
   {
+    case aov
     case atmosphereAerial = "atmosphere aerial"
     case atmosphereBackground = "atmosphere background"
     case atmosphereEnv = "atmosphere env"
     case atmosphereMultiscatter = "atmosphere multiscatter"
     case atmosphereSkyView = "atmosphere sky view"
     case atmosphereTransmittance = "atmosphere transmittance"
+    case blit
     case bloomComposite = "bloom composite"
     case bloomDown0 = "bloom down 0"
     case bloomDown1 = "bloom down 1"
@@ -228,8 +233,26 @@ extension Akari.LabFXEngine
     case fogSimComposite = "fog sim composite"
     case fogSimMarch = "fog sim march"
     case geometry
+    case geometryBack = "geometry back"
     case geometryDynamic = "geometry dynamic"
+    case geometryDynamicBack = "geometry dynamic back"
     case geometryInstanced = "geometry instanced"
+    case geometryInstancedBack = "geometry instanced back"
+    case glassBackView = "glass back view"
+    case glassBehindBackView = "glass behind back view"
+    case glassBehindFrontView = "glass behind front view"
+    case glassFar = "glass far"
+    case glassFrontView = "glass front view"
+    case glassLocalCaustics = "glass local caustics"
+    case glassCausticTemporal = "glass caustic temporal"
+    case glassCausticHistory = "glass caustic history"
+    case glassLocalTrace = "glass local trace"
+    case glassNear = "glass near"
+    case glassSunCaustics = "glass sun caustics"
+    case glassSunTrace = "glass sun trace"
+    case glassTransmit = "glass transmit"
+    case gridOverlay = "grid overlay"
+    case hiz
     case irradiance
     case lensGhosts = "lens ghosts"
     case lensStreak = "lens streak"
@@ -250,7 +273,12 @@ extension Akari.LabFXEngine
     case outlineMask = "outline mask"
     case outlineSpan = "outline span"
     case planetCloudMap = "planet cloud map"
+    case pointShadowBlurH = "point shadow blur h"
+    case pointShadowBlurV = "point shadow blur v"
+    case pointShadows = "point shadows"
     case prefilter
+    case probeBakeOverlay = "probe-bake-overlay"
+    case resolve
     case sky
     case ssgi
     case ssgiHistory = "ssgi history"
@@ -259,11 +287,21 @@ extension Akari.LabFXEngine
     case ssgiTemporal = "ssgi temporal"
     case ssr
     case ssrHistory = "ssr history"
+    case ssrResolve = "ssr resolve"
     case ssrTemporal = "ssr temporal"
+    case sunShadow = "sun shadow"
+    case sunShadowBlurH = "sun shadow blur h"
+    case sunShadowBlurV = "sun shadow blur v"
+    case sunShadowHistory = "sun shadow history"
+    case sunShadowTemporal = "sun shadow temporal"
     case taa
+    case taaHistory = "taa history"
     case tonemap
     case transparent
     case transparentApply = "transparent apply"
+    case transparentBehind = "transparent behind"
+    case transparentBehindComposite = "transparent behind composite"
+    case transparentClear = "transparent clear"
     case transparentComposite = "transparent composite"
     case upscale
     case upscaleSanitize = "upscale sanitize"
@@ -274,10 +312,11 @@ extension Akari.LabFXEngine
     case volumeShadow = "volume shadow"
   }
 
-  /// The deferred graph's buffers.
+  /// the deferred graph's buffers
   enum Buffer: String, CaseIterable
   {
     case aov
+    case backGbuffer
     case color
     case dofNeighbors
     case dofTiles
@@ -286,6 +325,14 @@ extension Akari.LabFXEngine
     case envCube
     case fogSimHalf
     case gbuffer
+    case glassBack
+    case glassBehindBack
+    case glassBehindFront
+    case glassFront
+    case glassCausticAccum
+    case glassCausticHistory
+    case glassLocalCaustic
+    case glassSunCaustic
     case motionNeighbors
     case motionTiles
     case motionTiles8
@@ -301,20 +348,25 @@ extension Akari.LabFXEngine
     case ssr
     case ssrAccum
     case ssrHistory
+    case ssrResolve
     case sunShadowAccum
+    case sunShadowBlur
     case sunShadowHistory
     case sunShadowRaw
+    case sunShadowSoft
     case supersample
     case taa
     case tonemap
     case transparentAccum
+    case transparentBehind
+    case transparentBehindResolved
     case transparentResolved
     case upscaleInput
     case volumeIntegrated
     case volumeScatter
   }
 
-  /// Textures inside the graph's buffers.
+  /// textures inside the graph's buffers
   enum Attachment: String, CaseIterable
   {
     case aovDepth
@@ -340,17 +392,28 @@ extension Akari.LabFXEngine
     case volumeScatter
   }
 
-  /// Graph passes Swift draws itself.
+  /// graph passes that swift draws itself
   enum Callback: String, CaseIterable
   {
     case drawDynamicGeometry = "draw-dynamic-geometry"
+    case drawDynamicGeometryBack = "draw-dynamic-geometry-back"
+    case drawStaticGeometryBack = "draw-static-geometry-back"
+    case drawStaticInstancedGeometryBack = "draw-static-instanced-geometry-back"
+    case drawGlassFar = "draw-glass-far"
+    case drawGlassNear = "draw-glass-near"
+    case drawGlassTransmit = "draw-glass-transmit"
+    case splatGlassLocal = "splat-glass-local"
+    case splatGlassSun = "splat-glass-sun"
+    case traceGlassLocal = "trace-glass-local"
+    case traceGlassSun = "trace-glass-sun"
     case drawOutlineMask = "draw-outline-mask"
+    case drawProbeBake = "draw-probe-bake"
     case drawStaticInstancedGeometry = "draw-static-instanced-geometry"
     case metalfxUpscale = "metalfx-upscale"
     case volumeIntegrate = "volume-integrate"
   }
 
-  /// Graph shaders the engine hands geometry captures to.
+  /// graph shaders the engine hands geometry captures to
   enum Shader: String, CaseIterable
   {
     case meshStatic = "mesh-static"

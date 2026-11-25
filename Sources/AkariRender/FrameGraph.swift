@@ -47,9 +47,7 @@ import LabCameraCxx
 
 public extension Akari.GPU
 {
-  /// The Hgi handed to Akari by Hydra, LabGL submits on its
-  /// queue and wraps the final color texture into the color
-  /// AOV through it for presentation.
+  /// the hgi hydra hands akari, labgl submits on its queue and wraps the final color texture into the color aov with it
   final class HydraContext
   {
     public let backend: Akari.GPU.Backend
@@ -61,14 +59,14 @@ public extension Akari.GPU
       self.backend = backend
     }
 
-    /// Whether this context was made for `other`.
+    /// whether this context was made for `other`
     public func wraps(_ other: Pixar.HgiMetal) -> Bool
     {
       unsafeBitCast(hgi, to: UnsafeRawPointer.self) == unsafeBitCast(other, to: UnsafeRawPointer.self)
     }
   }
 
-  /// The AOV render buffers Hydra wants Akari to fill.
+  /// the aov render buffers hydra wants akari to fill
   struct HydraTarget
   {
     public var color: Pixar.HdAkariRenderBuffer?
@@ -82,14 +80,14 @@ public extension Akari.GPU
 
 public extension Akari
 {
-  /// The view the frame is rendered from.
+  /// the view the frame is rendered from
   struct Camera: Sendable
   {
-    /// world -> view
+    /// world to view
     public var view: Matrix4
-    /// view -> clip
+    /// view to clip
     public var projection: Matrix4
-    /// The stage's world scale, what one world unit measures.
+    /// the stage world scale, how many meters one world unit measures
     public var metersPerUnit: Float
 
     public init(view: Matrix4, projection: Matrix4, metersPerUnit: Float = 1)
@@ -105,11 +103,12 @@ public extension Akari
       return abs(a - 1) > 1e-6 && abs(a + 1) > 1e-6
     }
 
-    /// The physical camera `view` and `projection` describe.
+    /// the physical camera `view` and `projection` describe
     public var lens: lc_camera
     {
       var camera = lc_camera.defaultCamera
       camera.mount.setViewTransform(lc_m44f(view.simd))
+
       if isPerspective
       {
         let a = projection[2, 2]
@@ -122,10 +121,11 @@ public extension Akari
       return camera
     }
 
-    /// The near and far clip distances, tightened to what `bounds` spans.
+    /// the near and far clip distances, tightened to what `bounds` spans
     public func clipRange(within bounds: (min: SIMD3<Float>, max: SIMD3<Float>)?) -> (near: Float, far: Float)
     {
       var camera = lens
+
       if let bounds, isPerspective
       {
         camera.setClippingPlanes(minNear: camera.optics.znear, maxFar: camera.optics.zfar,
@@ -135,7 +135,7 @@ public extension Akari
       return (camera.optics.znear, camera.optics.zfar)
     }
 
-    /// `meters` in world units.
+    /// `meters` converted to world units
     public func world(meters: Float) -> Float
     {
       meters / max(metersPerUnit, 1e-9)
@@ -145,29 +145,28 @@ public extension Akari
 
 public extension Akari.GPU
 {
-  /// Immutable per frame data for a pass.
+  /// immutable per frame data for a pass
   struct FrameContext: @unchecked Sendable
   {
     public let gpu: Akari.GPU.HydraContext
     public let labfx: Akari.LabFXEngine
     public let camera: Akari.Camera
-    /// `camera` without the TAA sub pixel jitter, for reprojection.
+    /// `camera` without the taa sub pixel jitter, used for reprojection
     public let unjitteredCamera: Akari.Camera
     public let target: Akari.GPU.HydraTarget
     public let settings: RenderSettings
     public let frameIndex: UInt64
-    /// True when the camera moved since the last frame
-    /// (so TAA doesn't ghost behind the view change).
+    /// true when the camera moved since the last frame so taa doesn't ghost behind the change
     public let cameraMoved: Bool
-    /// True when rendering for output (still) rather than interaction.
+    /// true when rendering a still for output instead of for interaction
     public let isFinalRender: Bool
-    /// What the viewport outlines, if anything.
+    /// what the viewport outlines, if anything
     public let selection: Akari.Selection?
-    /// Opaque `HdAkariRenderParam`.
+    /// the opaque `HdAkariRenderParam`
     public let renderParam: Pixar.HdAkariRenderParam
   }
 
-  /// Mutable per frame state.
+  /// mutable per frame state
   struct FrameState
   {
     public var target: Akari.GPU.HydraTarget
@@ -184,7 +183,7 @@ public extension Akari.GPU
     }
   }
 
-  /// Named transient targets passed between stages.
+  /// named transient targets passed between stages
   enum RenderTargetID: String, Sendable
   {
     case gbufferAlbedo, gbufferNormal, gbufferMaterial, depth
@@ -202,6 +201,7 @@ public extension Akari.GPU
     public var height: Int
     public var format: Akari.GPU.RenderTargetFormat
     public var scale: Float
+
     public init(width: Int, height: Int, format: Akari.GPU.RenderTargetFormat, scale: Float = 1)
     {
       self.width = width
@@ -216,7 +216,7 @@ public extension Akari.GPU
     case rgba8, rgba16f, rgba32f, r16f, rg16f, depth32f
   }
 
-  /// One node in the frame graph.
+  /// one node in the frame graph
   protocol RenderPassNode: Sendable
   {
     var id: RenderPassID { get }

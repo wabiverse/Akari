@@ -173,9 +173,9 @@ extension Akari.LightProbes
       float4 c0 = float4(0.0), c2 = float4(0.0);
       if (row >= 0)
       {
-        // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+        // 128 material rows share a scanline
         uint line = uint(row) >> 7u;
-        uint base = uint(row & 127) * 3u;
+        uint base = uint(row & 127) * 4u;
         c0 = constants.t.read(uint2(base, line));
         float4 c1 = constants.t.read(uint2(base + 1u, line));
         c2 = constants.t.read(uint2(base + 2u, line));
@@ -210,6 +210,26 @@ extension Akari.LightProbes
     {
       if (gid.x >= o.get_width() || gid.y >= o.get_height()) return;
       o.write(u.u_value, gid);
+    }
+    """
+
+  /// sums the baked layers into the probes, tinting the sky and blending the sun between its two nearest bakes.
+  static let combineMSL = """
+    #include <metal_stdlib>
+    using namespace metal;
+    struct U { float4 u_skyTint; float4 u_sunColor; float4 u_value; };
+    kernel void compute_main(constant U& u [[buffer(0)]],
+                             texture2d<float, access::write> o [[texture(0)]],
+                             texture2d<float> sky [[texture(1)]],
+                             texture2d<float> sunA [[texture(2)]],
+                             texture2d<float> sunB [[texture(3)]],
+                             texture2d<float> local [[texture(4)]],
+                             uint2 gid [[thread_position_in_grid]])
+    {
+      if (gid.x >= o.get_width() || gid.y >= o.get_height()) return;
+      float4 l = local.read(gid);
+      float3 sun = mix(sunA.read(gid).rgb, sunB.read(gid).rgb, u.u_value.x);
+      o.write(float4(sky.read(gid).rgb * u.u_skyTint.rgb + sun * u.u_sunColor.rgb + l.rgb, l.a), gid);
     }
     """
 
@@ -411,7 +431,16 @@ extension Akari.LightProbes
                     texturecube<float> env, sampler envSmp, texture2d<float> sunMap,
                     texture2d<float> sh, constant U& u, float skyLod)
     {
-      if (a.w == 0.0) return env.sample(envSmp, toSkySpace(dir, u.u_sky.x), level(skyLod)).rgb * u.u_skyTint.rgb * u.u_sky.y;
+      // u_params.z picks the lights to gather, matching LightLayers on the swift side.
+      int lights = int(u.u_params.z);
+      bool gathersSky = (lights & 1) != 0;
+      bool gathersSun = (lights & 2) != 0;
+      bool gathersLocal = (lights & 4) != 0;
+      if (a.w == 0.0)
+      {
+        if (!gathersSky) return float3(0.0);
+        return env.sample(envSmp, toSkySpace(dir, u.u_sky.x), level(skyLod)).rgb * u.u_skyTint.rgb * u.u_sky.y;
+      }
       if (a.w < 0.0) return float3(0.0);
       float t = u.u_sky.z / max(n.w, 1e-8) * length(float3(ndc, 1.0));
       float3 x = origin + dir * t;
@@ -422,7 +451,7 @@ extension Akari.LightProbes
 
       float3 L = normalize(u.u_sun.xyz);
       float NoL = dot(N, L);
-      if (NoL > 0.0)
+      if (gathersSun && NoL > 0.0)
       {
         float sunHeight = u.u_sun.w;
         float nightFade = smoothstep(-0.3, 0.05, sunHeight);
@@ -434,7 +463,7 @@ extension Akari.LightProbes
         irradiance += sunL * NoL * sunVisibility(x, N, sunMap, u);
       }
 
-      int count = int(u.u_params.x);
+      int count = gathersLocal ? int(u.u_params.x) : 0;
       for (int i = 0; i < count; ++i)
       {
         float4 posIntensity = lightPos(i, u);
@@ -447,7 +476,8 @@ extension Akari.LightProbes
       }
 
       float3 indirect = volumeIrradiance(x, N, sh, u);
-      float3 radiance = diffuseColor / PI * irradiance + (diffuseColor + a.rgb * metallic) * indirect + e.rgb;
+      float3 emission = gathersLocal ? e.rgb : float3(0.0);
+      float3 radiance = diffuseColor / PI * irradiance + (diffuseColor + a.rgb * metallic) * indirect + emission;
       return all(isfinite(radiance)) ? radiance : float3(0.0);
     }
     """

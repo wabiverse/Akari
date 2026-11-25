@@ -50,19 +50,15 @@
 
 #include "HdAkari/api.h"
 
+#include <memory>
 #include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// @class HdAkariMesh
-///
-/// Represents a mesh prim that can be rendered by Akari.
-///
-/// Its whole job is to pull topology, points, and transform
-/// from the scene delegate, triangulate once, and publish
-/// the result into the delegate's HdAkariScene for the GPU
-/// draw path. Modeled on OpenUSD's hdTiny example.
-///
+class HdAkariScene;
+class HdAkariSubdivision;
+
+/// a mesh prim akari draws, triangulated once and published into the delegate's scene for the gpu
 class HdAkariMesh final : public HdMesh
 {
 public:
@@ -87,15 +83,42 @@ protected:
   HdAkariMesh &operator=(const HdAkariMesh &) = delete;
 
 private:
-  uint64_t _dataGeneration = 0; // bumped each Sync for GPU cache invalidation
-  // what the last full sync triangulated.
+  uint64_t _dataGeneration = 0; // bumped each sync so gpu caches invalidate
+
+  // what the last full sync triangulated
   HdTopology::ID _topologyHash = 0;
   VtVec2fArray _topologyUvs;
   uint64_t _topologyRevision = 0;
-  // the UsdSkel computation skinned on the GPU, its per joint rest bounds (6 floats each).
+
+  // the skel computation skinned on the gpu and its per joint rest bounds, 6 floats each
   SdfPath _skinComputation;
   std::vector<float> _skinJointBounds;
   uint64_t _skinRevision = 0;
+
+  // the rest points and weights that revision was given for
+  VtVec3fArray _skinRestPoints;
+  VtVec2fArray _skinInfluences;
+
+  // the subdivision from the last full sync, kept so moving points can refine without rebuilding it
+  std::shared_ptr<HdAkariSubdivision> _subdivision;
+
+  // the cage topology hash, which a points only sync compares against
+  HdTopology::ID _baseTopologyHash = 0;
+
+  // how many refined faces this mesh holds of the scene wide budget
+  int64_t _refinedFaces = 0;
+
+  // whether the scene's copy of this mesh already holds its gpu refinement stencils
+  bool _sentStencils = false;
+
+  // whether the last full sync shaded with the mesh's own normals
+  bool _authoredNormals = false;
+
+  // the material the last full sync baked the atlas uvs for
+  SdfPath _materialId;
+
+  void _ReleaseSubdivision();
+  bool _SyncMovingCage(HdAkariScene *scene, HdSceneDelegate *sceneDelegate, VtValue const &cagePoints);
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

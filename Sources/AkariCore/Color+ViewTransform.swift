@@ -43,104 +43,104 @@ import LabGL
 
 public extension Akari.Color
 {
-  /// The view transform applied in the tonemap pass.
+  /// the view transform applied in the tonemap pass.
   enum ViewTransform: String, Sendable, CaseIterable
   {
-    /// Akari's modern default (same as Blender's EEVEE).
+    /// akari's default transform
     case agx
 
-    /// The older filmic transform (ACES fitted curve by Narkowicz).
+    /// the older filmic transform, narkowicz's aces fit
     case filmic
 
-    /// ACES 1.x RRT+ODT.
+    /// aces 1.x rrt+odt.
     case aces
 
-    /// Khronos PBR Neutral (for material accuracy over a cinematic look).
+    /// khronos pbr neutral, for material accuracy over a cinematic look
     case khronosPBRNeutral
 
-    /// ACES 1.x RRT variant fitted by John Hable's colleague (Guy).
+    /// a fitted aces 1 rrt variant
     case acesGuy
 
-    /// ACES fitted curve by Stephen Hill.
+    /// aces fitted curve by stephen hill.
     case acesHill
 
-    /// Aldridge's filmic tone curve.
+    /// aldridge's filmic tone curve.
     case aldridge
 
-    /// Hard clamp to [0, 1].
+    /// hard clamp to [0, 1].
     case clamping
 
-    /// "Day" photographic operator.
+    /// the day photographic operator
     case day
 
-    /// Drago's logarithmic mapping.
+    /// drago's logarithmic mapping.
     case drago
 
-    /// Durand and Dorsey's contrast preserving operator.
+    /// durand and dorsey's contrast preserving operator.
     case durandDorsey
 
-    /// Exponential exposure curve.
+    /// exponential exposure curve.
     case exponential
 
-    /// Pure exponentiation curve.
+    /// pure exponentiation curve.
     case exponentiation
 
-    /// Ferwerda's tone mapping.
+    /// ferwerda's tone mapping.
     case ferwerda
 
-    /// Pure gamma curve.
+    /// pure gamma curve.
     case gamma
 
-    /// Hable's filmic curve (Uncharted 2).
+    /// hable's filmic curve from uncharted 2
     case hable
 
-    /// Hable's updated (linear-gamma) fit.
+    /// hable's updated linear gamma fit
     case hableUpdated
 
-    /// Hejl and Burgess Dawson's filmic fit.
+    /// hejl and burgess dawson's filmic fit.
     case hejlBurgessDawson
 
-    /// Logarithmic exposure curve.
+    /// logarithmic exposure curve.
     case logarithmic
 
-    /// Lottes' filmic curve.
+    /// lottes' filmic curve.
     case lottes
 
-    /// Reinhard division by max component.
+    /// reinhard division by max component.
     case maxdivision
 
-    /// Reinhard division by mean value.
+    /// reinhard division by mean value.
     case meanvalue
 
-    /// Classic Reinhard operator.
+    /// classic reinhard operator.
     case reinhard
 
-    /// Reinhard extended with a white-point curve (Devlin).
+    /// reinhard extended with a white point curve, devlin's version
     case reinhardDevlin
 
-    /// Reinhard extended, brightness-aware variant.
+    /// reinhard extended, brightness-aware variant.
     case reinhardExtended
 
-    /// Schlick's rational approximation.
+    /// schlick's rational approximation.
     case schlick
 
-    /// Tumblin and Rushmeier's operator.
+    /// tumblin and rushmeier's operator.
     case tumblinRushmeier
 
-    /// Uchimura's tone curve.
+    /// uchimura's tone curve.
     case uchimura
 
-    /// Ward's scale-preserving operator.
+    /// ward's scale-preserving operator.
     case ward
 
-    /// sRGB with no tone curve (same as Storm's default).
+    /// srgb with no tone curve, the same as storm's default
     case sRGB
   }
 }
 
 public extension Akari.Color.ViewTransform
 {
-  /// The tonemap switch value for use in shaders.
+  /// the tonemap switch value for use in shaders.
   var uniform: GLenum
   {
     switch self
@@ -181,7 +181,7 @@ public extension Akari.Color.ViewTransform
 
 extension Akari.Color.ViewTransform: CustomStringConvertible
 {
-  /// Display label for UI (pickers, HUD).
+  /// the label pickers and the hud show
   public var description: String
   {
     switch self
@@ -222,7 +222,7 @@ extension Akari.Color.ViewTransform: CustomStringConvertible
 
 public extension Akari.Color.ViewTransform
 {
-  /// From a view transform name, as a stage's color management carries it.
+  /// from a view transform name, as a stage's color management carries it.
   init?(transformName: String)
   {
     switch transformName

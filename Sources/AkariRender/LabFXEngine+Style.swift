@@ -44,7 +44,7 @@ import LabGL
 
 extension Akari.LabFXEngine
 {
-  /// Each prim's stylized shading, four texels a prim by prim id, for the mesh pass and the resolve.
+  /// each prim's stylized shading indexed by prim id for the mesh pass and the resolve
   struct Styles
   {
     var revision: UInt64 = .max
@@ -53,20 +53,22 @@ extension Akari.LabFXEngine
     var assembling = false
     var transparent: Set<Int32> = []
     var emitters: Set<Int32> = []
+    var singleSided: Set<Int32> = []
     var opacity: [Int32: Float] = [:]
     var solidShadow: Set<Int32> = []
   }
 
   static let stylePrimsPerRow = 512
 
-  /// Uploads the scene's stylized shading when it changed, true when the deformer has to rerun.
+  /// uploads the scene's stylized shading when it changed, returns true when the deformer has to rerun
   func syncStyles(_ scene: Pixar.HdAkariScene) -> Bool
   {
     let revision = scene.StyleRevision()
     let maxPrimId = Int(geometry.primIds.values.max() ?? 0)
     let capacity = (maxPrimId / Self.stylePrimsPerRow + 1) * Self.stylePrimsPerRow
     guard revision != styles.revision || capacity > styles.capacity || geometry.flags.transparent != styles.transparent
-      || geometry.flags.emitters != styles.emitters || geometry.flags.opacity != styles.opacity
+      || geometry.flags.emitters != styles.emitters || geometry.flags.singleSided != styles.singleSided
+      || geometry.flags.opacity != styles.opacity
       || geometry.flags.solidShadow != styles.solidShadow
     else
     {
@@ -78,17 +80,18 @@ extension Akari.LabFXEngine
     styles.capacity = capacity
     styles.transparent = geometry.flags.transparent
     styles.emitters = geometry.flags.emitters
+    styles.singleSided = geometry.flags.singleSided
     styles.opacity = geometry.flags.opacity
     styles.solidShadow = geometry.flags.solidShadow
 
     let snapshot = scene.StyleSnapshot()
     let defaults: [Float] = [5, 1, 0, 0.04, 0, 0, 0, -1] + [Float](repeating: 0, count: 24)
     var texels = [Float](repeating: 0, count: capacity * 32)
-    for i in 0 ..< capacity
+    for prim in 0 ..< capacity
     {
-      for k in 0 ..< 32
+      for component in 0 ..< 32
       {
-        texels[i * 32 + k] = defaults[k]
+        texels[prim * 32 + component] = defaults[component]
       }
     }
 
@@ -102,7 +105,13 @@ extension Akari.LabFXEngine
       texels[Int(id) * 32 + 18] = 1
     }
 
-    // Texel 4's w holds opacity. A value of 2 marks a prim whose shadow needs no alpha test.
+    // the x of texel 5 marks a prim drawn from its front only
+    for id in geometry.flags.singleSided where id >= 0 && Int(id) < capacity
+    {
+      texels[Int(id) * 32 + 20] = 1
+    }
+
+    // the w of texel 4 holds opacity and a value of 2 marks a prim whose shadow needs no alpha test
     for id in geometry.flags.solidShadow where id >= 0 && Int(id) < capacity
     {
       texels[Int(id) * 32 + 19] = 2
@@ -124,9 +133,9 @@ extension Akari.LabFXEngine
                              style.wireR, style.wireG, style.wireB, style.wireGlow,
                              style.frontGlowR, style.frontGlowG, style.frontGlowB, style.frontGlow,
                              style.wireSpacing, 0, 0, 0]
-      for k in 0 ..< values.count where k < 17 || k > 19
+      for component in 0 ..< values.count where component < 17 || component > 19
       {
-        texels[Int(style.primId) * 32 + k] = values[k]
+        texels[Int(style.primId) * 32 + component] = values[component]
       }
 
       styled.insert(style.primId)
@@ -143,6 +152,7 @@ extension Akari.LabFXEngine
 
     geometry.deformer.assembly = assembly
     geometry.deformer.assemblySize = sizes
+
     if spacing != geometry.deformer.wireSpacing
     {
       geometry.deformer.wireSpacing = spacing
@@ -159,6 +169,7 @@ extension Akari.LabFXEngine
     gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA32F,
                   width: GLsizei(Self.stylePrimsPerRow * 8), height: GLsizei(capacity / Self.stylePrimsPerRow), border: 0,
                   format: GL_RGBA, type: GL_FLOAT, pixels: texels)
+
     bindStyles()
     return true
   }

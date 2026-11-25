@@ -40,37 +40,35 @@
 
 import AkariCore
 
-/// One stage of the frame, the ordering here is the frame graph
-/// itself. Each pass reads the targets earlier passes produced
-/// and writes its own.
+/// one stage of the frame, each pass reads what earlier passes produced and writes its own targets
 public enum RenderPassID: String, CaseIterable, Sendable
 {
-  /// Depth only prepass.
+  /// depth only prepass
   case depthPrepass
-  /// Shadow map(s), sun cascades + punctual/area maps.
+  /// shadow maps for sun cascades and punctual and area lights
   case shadow
-  /// Volume + sphere light probes, baked and relit from the scene capture.
+  /// volume and sphere light probes baked and relit from the scene capture
   case lightProbes
-  /// Opaque geometry, G-buffer (deferred) or forward+ shaded opaque.
+  /// opaque geometry into the deferred gbuffer or shaded forward plus
   case geometry
-  /// Froxel volumetrics composite.
+  /// froxel volumetrics composite
   case volumetrics
-  /// Direct + image based lighting (PBR, analytic & area lights, IBL).
+  /// direct and image based lighting with analytic and area lights
   case lighting
-  /// Screen space global illumination (indirect diffuse bounce).
+  /// screen space global illumination for the indirect diffuse bounce
   case screenSpaceGI
-  /// Screen space (and opt-in hardware RT) reflections.
+  /// screen space reflections with optional hardware ray tracing
   case reflections
-  /// Sorted forward transparency.
+  /// sorted forward transparency
   case transparency
-  /// Temporal resolve / anti aliasing (also stabilizes the SS effects).
+  /// temporal resolve and anti aliasing, also stabilizes the screen space effects
   case temporalResolve
-  /// Bloom.
+  /// bloom
   case bloom
-  /// Depth of field.
+  /// depth of field
   case depthOfField
-  /// Exposure + view transform (AgX, etc.).
+  /// exposure and view transform
   case tonemap
-  /// Blit / handoff to the viewport (or an AOV for Hydra).
+  /// hands the frame to the viewport or to a hydra aov
   case present
 }

@@ -52,13 +52,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// @class HdAkariRendererPlugin
-///
-/// The Hydra entry point that makes "Akari" a selectable Hydra renderer.
-///
-/// Registered via plugInfo.json, Hydra instantiates it to construct the
-/// `HdAkariRenderDelegate`.
-///
+/// the hydra entry point that makes akari a selectable renderer, it constructs the `HdAkariRenderDelegate`
 class HdAkariRendererPlugin final : public HdRendererPlugin
 {
 public:

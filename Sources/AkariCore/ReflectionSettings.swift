@@ -38,10 +38,10 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-/// How screen space reflections trace the scene.
+/// how screen space reflections trace the scene.
 public struct ReflectionSettings: Sendable
 {
-  /// Surfaces rougher than this fade to the horizon scan and probes.
+  /// surfaces rougher than this fade to the horizon scan and probes.
   public var maxRoughness: Float = 0.5
 
   public init()

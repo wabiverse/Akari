@@ -44,7 +44,7 @@ extension Akari.FogSim
 {
   static let maxDisturbers = 8
 
-  /// Shared by every kernel: the grid (nx, ny, nz, cell size) and where it sits (min corner, z up).
+  /// shared by every kernel, the grid as nx ny nz and cell size, and where it sits as min corner and z up
   static let prelude = """
     #include <metal_stdlib>
     using namespace metal;
@@ -55,11 +55,11 @@ extension Akari.FogSim
     inline int cell(int3 c, int3 n) { return c.x + n.x * (c.y + n.y * c.z); }
     inline bool outside(int3 c, int3 n) { return any(c < 0) || any(c >= n); }
 
-    /// The grid's up is its z, on a y up stage it maps to world y.
+    /// the grid up axis is z, on a y up stage it maps to world y
     inline float3 toWorld(float3 v, float zUp) { return zUp > 0.5 ? v : float3(v.x, v.z, v.y); }
     inline float3 toGrid(float3 v, float zUp) { return zUp > 0.5 ? v : float3(v.x, v.z, v.y); }
 
-    /// Trilinear at `p` (cell units, centers at +0.5), clamped to the grid.
+    /// trilinear sample at `p` in cell units with centers at 0.5, clamped to the grid
     inline float4 sample4(device const float4* f, float3 p, int3 n)
     {
       float3 q = clamp(p - 0.5, float3(0.0), float3(n - 1));
@@ -89,14 +89,14 @@ extension Akari.FogSim
 
     inline float3 velAt(device const float4* v, int3 q, int3 n) { return v[cell(clamp(q, int3(0), n - 1), n)].xyz; }
 
-    /// Below the floor the flow mirrors, so nothing crosses it.
+    /// the flow mirrors below the floor so nothing crosses it
     inline float3 velWall(device const float4* v, int3 q, int3 n)
     {
       if (q.z < 0) { float3 w = v[cell(clamp(int3(q.x, q.y, 0), int3(0), n - 1), n)].xyz; return float3(w.x, w.y, -w.z); }
       return velAt(v, q, n);
     }
 
-    /// Pressure is mirrored at the floor and zero past the open sides.
+    /// pressure is mirrored at the floor and zero past the open sides
     inline float pAt(device const float* p, int3 q, int3 n)
     {
       if (q.z < 0) q.z = 0;
@@ -130,7 +130,7 @@ extension Akari.FogSim
       return sum / norm;
     }
 
-    /// The deck layer the floor keeps feeding: (floor, falloff, base, -) and the noise (amount, scale, -, -).
+    /// the deck layer the floor keeps feeding, layer is floor falloff and base, noise is amount and scale
     float layerTarget(float height, float3 world, float4 layer, float4 noise, float3 drift)
     {
       float profile = layer.y > 0.0 ? exp(-max(height, 0.0) / layer.y) : 1.0;
@@ -143,19 +143,17 @@ extension Akari.FogSim
     }
     """
 
-  /// Semi-Lagrangian advection of velocity and density, then the forces: wind, damping, the
-  /// floor source, dissipation, settling, and the disturbers pushing, lifting and rolling the
-  /// fog.
+  /// semi lagrangian advection of velocity, then wind, damping and the disturbers pushing, lifting and rolling the fog
   static let advectMSL = prelude + """
     struct U
     {
       float4 grid; float4 origin;
-      float4 step;   // dt, time, disturber count, -
+      float4 step;   // dt, time, disturber count, unused
       float4 wind;   // xyz, relax rate
       float4 layer;  // floor, falloff, base, replenish rate
-      float4 noise;  // amount, scale, -, -
+      float4 noise;  // amount, scale, unused, unused
       float4 sim;    // vorticity, dissipation, settle speed, damping
-      float4 d[16];  // per disturber: position + radius, velocity + lift
+      float4 d[16];  // per disturber position and radius, then velocity and lift
     };
 
     kernel void compute_main(constant U& u [[buffer(0)]],
@@ -208,9 +206,7 @@ extension Akari.FogSim
     }
     """
 
-  /// Density, on its own finer grid (`grid`), the velocity grid `vgrid`
-  /// (the first MacCormack pass), a plain semi Lagrangian step back
-  /// along the flow, settling included.
+  /// the first maccormack pass for density on its own finer grid, a plain step back along the flow with settling in it
   static let densityPredictMSL = prelude + """
     struct U { float4 grid; float4 origin; float4 vgrid; float4 step; float4 sim; };
 
@@ -230,8 +226,7 @@ extension Akari.FogSim
     }
     """
 
-  /// The MacCormack correction, clamped to what the step back saw so it can't
-  /// overshoot, then the floor source and the slow thinning of lifted fog.
+  /// the maccormack correction clamped to what the step back saw so it can't overshoot, then the floor source and the slow thinning of lifted fog
   static let densityCorrectMSL = prelude + """
     struct U { float4 grid; float4 origin; float4 vgrid; float4 step; float4 sim; float4 wind; float4 layer; float4 noise; };
 
@@ -270,7 +265,7 @@ extension Akari.FogSim
     }
     """
 
-  /// The vorticity of the velocity, central differences.
+  /// the vorticity of the velocity from central differences
   static let curlMSL = prelude + """
     kernel void compute_main(constant G& g [[buffer(0)]],
                              device const float4* vel [[buffer(1)]],
@@ -289,7 +284,7 @@ extension Akari.FogSim
     }
     """
 
-  /// Vorticity confinement, the curls that turn a push into tendrils.
+  /// vorticity confinement, the curls that turn a push into tendrils
   static let confineMSL = prelude + """
     struct U { float4 grid; float4 origin; float4 step; };
 
@@ -314,7 +309,7 @@ extension Akari.FogSim
     }
     """
 
-  /// The divergence, the floor a wall the fog can't pass, the other sides open.
+  /// the divergence with the floor as a wall the fog can't pass and the other sides open
   static let divergenceMSL = prelude + """
     kernel void compute_main(constant G& g [[buffer(0)]],
                              device const float4* vel [[buffer(1)]],
@@ -331,7 +326,7 @@ extension Akari.FogSim
     }
     """
 
-  /// One Jacobi iteration of the pressure Poisson equation.
+  /// one jacobi iteration of the pressure poisson equation
   static let jacobiMSL = prelude + """
     kernel void compute_main(constant G& g [[buffer(0)]],
                              device const float* pIn [[buffer(1)]],
@@ -351,7 +346,7 @@ extension Akari.FogSim
     }
     """
 
-  /// Subtracts the pressure gradient, leaving the flow divergence free.
+  /// subtracts the pressure gradient so the flow is divergence free
   static let projectMSL = prelude + """
     kernel void compute_main(constant G& g [[buffer(0)]],
                              device const float* p [[buffer(1)]],
@@ -372,7 +367,7 @@ extension Akari.FogSim
     }
     """
 
-  /// The rest state, the deck layer, still air moving with the wind.
+  /// the rest state, still air moving with the wind
   static let resetMSL = prelude + """
     struct U { float4 grid; float4 origin; float4 step; float4 wind; float4 layer; float4 noise; };
 
@@ -406,8 +401,7 @@ extension Akari.FogSim
     }
     """
 
-  /// How much of the nearby lights illumination reaches each cell through the simulated
-  /// fog, weighted by what each brings there, which gives self shadowing.
+  /// how much of each nearby light reaches each cell through the fog, weighted by what the light brings there, for self shadowing
   static let visibilityMSL = prelude + """
     struct U { float4 grid; float4 origin; float4 dgrid; float4 l[8]; float4 count; };
 
@@ -450,7 +444,7 @@ extension Akari.FogSim
     }
     """
 
-  /// The velocity into a 3D texture the march carries its detail noise with.
+  /// writes the velocity into a 3d texture the march uses to carry its detail noise
   static let exportVelocityMSL = prelude + """
     kernel void compute_main(constant G& g [[buffer(0)]],
                              device const float4* vel [[buffer(1)]],
@@ -464,7 +458,7 @@ extension Akari.FogSim
     }
     """
 
-  /// The density into the 3D texture the froxel fog samples.
+  /// writes the density into the 3d texture the froxel fog samples
   static let exportMSL = prelude + """
     kernel void compute_main(constant G& g [[buffer(0)]],
                              device const float* dens [[buffer(1)]],

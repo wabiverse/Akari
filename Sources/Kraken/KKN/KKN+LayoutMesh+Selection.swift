@@ -71,6 +71,15 @@ extension Kraken.EditMesh
     flush()
   }
 
+  /// selects exactly these verts with the edges and faces they span
+  mutating func select(verts list: Set<Int>)
+  {
+    clearSelection()
+    verts = list.filter { $0 < points.count }
+    edges = Set(allEdges.filter { verts.contains($0.a) && verts.contains($0.b) })
+    selectedFaces = Set(faces.indices.filter { faces[$0].allSatisfy(verts.contains) })
+  }
+
   mutating func selectAll(_ on: Bool)
   {
     verts = on ? Set(points.indices) : []
@@ -118,7 +127,7 @@ extension Kraken.EditMesh
     flush()
   }
 
-  /// Selects the faces' verts as the mode sees them after an op made new geometry.
+  /// selects the faces an op just made with their verts and edges, as the mode sees them
   mutating func select(faces list: [Int], verts extra: [Int] = [])
   {
     clearSelection()
@@ -128,7 +137,7 @@ extension Kraken.EditMesh
     if mode == .vertex { flush() }
   }
 
-  /// Drops points no face uses and faces with fewer than three corners, keeping what's selected.
+  /// drops points no face uses and faces with fewer than three corners, keeping what's selected
   mutating func compact()
   {
     let map = rebuild()
@@ -142,6 +151,7 @@ extension Kraken.EditMesh
   {
     var reached = seed ?? verts
     var stack = Array(reached)
+
     while let v = stack.popLast()
     {
       for e in topology.edgesAround(v)
@@ -156,12 +166,56 @@ extension Kraken.EditMesh
     edges.formUnion(allEdges.filter { verts.contains($0.a) && verts.contains($0.b) })
   }
 
-  /// The loop of edges `edge` continues into, walking straight across each four way vertex both ways.
+  /// keeps every other selected face, walking out across shared edges from the first one
+  mutating func checkerDeselect()
+  {
+    let region = selectedFaceList
+    guard !region.isEmpty else { return }
+
+    let inside = Set(region)
+    var depth: [Int: Int] = [:]
+
+    for seed in region where depth[seed] == nil
+    {
+      depth[seed] = 0
+      var queue = [seed]
+      var head = 0
+      while head < queue.count
+      {
+        let f = queue[head]
+        head += 1
+
+        let face = faces[f]
+        for i in face.indices
+        {
+          guard let e = topology.edge(face[i], face[(i + 1) % face.count]) else { continue }
+          for g in topology.facesAround(e) where inside.contains(g) && depth[g] == nil
+          {
+            depth[g] = depth[f]! + 1
+            queue.append(g)
+          }
+        }
+      }
+    }
+
+    let kept = region.filter { (depth[$0] ?? 0) % 2 == 0 }
+
+    let wasMode = mode
+    mode = .face
+    selectedFaces = Set(kept)
+    flush()
+    mode = wasMode
+    if mode == .vertex { flush() }
+  }
+
+  /// the loop of edges `edge` continues into, walking straight across each four way vertex in both directions
   func edgeLoop(_ edge: Kraken.Edge) -> [Kraken.Edge]
   {
     guard let start = side(edge) else { return [edge] }
+
     var loop: [Kraken.Edge] = [edge]
     var seen: Set<Int> = [start]
+
     for from in [edge.b, edge.a]
     {
       var current = start
@@ -180,10 +234,11 @@ extension Kraken.EditMesh
     return loop
   }
 
-  /// Selects the loop through `edge`, or in face mode the strip of faces across it.
+  /// selects the loop through `edge`, or in face mode the strip of faces across it
   mutating func selectLoop(_ edge: Kraken.Edge, extend: Bool)
   {
     if !extend { clearSelection() }
+
     if mode == .face
     {
       for e in ring(edge) { if let s = side(e) { selectedFaces.formUnion(topology.facesAround(s)) } }
@@ -198,13 +253,15 @@ extension Kraken.EditMesh
     flush()
   }
 
-  /// The edges a loop cut through `edge` crosses, walking quads both ways.
+  /// the edges a loop cut through `edge` crosses, walking quads in both directions
   func ring(_ edge: Kraken.Edge) -> [Kraken.Edge]
   {
     guard let start = side(edge) else { return [edge] }
+
     var cut = [start]
     var crossed: Set<Int> = [start]
     var visited = Set<Int>()
+
     for first in topology.facesAround(start)
     {
       var face = first
@@ -213,9 +270,11 @@ extension Kraken.EditMesh
       {
         visited.insert(face)
         guard let l = topology.faceLoops(face).first(where: { topology.loops[$0].edge == entering }) else { break }
+
         let opposite = topology.loops[topology.loops[l].next].next
         let across = topology.loops[opposite].edge
         guard crossed.insert(across).inserted else { break }
+
         cut.append(across)
         guard let next = topology.facesAround(across).first(where: { $0 != face }) else { break }
         face = next

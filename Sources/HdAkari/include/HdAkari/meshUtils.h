@@ -44,15 +44,17 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// Copies `points` into `dst`, three floats each, and writes their bounds
-/// (min xyz, max xyz) to `bounds`, for the GPU deformer's per frame upload.
+/// copies `points` into `dst` as three floats each and writes their bounds, for the deformer's upload
 inline void HdAkariCopyPoints(VtVec3fArray const &points, float *dst, float *bounds)
 {
   const size_t n = points.size();
-  float lo[3] = {3.4e38f, 3.4e38f, 3.4e38f}, hi[3] = {-3.4e38f, -3.4e38f, -3.4e38f};
+  float lo[3] = {3.4e38f, 3.4e38f, 3.4e38f};
+  float hi[3] = {-3.4e38f, -3.4e38f, -3.4e38f};
+
   if (n > 0) {
     const float *src = points.cdata()->data();
     std::memcpy(dst, src, n * 3 * sizeof(float));
+
     for (size_t i = 0; i < n * 3; i += 3) {
       for (int k = 0; k < 3; ++k) {
         lo[k] = src[i + k] < lo[k] ? src[i + k] : lo[k];
@@ -64,10 +66,11 @@ inline void HdAkariCopyPoints(VtVec3fArray const &points, float *dst, float *bou
   for (int k = 0; k < 3; ++k) { bounds[k] = lo[k]; bounds[3 + k] = hi[k]; }
 }
 
-/// Writes `points`' bounds in their own space (min xyz, max xyz), zero when empty.
+/// writes the min and max corners of `points` in their own space, zero when empty
 inline void HdAkariPointsBounds(VtVec3fArray const &points, float *bounds)
 {
-  GfVec3f lo(3.4e38f), hi(-3.4e38f);
+  GfVec3f lo(3.4e38f);
+  GfVec3f hi(-3.4e38f);
   for (GfVec3f const &p : points) {
     for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], p[k]); hi[k] = std::max(hi[k], p[k]); }
   }
@@ -76,10 +79,12 @@ inline void HdAkariPointsBounds(VtVec3fArray const &points, float *bounds)
   for (int k = 0; k < 3; ++k) { bounds[k] = lo[k]; bounds[3 + k] = hi[k]; }
 }
 
-/// Up to `count` of `points`, evenly strided, as xyz into `out`, returns how many.
+/// writes up to `count` evenly strided `points` as xyz into `out` and returns how many
 inline size_t HdAkariPointsSample(VtVec3fArray const &points, float *out, size_t count)
 {
-  size_t n = std::min(count, points.size()), stride = n ? points.size() / n : 1;
+  const size_t n = std::min(count, points.size());
+  const size_t stride = n ? points.size() / n : 1;
+
   for (size_t i = 0; i < n; ++i) {
     GfVec3f const &p = points[i * stride];
     out[i * 3] = p[0]; out[i * 3 + 1] = p[1]; out[i * 3 + 2] = p[2];
@@ -88,11 +93,13 @@ inline size_t HdAkariPointsSample(VtVec3fArray const &points, float *out, size_t
   return n;
 }
 
-/// `points` grown by `scale` about their bounds' center, for a part standing in for pruned ones.
+/// `points` grown by `scale` about the center of their bounds, for a part standing in for pruned ones
 inline VtVec3fArray HdAkariGrowPoints(VtVec3fArray const &points, float scale)
 {
   if (points.empty()) return points;
-  GfVec3f lo = points[0], hi = points[0];
+
+  GfVec3f lo = points[0];
+  GfVec3f hi = points[0];
   for (GfVec3f const &p : points) {
     for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], p[k]); hi[k] = std::max(hi[k], p[k]); }
   }
@@ -100,10 +107,11 @@ inline VtVec3fArray HdAkariGrowPoints(VtVec3fArray const &points, float scale)
   const GfVec3f pivot = (lo + hi) * 0.5f;
   VtVec3fArray grown(points.size());
   for (size_t i = 0; i < points.size(); ++i) grown[i] = pivot + (points[i] - pivot) * scale;
+
   return grown;
 }
 
-/// Each of `values` at `indices`, for a pruned mesh's per triangle data.
+/// each of `values` at `indices`, for a pruned mesh's per triangle data
 inline VtIntArray HdAkariSubsetInts(VtIntArray const &values, VtIntArray const &indices)
 {
   VtIntArray out;
@@ -112,24 +120,19 @@ inline VtIntArray HdAkariSubsetInts(VtIntArray const &values, VtIntArray const &
   return out;
 }
 
-/// Simplifies a mesh to about `targetTriangles` by clustering its points on a
-/// grid, for a level of detail no finer than the screen it covers, or for an
-/// aggregate of many parts by pruning them, `outSources` then naming each kept
-/// triangle's original, empty otherwise.
+/// simplifies a mesh to about `targetTriangles` by clustering points on a grid, pruning aggregates instead and naming their sources
 HDAKARI_API bool HdAkariDecimate(VtVec3fArray const &points, VtVec3iArray const &tris, VtVec2fArray const &uvs,
                                  size_t targetTriangles,
                                  VtVec3fArray &outPoints, VtVec3iArray &outTris, VtVec2fArray &outUvs,
                                  VtIntArray &outSources);
 
-/// Each drawn triangle's streamed Ptex face, `sources` naming its triangle
-/// in `triangleFaces` as Akari's build does: the face in the low 18 bits,
-/// its corners places on it two bits apiece above, then the face's ulog2
-/// and vlog2 from `faceRes`. All ones where it has none.
+/// each drawn triangle's streamed ptex face and corner places packed into an int, all ones where it has none
 inline void HdAkariPtexTriangleEntries(VtIntArray const &triangleFaces, VtIntArray const &faceRes,
                                        int32_t const *sources, size_t count, uint32_t *out)
 {
   int const *faces = triangleFaces.cdata();
   int const *res = faceRes.cdata();
+
   for (size_t i = 0; i < count; ++i) {
     const size_t t = size_t(sources[i] & 0x7FFFFFFF);
     uint32_t entry = 0xFFFFFFFFu;
@@ -145,22 +148,21 @@ inline void HdAkariPtexTriangleEntries(VtIntArray const &triangleFaces, VtIntArr
   }
 }
 
-/// Copies `points` into `dst`, three floats each, without computing bounds.
+/// copies `points` into `dst` as three floats each, without computing bounds
 inline void HdAkariCopyPointsFlat(VtVec3fArray const &points, float *dst)
 {
   const size_t n = points.size();
   if (n > 0) std::memcpy(dst, points.cdata()->data(), n * 3 * sizeof(float));
 }
 
-/// Copies triangle corners into `dst`, three ints each.
+/// copies triangle corners into `dst` as three ints each
 inline void HdAkariCopyTriangles(VtVec3iArray const &tris, int32_t *dst)
 {
   const size_t n = tris.size();
   if (n > 0) std::memcpy(dst, tris.cdata()->data(), n * 3 * sizeof(int32_t));
 }
 
-/// Copies `uvs` into `dst`, two floats per triangle corner. A constant uv
-/// arrives as one value and repeats across every corner.
+/// copies `uvs` into `dst` as two floats per corner, a constant uv repeating across every corner
 inline void HdAkariCopyUVs(VtVec2fArray const &uvs, float *dst, size_t corners)
 {
   const size_t n = uvs.size();
@@ -175,30 +177,26 @@ inline void HdAkariCopyUVs(VtVec2fArray const &uvs, float *dst, size_t corners)
   }
 }
 
-/// Writes each instance's matrix as 16 floats, row-major like
-/// `GfMatrix4f::GetArray`, which the renderer reads as a column-major
-/// transform.
-/// The instances' floats, sixteen a matrix, read in place.
+/// the instance matrices read in place as row major floats, which the renderer reads as column major transforms
 inline float const *HdAkariMatrixFloats(VtMatrix4fArray const &matrices)
 {
   return matrices.empty() ? nullptr : matrices.cdata()->GetArray();
 }
 
+/// writes each instance matrix as 16 floats in the same layout
 inline void HdAkariCopyInstances(HdAkariMeshData const &mesh, float *dst)
 {
   const size_t n = mesh.instances.size();
   if (n > 0) std::memcpy(dst, mesh.instances.cdata()->GetArray(), n * 16 * sizeof(float));
 }
 
-/// The joints of a GPU skinned mesh, zero when its points arrive already skinned.
+/// the joints of a gpu skinned mesh, zero when its points arrive already skinned
 inline size_t HdAkariSkinJointCount(HdAkariMeshData const &mesh)
 {
   return mesh.skinInfluencesPerPoint > 0 ? mesh.skinXforms.size() : 0;
 }
 
-/// Writes each joint's matrix as the three rows a column vector multiply
-/// reads, twelve floats each, and the local bounds (min xyz, max xyz),
-/// for the GPU skinning's per frame upload.
+/// writes each joint matrix as three rows and the local bounds, for gpu skinning's upload
 inline void HdAkariCopySkin(HdAkariMeshData const &mesh, float *palette, float *bounds)
 {
   const size_t n = HdAkariSkinJointCount(mesh);
@@ -212,20 +210,20 @@ inline void HdAkariCopySkin(HdAkariMeshData const &mesh, float *palette, float *
   for (int k = 0; k < 3; ++k) { bounds[k] = mesh.skinMin[k]; bounds[3 + k] = mesh.skinMax[k]; }
 }
 
-/// A path's hash, the per frame identity of a mesh without its string.
+/// a path's hash, the per frame identity of a mesh without its string
 inline uint64_t HdAkariPathKey(SdfPath const &path)
 {
   return static_cast<uint64_t>(path.GetHash());
 }
 
-/// Whether two triangulations and their uvs are the same.
+/// whether two triangulations and their uvs are the same
 inline bool HdAkariSameTopology(VtVec3iArray const &tris, VtVec3iArray const &otherTris,
                                 VtVec2fArray const &uvs, VtVec2fArray const &otherUvs)
 {
   return tris == otherTris && uvs == otherUvs;
 }
 
-/// Hashes raw bytes eight at a time, for content hashing reusable prototype geometry.
+/// hashes raw bytes eight at a time, for content hashing reusable prototype geometry
 inline uint64_t HdAkariHashBytes(uint64_t hash, void const *bytes, size_t count)
 {
   auto const *p = static_cast<unsigned char const *>(bytes);
@@ -245,15 +243,13 @@ inline uint64_t HdAkariHashBytes(uint64_t hash, void const *bytes, size_t count)
   return hash;
 }
 
-/// Bins `mesh`'s arrays by content, so equal ones across every mesh share one copy.
+/// bins the arrays of `mesh` by content, so equal ones across every mesh share one copy
 HDAKARI_API void HdAkariInternMeshArrays(HdAkariMeshData &mesh);
 
-/// Ages the bins once a sync pass, dropping what no mesh has asked for in a few.
+/// ages the bins once per sync pass, dropping what no mesh has asked for in a few passes
 HDAKARI_API void HdAkariPruneArrayBins();
 
-/// A stable key over a prototype's object space geometry and material. Two
-/// Rprims with the same key and transform can share one GPU instanced draw:
-/// their points, triangles, uvs and material are identical.
+/// a stable key over a prototype's geometry and material, equal keys and transforms can share one instanced draw
 inline uint64_t HdAkariMeshContentKey(HdAkariMeshData const &mesh)
 {
   uint64_t hash = 1469598103934665603ull;
@@ -270,22 +266,26 @@ inline uint64_t HdAkariMeshContentKey(HdAkariMeshData const &mesh)
     hash = HdAkariHashBytes(hash, mesh.uvs.data(), mesh.uvs.size() * sizeof(GfVec2f));
   }
 
+  if (!mesh.normals.empty()) {
+    hash = HdAkariHashBytes(hash, mesh.normals.data(), mesh.normals.size() * sizeof(GfVec3f));
+  }
+
   hash = HdAkariHashBytes(hash, &mesh.ptexMap, sizeof(int));
   hash = HdAkariHashBytes(hash, &mesh.displayColor, sizeof(GfVec3f));
   hash = HdAkariHashBytes(hash, &mesh.opacity, sizeof(float));
   hash = HdAkariHashBytes(hash, &mesh.roughness, sizeof(float));
   hash = HdAkariHashBytes(hash, &mesh.metallic, sizeof(float));
+
   const uint8_t flags = uint8_t(mesh.transparent ? 1 : 0)
     | uint8_t(mesh.emitter ? 2 : 0)
     | uint8_t(mesh.transform.GetDeterminant() < 0.0 ? 4 : 0)
     | uint8_t(mesh.smooth ? 8 : 0)
-    | uint8_t(mesh.shadowCutout ? 16 : 0);
+    | uint8_t(mesh.shadowCutout ? 16 : 0)
+    | uint8_t(mesh.faceted ? 32 : 0);
   hash = HdAkariHashBytes(hash, &flags, sizeof(flags));
+
   return hash ? hash : 1;
 }
-
-/// @class HdAkariScene
-///
 
 PXR_NAMESPACE_CLOSE_SCOPE
 

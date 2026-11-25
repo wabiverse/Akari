@@ -48,7 +48,7 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// The 3D viewport's header: the mode, the View, Select, Add and Object menus, and the shading buttons.
+  /// the 3D viewport's header: the mode, the view, select, add and object menus, and the shading buttons.
   struct LayoutHeader
   {
     let layout: Kraken.Layout
@@ -168,14 +168,18 @@ extension Kraken
         let y: CGFloat = 3, h: CGFloat = Self.height - 6
         var x: CGFloat = 6
 
-        let mode = layout.mode == .edit ? "Edit Mode" : "Object Mode"
-        let modeRect = CGRect(x: x, y: y, width: width(mode) + 30, height: h)
+        let sculpting = layout.tab == .sculpting
+        let mode = sculpting ? "Sculpt Mode" : layout.mode == .edit ? "Edit Mode" : "Object Mode"
+
+        // the mode's icon leads its name, the same icon its menu shows
+        let modeRect = CGRect(x: x, y: y, width: width(mode) + 48, height: h)
         fill(modeRect, isHovered(modeRect) ? Self.button.highlight(withLevel: 0.1) ?? Self.button : Self.button)
-        label(mode + "  ▾", in: modeRect)
+        drawSymbol(layout.modeSymbol, in: CGRect(x: modeRect.minX + 6, y: modeRect.midY - 6.5, width: 13, height: 13))
+        label(mode + "  ▾", in: CGRect(x: modeRect.minX + 18, y: modeRect.minY, width: modeRect.width - 18, height: modeRect.height))
         targets.append((modeRect, { [weak self] in self?.pop(.mode, under: modeRect) }))
         x = modeRect.maxX + 10
 
-        if layout.mode == .edit
+        if layout.mode == .edit, !sculpting
         {
           for (i, select) in [SelectMode.vertex, .edge, .face].enumerated()
           {
@@ -189,8 +193,10 @@ extension Kraken
           x += 24 * 3 + 10
         }
 
-        let menus: [(String, LayoutView.Menu)] = [("View", .view), ("Select", .select), ("Add", .add),
-                                                  layout.mode == .edit ? ("Mesh", .mesh) : ("Object", .object)]
+        let menus: [(String, LayoutView.Menu)] = sculpting
+          ? [("View", .sculptView), ("Sculpt", .sculpt), ("Mask", .mask), ("Add", .sculptAdd)]
+          : [("View", .view), ("Select", .select), ("Add", .add), layout.mode == .edit ? ("Mesh", .mesh) : ("Object", .object)]
+            + (layout.mode == .edit ? [("Edge", LayoutView.Menu.edge)] : [])
         for (title, kind) in menus
         {
           let r = CGRect(x: x, y: y, width: width(title) + 16, height: h)
@@ -201,6 +207,28 @@ extension Kraken
         }
 
         var right = bounds.maxX - 8
+
+        // the sculpt viewport has looks of its own in place of the scene's shading and overlays
+        if sculpting
+        {
+          let sculpt = layout.sculpt
+          let looks = SculptShading.allCases
+          let group = CGRect(x: right - 26 * CGFloat(looks.count), y: y, width: 26 * CGFloat(looks.count), height: h)
+          fill(group, Self.button)
+          for (i, look) in looks.enumerated()
+          {
+            let r = CGRect(x: group.minX + CGFloat(i) * 26, y: y, width: 26, height: h)
+            if sculpt.shading == look { fill(r, Self.accent, radius: 3) }
+            else if isHovered(r) { fill(r, Self.button.highlight(withLevel: 0.12)!, radius: 3) }
+            drawSymbol(look.symbol, in: CGRect(x: r.midX - 6.5, y: r.midY - 6.5, width: 13, height: 13))
+            targets.append((r, { sculpt.shading = look }))
+          }
+
+          right = group.minX - 12
+          drawLayer(right: right, after: x, y: y, h: h)
+          return
+        }
+
         let modes: [ViewportShading] = [.wireframe, .solid, .materialPreview, .rendered]
         let group = CGRect(x: right - 26 * 4, y: y, width: 26 * 4, height: h)
         fill(group, Self.button)
@@ -226,7 +254,12 @@ extension Kraken
         drawOverlayIcon(in: overlays.insetBy(dx: 6, dy: 4))
         targets.append((overlays, { [weak self] in self?.layout.overlays.toggle() }))
         right = overlays.minX - 12
+        drawLayer(right: right, after: x, y: y, h: h)
+      }
 
+      /// the department layer edits go into, as far right as it fits
+      private func drawLayer(right: CGFloat, after x: CGFloat, y: CGFloat, h: CGFloat)
+      {
         if layout.layers.isEmpty, !askedLayers
         {
           askedLayers = true
@@ -244,6 +277,20 @@ extension Kraken
             self?.pop(.layer, under: layerRect)
           }))
         }
+      }
+
+      private func drawSymbol(_ name: String, in r: CGRect)
+      {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+          .applying(NSImage.SymbolConfiguration(paletteColors: [Self.ink]))
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+        else { return }
+
+        let size = image.size
+        let scale = min(r.width / size.width, r.height / size.height, 1)
+        let drawn = CGSize(width: size.width * scale, height: size.height * scale)
+        image.draw(in: CGRect(x: r.midX - drawn.width / 2, y: r.midY - drawn.height / 2, width: drawn.width, height: drawn.height),
+                   from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
       }
 
       private func drawSelectIcon(_ mode: SelectMode, in r: CGRect)

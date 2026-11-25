@@ -48,11 +48,7 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// Each heavy instance set's prototypes again at coarser levels, a quarter of the triangles each,
-  /// every instance drawing the one its size on screen needs, picked on the GPU each frame. A set's
-  /// prototypes switch levels together a cluster at a time, cells of its bounds, at the pixels the
-  /// cluster's triangles cover as finely as the screen shows, so a prototype spread over a field
-  /// coarsens where it's far, a prototype with fewer levels drawing its coarsest past where it ends.
+  /// each heavy instance set again at coarser levels, a quarter of the triangles each, every instance drawing the level its screen size needs
   static func instanceLevels(_ meshes: [(mesh: Akari.Geom.Recorder.RawMesh, triangles: Int)],
                              camera: RecordCamera? = nil)
     -> (meshes: [(mesh: Akari.Geom.Recorder.RawMesh, triangles: Int)], detail: Float)
@@ -85,20 +81,20 @@ extension Akari.LabFXEngine
 
   typealias InstanceSet = (count: Int, members: [Int], lo: SIMD3<Float>, hi: SIMD3<Float>)
 
-  /// A cell of prototypes in an instance set, switching levels together.
+  /// a cell of prototypes in an instance set, switching levels together.
   struct InstanceCluster
   {
     var triangles: [Int]
     var lo: SIMD3<Float>
     var hi: SIMD3<Float>
     var members: [Int] = []
-    /// Pixels each level stops at, the finest's at infinity.
+    /// pixels each level stops at, the finest's at infinity.
     var bands: [Float] = []
-    /// Per member and level, the triangles it keeps and how much it grows, nil when pruned.
+    /// per member and level, the triangles it keeps and how much it grows, nil when pruned.
     var levels: [Int: [(triangles: Int, grow: Float)?]] = [:]
   }
 
-  /// The triangle counts a prototype simplifies through, a quarter each, kept whole when its uvs can't follow.
+  /// the triangle counts a prototype simplifies through, a quarter each, kept whole when its uvs can't follow.
   private static func levelChain(_ mesh: Akari.Geom.Recorder.RawMesh, _ top: Int) -> [Int]
   {
     guard mesh.uvs.size() <= 1 || mesh.uvs.size() == mesh.tris.size() * 3 || mesh.uvs.size() == mesh.points.size() else { return [top] }
@@ -113,7 +109,7 @@ extension Akari.LabFXEngine
     return levels
   }
 
-  /// Every instance set with its prototypes and their bounds.
+  /// every instance set with its prototypes and their bounds.
   private static func instanceSets(_ meshes: [(mesh: Akari.Geom.Recorder.RawMesh, triangles: Int)],
                                    spheres: [(center: SIMD3<Float>, radius: Float)]) -> [UInt64: InstanceSet]
   {
@@ -134,7 +130,7 @@ extension Akari.LabFXEngine
     return sets
   }
 
-  /// A set's prototypes gathered into cells of its bounds, and the cell each one fell in.
+  /// a set's prototypes gathered into cells of its bounds, and the cell each one fell in.
   private static func gatherClusters(_ set: InstanceSet, chains: [[Int]], spheres: [(center: SIMD3<Float>, radius: Float)])
     -> ([SIMD3<Int32>: InstanceCluster], [Int: SIMD3<Int32>])
   {
@@ -163,12 +159,11 @@ extension Akari.LabFXEngine
     return (cells, cellsOf)
   }
 
-  /// Each coarser level of a cluster, its small parts thinned and its large ones simplified.
+  /// each coarser level of a cluster, its small parts thinned and its large ones simplified.
   private static func thin(_ cluster: inout InstanceCluster, meshes: [(mesh: Akari.Geom.Recorder.RawMesh, triangles: Int)],
                            chains: [[Int]], spheres: [(center: SIMD3<Float>, radius: Float)])
   {
-    // parts too small to simplify thin out instead, an even sample of them kept and grown by the area they stand for.
-    // only parts small against their cluster thin out, the large ones simplify.
+    // parts too small to simplify thin out instead, an even sample kept and grown by the area they stand for
     let radius = simd_length(cluster.hi - cluster.lo) * 0.5
     let order = cluster.members.sorted { meshes[$0].mesh.key &* 0x9E37_79B9_7F4A_7C15 < meshes[$1].mesh.key &* 0x9E37_79B9_7F4A_7C15 }
     let small = order.map { spheres[$0].radius * smallPartRatio <= radius }
@@ -199,7 +194,7 @@ extension Akari.LabFXEngine
     cluster.bands = [.infinity] + cluster.triangles.dropFirst().map { Float((Double($0) * instancePixelsPerTriangle / .pi).squareRoot()) } + [0]
   }
 
-  /// The camera's own pixels pick each level, coarser as far as it takes the instances in view to fit the drawn budget.
+  /// the camera's own pixels pick each level, coarser as far as it takes the instances in view to fit the drawn budget.
   private static func instanceDetail(_ camera: RecordCamera, meshes: [(mesh: Akari.Geom.Recorder.RawMesh, triangles: Int)],
                                      sets: [UInt64: InstanceSet], chains: [[Int]],
                                      clusters: [UInt64: [SIMD3<Int32>: InstanceCluster]]) -> Float
@@ -268,7 +263,7 @@ extension Akari.LabFXEngine
     return lo
   }
 
-  /// Each mesh once per triangle count and growth it draws at, with the sets and bands it draws in.
+  /// each mesh once per triangle count and growth it draws at, with the sets and bands it draws in.
   private static func levelledCopies(_ meshes: [(mesh: Akari.Geom.Recorder.RawMesh, triangles: Int)],
                                      clusters: [UInt64: [SIMD3<Int32>: InstanceCluster]],
                                      cellOf: [UInt64: [Int: SIMD3<Int32>]]) -> [(mesh: Akari.Geom.Recorder.RawMesh, triangles: Int)]
@@ -335,31 +330,27 @@ extension Akari.LabFXEngine
     return levelled
   }
 
-  /// Cells across an instance set's bounds its prototypes cluster into to switch levels.
+  /// cells across an instance set's bounds its prototypes cluster into to switch levels.
   private static let clusterCells = 8
-  /// The most triangles the instances in view draw a frame, every one at the level its pixels pick
-  /// when they fit, the levels picked coarser together when they don't.
+  /// the most triangles the instances in view draw a frame, the levels coarsen together when they don't fit
   private static var drawnTriangleBudget: Int
   {
     environmentBudget("AKARI_DRAWN_TRIANGLE_BUDGET", 12_000_000)
   }
 
-  /// A part this many times smaller than its cluster thins out at coarser levels, a larger one simplifies.
+  /// a part this many times smaller than its cluster thins out at coarser levels, a larger one simplifies.
   private static let smallPartRatio: Float = 8
 
-  /// Levels of detail an instance set records, and the fewest triangles a coarser one keeps.
+  /// levels of detail an instance set records, and the fewest triangles a coarser one keeps.
   private static let instanceLevelCount = 6
   private static let minimumLevelTriangles = 8
-  /// Triangles a set draws with every instance at its finest, past which it takes levels.
+  /// triangles a set draws with every instance at its finest, past which it takes levels.
   private static var levelledSetTriangles: Int
   {
     environmentBudget("AKARI_LEVELLED_SET_TRIANGLES", 65536)
   }
 
-  /// Splits off sets of identical static meshes, the same content under different transforms,
-  /// heavy enough to be worth drawing as one instanced prototype, recorded once in object space,
-  /// each copy's transform an instance. Instances share their prototype's prim id, so picking one
-  /// reports the first.
+  /// splits off sets of identical heavy static meshes to draw as one instanced prototype, each copy's transform an instance
   static func instanceDuplicates(_ meshes: [Akari.Geom.Recorder.RawMesh]) -> (regular: [Akari.Geom.Recorder.RawMesh], instanced: [Akari.Geom.Recorder.RawMesh])
   {
     var groups: [UInt64: [Int]] = [:]
@@ -396,15 +387,10 @@ extension Akari.LabFXEngine
     return (zip(meshes, duplicated).compactMap { $1 ? nil : $0 }, instanced)
   }
 
-  /// The most copies an instanced mesh expands into for the paths
-  /// that can't draw instances, its sets order keeps them an even
-  /// sample.
+  /// the most copies an instanced mesh expands into for paths that can't draw instances
   private static let maxExpandedInstances = 20000
 
-  /// Copies an instanced mesh once per instance, giving each copy
-  /// its own key and world transform, for the paths that can't
-  /// draw instances.
-  /// Instances a mesh small against its set measures its own screen through, the rest scale it.
+  /// copies an instanced mesh per instance for the paths that can't draw instances, this many measured for screen size
   static let maxMeasuredInstances = 4096
 
   static func expandInstances(_ mesh: Akari.Geom.Recorder.RawMesh) -> [Akari.Geom.Recorder.RawMesh]
@@ -417,6 +403,7 @@ extension Akari.LabFXEngine
       var copy = mesh
       copy.instances = []
       copy.instancesKey = 0
+
       // the instance applies after the mesh's own transform, both column major.
       let o = instance * 16
       var world = [Float](repeating: 0, count: 16)
@@ -451,7 +438,7 @@ extension Akari.LabFXEngine
     return copies
   }
 
-  /// A stable key per expanded instance, distinct from its prototypes.
+  /// a stable key per expanded instance, distinct from its prototypes.
   private static func instanceKey(_ key: UInt64, _ instance: UInt64) -> UInt64
   {
     var mixed = key
@@ -463,8 +450,7 @@ extension Akari.LabFXEngine
     return mixed
   }
 
-  /// Morton code of a mesh's world position,
-  /// quantized against a fixed grid (in meters).
+  /// the morton code of a mesh's world position on a fixed grid in meters
   static func mortonKey(_ mesh: Akari.Geom.Recorder.RawMesh) -> UInt64
   {
     if let draw = mesh.instanceDraws.first, draw.transforms.count >= 16
@@ -475,7 +461,7 @@ extension Akari.LabFXEngine
     return mortonKey(mesh.worldMatrix)
   }
 
-  /// Morton code of a matrix's translation.
+  /// morton code of a matrix's translation.
   static func mortonKey(_ worldMatrix: [Float]) -> UInt64
   {
     func part(_ v: Float) -> UInt64

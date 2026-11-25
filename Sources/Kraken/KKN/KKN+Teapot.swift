@@ -42,8 +42,7 @@ import simd
 
 extension Kraken
 {
-  /// Martin Newell's 1975 Utah teapot as Jim Blinn passed it on: Y up, 28 bicubic Bezier patches over
-  /// its control points, four rows of four each, the one Pixar's RenderMan made its swatch and mascot.
+  /// martin newell's 1975 utah teapot as jim blinn passed it on, 28 bicubic bezier patches, y up
   enum Teapot
   {
     static let points: [SIMD3<Float>] = [

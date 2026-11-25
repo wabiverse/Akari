@@ -1,0 +1,214 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    doc = """Akari screen space reflection showcase: a polished floor under a chrome ball, a thin panel and
+    a tall red pillar, so a reflection ray meets a curved mirror, a thin solid, a long grazing run and a
+    contact right under an object all in one frame."""
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "World"
+{
+    def Scope "Looks"
+    {
+        def Material "Floor"
+        {
+            token outputs:surface.connect = </World/Looks/Floor/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.17, 0.18, 0.2)
+                float inputs:ior = 2.2
+                float inputs:metallic = 0
+                float inputs:roughness = 0.05
+                token outputs:surface
+            }
+        }
+        def Material "Wall"
+        {
+            token outputs:surface.connect = </World/Looks/Wall/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.58, 0.56, 0.52)
+                float inputs:metallic = 0
+                float inputs:roughness = 0.7
+                token outputs:surface
+            }
+        }
+        def Material "Chrome"
+        {
+            token outputs:surface.connect = </World/Looks/Chrome/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.92, 0.95, 0.94)
+                float inputs:ior = 1.52
+                float inputs:metallic = 0
+                float inputs:opacity = 0.06
+                float inputs:roughness = 0.03
+                token outputs:surface
+            }
+        }
+        def Material "Gold"
+        {
+            token outputs:surface.connect = </World/Looks/Gold/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (1, 0.75, 0.33)
+                float inputs:metallic = 1
+                float inputs:roughness = 0.28
+                token outputs:surface
+            }
+        }
+        def Material "Red"
+        {
+            token outputs:surface.connect = </World/Looks/Red/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.72, 0.09, 0.07)
+                float inputs:metallic = 0
+                float inputs:roughness = 0.35
+                token outputs:surface
+            }
+        }
+        def Material "Teal"
+        {
+            token outputs:surface.connect = </World/Looks/Teal/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.07, 0.55, 0.52)
+                float inputs:ior = 1.9
+                float inputs:metallic = 0
+                float inputs:roughness = 0.12
+                token outputs:surface
+            }
+        }
+    }
+
+    def Xform "Ground"
+    {
+        def Mesh "Floor" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            uniform bool doubleSided = 0
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            rel material:binding = </World/Looks/Floor>
+            point3f[] points = [(-7, 0, 7), (7, 0, 7), (7, 0, -7), (-7, 0, -7)]
+            uniform token subdivisionScheme = "none"
+        }
+        def Mesh "BackWall" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            uniform bool doubleSided = 0
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            rel material:binding = </World/Looks/Wall>
+            point3f[] points = [(-7, 0, -7), (7, 0, -7), (7, 7, -7), (-7, 7, -7)]
+            uniform token subdivisionScheme = "none"
+        }
+    }
+
+    def Xform "Props"
+    {
+        // a curved mirror, which sends neighbouring rays far apart
+        def Sphere "ChromeBall" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </World/Looks/Chrome>
+            double radius = 1.6
+            double3 xformOp:translate = (-3.6, 1.6, -1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+        // a tall bright pillar, whose reflection runs the length of the floor
+        def Cube "RedPillar" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </World/Looks/Red>
+            double size = 1
+            double3 xformOp:translate = (3.1, 2.75, -4.2)
+            float3 xformOp:scale = (1.1, 5.5, 1.1)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        // a thin standing panel, which a ray can pass clean behind
+        def Cube "ThinPanel" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </World/Looks/Teal>
+            double size = 1
+            double3 xformOp:translate = (-0.8, 2.1, -3.4)
+            float3 xformOp:scale = (6.5, 4.2, 0.15)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        }
+        // a rougher metal ball, for the glossy end of the resolve
+        def Sphere "GoldBall" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </World/Looks/Gold>
+            double radius = 1.1
+            double3 xformOp:translate = (4.6, 1.1, 1.6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+        // sitting flat on the floor, where the reflection has to meet the object at the contact
+        def Cube "ContactBlock" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </World/Looks/Gold>
+            double size = 1
+            double3 xformOp:translate = (0.4, 0.5, 1.2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+
+    def Xform "Lights"
+    {
+        def DistantLight "Sun"
+        {
+            float inputs:angle = 0.8
+            float inputs:intensity = 4
+            bool inputs:normalize = 1
+            float3 xformOp:rotateXYZ = (-42, 28, 0)
+            uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        }
+        def DomeLight "Sky"
+        {
+            color3f inputs:color = (0.5, 0.58, 0.74)
+        }
+        def SphereLight "WarmKey"
+        {
+            color3f inputs:color = (1, 0.62, 0.3)
+            float inputs:exposure = 3
+            float inputs:intensity = 60
+            float inputs:radius = 0.4
+            double3 xformOp:translate = (-5, 5.5, 2.5)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def SphereLight "CoolFill"
+        {
+            color3f inputs:color = (0.35, 0.6, 1)
+            float inputs:exposure = 3
+            float inputs:intensity = 60
+            float inputs:radius = 0.4
+            double3 xformOp:translate = (5.5, 6, -1.5)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+}

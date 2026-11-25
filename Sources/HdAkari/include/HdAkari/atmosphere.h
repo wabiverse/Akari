@@ -55,8 +55,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 class HdSceneDelegate;
 class HdAkariScene;
 
-/// Publishes `id` as the planet if it has an authored `primvars:akari:atmosphere`,
-/// which causes it to be dropped from the drawn meshes and this returns true.
+/// publishes `id` as the planet when it authors an atmosphere primvar, then drops it from the drawn meshes and returns true
 bool HdAkariSyncAtmosphere(HdSceneDelegate *sceneDelegate,
                            SdfPath const &id,
                            HdAkariScene *scene,

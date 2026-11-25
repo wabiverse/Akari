@@ -48,8 +48,7 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// Deforms the dynamic meshes on the GPU, and rerecords
-  /// the static ones only when which meshes are static changed.
+  /// deforms the dynamic meshes on the gpu and rerecords the static ones only when which meshes are static changes
   func recordCaptures(changed: [Akari.Geom.Recorder.RawMesh], removed: [UInt64], camera: RecordCamera)
   {
     guard
@@ -58,6 +57,7 @@ extension Akari.LabFXEngine
     else { return }
 
     let reframes = geometry.view.reframe && changed.isEmpty && removed.isEmpty && !geometry.record.restyled
+
     // only looking in on a reframe building in the background isn't a record.
     if geometry.view.reframing == nil || geometry.view.reframe || !changed.isEmpty || !removed.isEmpty || geometry.record.restyled
     {
@@ -82,19 +82,17 @@ extension Akari.LabFXEngine
     updateSceneBounds()
   }
 
-  /// What a record has to rebuild, the static captures and the deformer.
+  /// what a record has to rebuild, the static captures and the deformer.
   struct Dirty
   {
     var statics: Bool
     var dynamics: Bool
   }
 
-  /// The removed keys plus the per instance fallbacks of every mesh that changed or left.
+  /// the removed keys plus the per instance fallbacks of every mesh that changed or left.
   private func releaseExpansions(changed: [Akari.Geom.Recorder.RawMesh], removed: [UInt64]) -> [UInt64]
   {
-    // a meshes old per instance fallbacks go with it whenever it
-    // changes or leaves, the fresh copies if still needed, are
-    // added below.
+    // a mesh's old per instance copies go when it changes or leaves, fresh ones are added below if still needed
     var removed = removed
     for key in Array(removed)
     {
@@ -111,10 +109,7 @@ extension Akari.LabFXEngine
 
   private func expandFallbackInstances(_ changed: [Akari.Geom.Recorder.RawMesh], dirty: inout Dirty) -> [Akari.Geom.Recorder.RawMesh]
   {
-    // the deformer has no instance path, so an instanced mesh that is
-    // transparent, styled, skinned or animated falls back to one raw
-    // mesh per instance. the rest draw as one prototype with GPU
-    // instancing.
+    // an instanced mesh the deformer has to draw falls back to one raw mesh per instance, the rest draw as one prototype
     changed.flatMap
     { mesh -> [Akari.Geom.Recorder.RawMesh] in
       guard !mesh.instances.isEmpty else { return [mesh] }
@@ -130,12 +125,24 @@ extension Akari.LabFXEngine
       {
         geometry.primIds[mesh.key] = nil
         geometry.changes[mesh.key] = nil
-        if geometry.animated.remove(mesh.key) != nil { dirty.dynamics = true }
+        if geometry.animated.contains(mesh.key) { dirty.dynamics = true }
         else { dirty.statics = true }
       }
 
       let copies = Self.expandInstances(mesh)
       geometry.expansions[mesh.key] = copies.map(\.key)
+
+      // an animating prototype and its copies stay deformed, so it doesn't flip back to gpu instancing every other frame.
+      if animates
+      {
+        geometry.animated.insert(mesh.key)
+        geometry.animated.formUnion(copies.lazy.map(\.key))
+      }
+      else
+      {
+        geometry.animated.remove(mesh.key)
+      }
+
       return copies
     }
   }
@@ -153,6 +160,7 @@ extension Akari.LabFXEngine
     { mesh in
       guard mesh.transparent, let plane = waterPlane(mesh) else { return true }
       waterKeys.insert(mesh.key)
+
       // the most finely modeled sheet is the one by the shore, where its level shows.
       if let water
       {
@@ -205,7 +213,7 @@ extension Akari.LabFXEngine
     }
   }
 
-  /// Styled meshes only ever exist deformed.
+  /// styled meshes only ever exist deformed.
   private func applyRestyle(dirty: inout Dirty)
   {
     if geometry.record.restyled
@@ -226,6 +234,7 @@ extension Akari.LabFXEngine
     {
       if mesh.transparent { geometry.flags.transparent.insert(mesh.primId) } else { geometry.flags.transparent.remove(mesh.primId) }
       if mesh.emitter { geometry.flags.emitters.insert(mesh.primId) } else { geometry.flags.emitters.remove(mesh.primId) }
+      if mesh.singleSided { geometry.flags.singleSided.insert(mesh.primId) } else { geometry.flags.singleSided.remove(mesh.primId) }
       geometry.flags.opacity[mesh.primId] = mesh.transparent ? mesh.opacity : nil
       if !mesh.transparent && !mesh.shadowCutout { geometry.flags.solidShadow.insert(mesh.primId) }
       else { geometry.flags.solidShadow.remove(mesh.primId) }
@@ -240,15 +249,14 @@ extension Akari.LabFXEngine
       }
       else if mesh.skinInfluencesPerPoint > 0 || geometry.flags.styled.contains(mesh.primId) || mesh.transparent
       {
-        // GPU skinned meshes only ever exist deformed.
+        // gpu skinned meshes only ever exist deformed.
         geometry.animated.insert(mesh.key)
         dirty.dynamics = true
         if !isNew { dirty.statics = true }
       }
       else if isNew
       {
-        // new meshes start static, so loading
-        // a scene isn't one long animation.
+        // new meshes start static so loading a scene isn't one long animation
         dirty.statics = true
       }
       else if last != key
@@ -260,7 +268,7 @@ extension Akari.LabFXEngine
     }
   }
 
-  /// Picks up a finished background reframe, and chooses the static geometry again when it changed.
+  /// picks up a finished background reframe, and chooses the static geometry again when it changed.
   private func chooseStatic(statics: Bool, camera: RecordCamera, reframes: Bool)
   {
     if let job = geometry.view.reframing, !statics, job.done.wait(timeout: .now()) == .success
@@ -290,6 +298,7 @@ extension Akari.LabFXEngine
                                 instancedKey: geometry.staticInstancedCapture == nil ? nil : geometry.record.instancedKey,
                                 faces: ptex.faces.count, expands: geometry.staticShadowCapture != nil,
                                 staticRecorder: geometry.staticRecorder, instancedRecorder: geometry.instancedRecorder,
+                                shadowRecorder: geometry.shadowRecorder,
                                 ptexFaces: ptex.faces)
       if reframes, geometry.record.count > 1
       {
@@ -330,6 +339,13 @@ extension Akari.LabFXEngine
       let deformed = geometry.deformer.update(shownMeshes)
       geometry.dynamicBatch = BatchSummary(bounds: deformed.bounds, casterBounds: deformed.casterBounds,
                                            casterKeys: deformed.casterKeys)
+
+      // the glass maps draw only the glass, not every animated mesh with its fragments thrown away.
+      if geometry.deformer.hasGlass, geometry.deformer.glassDraws != 0
+      {
+        _ = labgl.captureEncodeCulled(dynamicCapture, visibility: geometry.deformer.glassDraws, offset: 0,
+                                      slot: Self.glassDrawSlot, instanceStride: 0)
+      }
     }
   }
 
@@ -341,6 +357,7 @@ extension Akari.LabFXEngine
     {
       bounds = bounds.map { (min: pointwiseMin($0.min, next.min), max: pointwiseMax($0.max, next.max)) } ?? next
     }
+
     // building and simplifying leave gigabytes of freed scratch the allocator would otherwise keep.
     malloc_zone_pressure_relief(nil, 0)
     sceneBounds = bounds

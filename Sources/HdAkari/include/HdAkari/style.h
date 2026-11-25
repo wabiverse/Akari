@@ -57,9 +57,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 class HdSceneDelegate;
 class HdAkariScene;
 
-/// Publishes `id`'s shadingModel shading and assembly
-/// (`primvars:akari:shadingModel`, `color`, `unlit`, `assemble`, `shadingModelFront`, ...)
-/// under its prim id, or drops it when none are authored.
+/// publishes the shading model and assembly of `id` under its prim id, or drops it when none are authored
 void HdAkariSyncStyle(HdSceneDelegate *sceneDelegate, SdfPath const &id, int32_t primId, HdAkariScene *scene);
 
 PXR_NAMESPACE_CLOSE_SCOPE

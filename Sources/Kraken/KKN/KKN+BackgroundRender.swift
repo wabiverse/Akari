@@ -39,24 +39,62 @@
  * ----------------------------------------------------------------- */
 
 #if os(macOS)
+  import AkariCore
+  import AkariRender
   import AppKit
   import Foundation
   import SwiftCrossUI
 
-  /// Starts the normal app or a dock icon and macOS status
-  /// bar icon running a windowless render session.
+  /// starts the normal app, or a windowless render session with a dock and status bar icon
   @main
   @MainActor
   enum KrakenEntry
   {
     static func main()
     {
-      AppUtils.raiseOpenFileLimit()
+      // prints or checks the swift declared render graph, then exits.
+      if let code = Akari.RenderGraph.runCommandLine(CommandLine.arguments) { exit(code) }
 
-      let render = AppUtils.renderArguments()
+      Kraken.StageManager.raiseOpenFileLimit()
+
+      let args = Kraken.parseArgs()
+      let render = args.render
       if render.backgroundWorker
       {
         runBackgroundRenderWorker()
+      }
+
+      if args.help
+      {
+        Console.usage(KrakenArgs.usage)
+        exit(0)
+      }
+
+      for warning in args.warnings { Console.warn(warning) }
+
+      // a wrong flag stops here before any window opens or a background render relaunches
+      if let first = args.problems.first
+      {
+        for problem in args.problems { Console.error(problem.message) }
+        Console.detail(KrakenArgs.hint)
+        exit(first.code)
+      }
+
+      if args.scripts.sdk
+      {
+        do
+        {
+          let module = try Kraken.ScriptHost.prepareModule()
+          Console.success("the script module is built in \(module.path)")
+          Console.info("compile a script against it with")
+          Console.info(Console.paint("  swiftc script.swift " + Kraken.ScriptHost.sdkFlags(module).joined(separator: " "), .cyan))
+          exit(0)
+        }
+        catch
+        {
+          Console.error("\(error)")
+          exit(1)
+        }
       }
 
       guard render.background
@@ -69,12 +107,19 @@
       guard render.job != nil
       else
       {
-        print("[akari] -b needs -a (render the animation) or -f <frame>")
-        exit(1)
+        // background with scripts and nothing to render runs the scripts then quits
+        if !args.scripts.files.isEmpty
+        {
+          Kraken.main()
+          return
+        }
+
+        Console.error("-b needs -a to render the animation or -f <frame> for one frame", from: .akari)
+        Console.detail(KrakenArgs.hint)
+        exit(2)
       }
 
-      // macOS 27 only shows "Running in Background" if launched
-      // through LaunchServices, required for CLI based rendering.
+      // macos only shows running in background when launched through launch services, which cli rendering needs
       if getppid() != 1
       {
         relaunchThroughLaunchServices()
@@ -83,7 +128,7 @@
       runBackgroundRender()
     }
 
-    /// Waits on the relaunched app like a batch render, relaying its output and exit status.
+    /// waits on the relaunched app like a batch render, relaying its output and exit status.
     private static func relaunchThroughLaunchServices() -> Never
     {
       let session = URL(filePath: NSTemporaryDirectory()).appendingPathComponent("akari-\(getpid())")
@@ -92,7 +137,7 @@
       guard mkfifo(output.path, 0o600) == 0
       else
       {
-        print("[akari] could not start background render: \(String(cString: strerror(errno)))")
+        Console.error("could not start background render: \(String(cString: strerror(errno)))", from: .akari)
         exit(1)
       }
 
@@ -103,6 +148,9 @@
       configuration.addsToRecentItems = false
       var environment = ProcessInfo.processInfo.environment
       environment["AKARI_CWD"] = FileManager.default.currentDirectoryPath
+
+      // the relaunched render writes through a pipe, so it colors its output when this terminal can
+      if Console.colors { environment["AKARI_COLOR"] = "1" }
       environment["AKARI_OUTPUT"] = output.path
       environment["AKARI_STATUS"] = status.path
       configuration.environment = environment
@@ -114,7 +162,7 @@
         guard let app
         else
         {
-          print("[akari] could not start background render: \(error?.localizedDescription ?? "unknown error")")
+          Console.error("could not start background render: \(error?.localizedDescription ?? "unknown error")", from: .akari)
           finish(output: output, status: status, code: 1)
         }
 
@@ -175,7 +223,7 @@
       application.run()
     }
 
-    /// The child the host spawns, it stays in the app's process after a quit.
+    /// the child the host spawns, it stays in the app's process after a quit.
     private static func runBackgroundRenderWorker() -> Never
     {
       signal(SIGPIPE, SIG_IGN)
@@ -210,9 +258,7 @@
     }
   }
 
-  /// Owns the dock visible app while a child process performs the render,
-  /// this lets AppKit complete a user initiated quit while macOS manages
-  /// the still running child as background work.
+  /// owns the dock app while a child process renders, so a quit finishes while macos keeps the child as background work
   @MainActor
   private final class BackgroundRenderHost: NSObject, NSApplicationDelegate, NSWindowDelegate
   {
@@ -264,17 +310,17 @@
       }
       catch
       {
-        print("[akari] could not start render: \(error)")
+        Console.error("could not start render: \(error)", from: .akari)
         finish(1)
       }
     }
 
     func applicationWillTerminate(_: Notification)
     {
-      if worker.isRunning { print("[akari] render continues in the background") }
+      if worker.isRunning { Console.info("render continues in the background", from: .akari) }
     }
 
-    /// The Wabi logo from `Branding/Akari.icon`, as a menu bar template.
+    /// the wabi logo from `Branding/Akari.icon`, as a menu bar template.
     private static let orca: NSImage? =
     {
       let svg = #"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 50"><path fill-rule="evenodd" d="m4.87,33.98S1.37,31.13.3,24.1c-.31-2.73.01-5.38,1.02-7.94,1.15-2.93,2.99-5.33,5.51-7.22.5-.38,1.05-.69,1.46-1.18.6-.71.79-1.52.68-2.42-.09-.68-.33-1.3-.59-1.92-.16-.39-.34-.77-.39-1.19-.1-.79.33-1.48,1.07-1.77.78-.31,1.59-.3,2.4-.17,1.26.21,2.48.59,3.67,1.04,2.19.81,4.27,1.85,6.25,3.09,2.3,1.44,4.41,3.11,6.27,5.1,1.34,1.44,2.51,3,3.44,4.73,1.81,3.37,2.41,6.95,1.76,10.73-.23,1.32-.62,2.58-1.3,3.74-1.22,2.09-3.05,3.12-5.46,3.16-1.32.02-2.55-.3-3.75-.81-1.13-.48-2.21-1.05-3.26-1.67-1.17-.69-9.85-6.99-12.05-7.47-1.8.32-3.36.8-4.12,2.47-3.46,3.39,1.97,9.55,1.97,9.55h0Zm17.95-8.31c0-.82-.98-1.62-1.82-1.49-.66.11-.99.67-.76,1.3.23.63.88,1.1,1.55,1.11.59.01,1.03-.38,1.03-.92h0Z"/><path fill-rule="evenodd" d="m21.49,33.4c.27-.15-7.4,8.63-16.65.59-2.3-2-6.77-12.09.52-12.29,4.64-.13,11.83,6.48,11.83,6.48-2.9-1.96-8.72-5.94-12.24-2.8-4.78,4.27,2.44,15.66,16.53,8.02h0Z"/><path fill-rule="evenodd" d="m14.91,35.81c1.07-.31,2.07-.81,3.09-1.24,1.07-.46,2.15-.9,3.3-1.14.71-.15,1.49-.14,1.99.01-.56.82-1.03,1.68-1.56,2.52-.21.34-.46.66-.73.95-1.19,1.26-2.65,1.79-4.28,1.81-.41,0-.83,0-1.32,0,.73.15,1.38.31,2.01.55,1.59.6,2.53,1.76,2.92,3.38.42,1.77.69,3.57,1.15,5.34.14.55.27,1.1.46,1.63.05.13.05.18-.12.16-1.76-.24-3.47-.66-5.02-1.56-1.39-.8-2.48-1.92-3.33-3.28-.8-1.27-1.36-2.65-1.97-4.01-.32-.71-.53-1.29-.95-1.92-.45-.68-1.06-1.25-1.75-1.7-2.84-1.82-4.47-3.89-4.52-3.94,0,0,2.96,3.58,8.5,3.04.73-.15,1.46-.3,2.15-.6h0Z"/></svg>"#
@@ -342,7 +388,7 @@
       NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
-    /// Forwards the worker's output, keeping its progress lines for the bar.
+    /// forwards the worker's output, keeping its progress lines for the bar.
     private func relay(_ data: Data)
     {
       pendingOutput.append(data)

@@ -85,7 +85,7 @@ extension Kraken
     }
   }
 
-  /// The frame size, rate and range, and where frames are written.
+  /// the frame size, rate and range, and where frames are written.
   @MainActor
   struct OutputProperties: View
   {
@@ -203,7 +203,7 @@ extension Kraken
     }
   }
 
-  /// The camera renders look through.
+  /// the camera renders look through.
   @MainActor
   struct SceneProperties: View
   {

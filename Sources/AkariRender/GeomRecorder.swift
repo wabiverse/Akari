@@ -44,27 +44,28 @@ import HydraKit
 
 public extension Akari.Geom
 {
-  /// Triangulates meshes into draw buffers, cached by
-  /// `id` + `dataRevision` so that meshes that aren't
-  /// modified get reused, preventing needless copies
-  /// of unmodified geometry for every frame.
+  /// triangulates meshes into draw buffers, cached by id and data revision so unchanged meshes are reused
   final class Recorder
   {
-    /// One mesh, straight off the scene's USD arrays.
+    /// one mesh, straight off the scene's usd arrays.
     public struct RawMesh
     {
       public var id: String
-      /// The path's hash, what per frame keys on.
+      /// the path's hash, what per frame keys on.
       public var key: UInt64
       public var primId: Int32
       public var dataRevision: UInt64
       public var topologyRevision: UInt64
       public var flipWinding: Bool
-      /// A subdivision surface, shaded without hard edges.
+      /// a subdivision surface, shaded without hard edges.
       public var smooth = false
-      /// Each triangle's Ptex face, what its streamed tiles key on.
+      /// a polygon mesh without authored normals, shaded flat per face.
+      public var faceted = false
+      /// a polygon mesh's authored normals, one per triangle corner, empty when it authors none.
+      public var normals = Pixar.VtVec3fArray()
+      /// each triangle's ptex face, what its streamed tiles key on.
       public var triangleFaces = Pixar.VtIntArray()
-      /// The face resolutions and the map they stream from, -1 when they don't.
+      /// the face resolutions and the map they stream from, -1 when they don't.
       public var faceRes = Pixar.VtIntArray()
       public var ptexMap: Int32 = -1
       public var points: Pixar.VtVec3fArray
@@ -72,38 +73,81 @@ public extension Akari.Geom
       public var uvs: Pixar.VtVec2fArray
       public var worldMatrix: [Float]
       public var normalMatrix: [Float]
-      /// The matrices taking `worldMatrix`'s output to world space, 16 floats
-      /// each, shared by every mesh under the same prototype. Empty when the
-      /// mesh is drawn once at `worldMatrix`.
+      /// the matrices taking `worldMatrix` to world space, shared by every mesh under a prototype, empty when it draws once
       public var instances: Akari.Geom.Matrices = []
-      /// Hashes `instances`, equal sets share it.
+      /// hashes `instances`, equal sets share it.
       public var instancesKey: UInt64 = 0
-      /// Set when ``Akari/LiveInstances`` draws this prototype's instances.
+      /// set when live instances draws this prototype's instances
       public var livePrototype: String?
-      /// A binned prototype's draws, one per each instance set.
+      /// a binned prototype's draws, one per each instance set.
       public var instanceDraws: [InstanceDraw] = []
-      /// Hashes the object space geometry and material, so identical
-      /// prototypes under different instancers can share one draw.
+      /// a hash of the object space geometry and material, so identical prototypes under different instancers share a draw
       public var contentKey: UInt64 = 0
-      /// GPU skinned meshes, `points` are the bind space rest points, skinned by
-      /// `skinInfluencesPerPoint` (joint, weight) pairs each against this frames
-      /// palette.
+      /// gpu skinned meshes, `points` are the rest points, each skinned by this many joint and weight pairs
       public var skinInfluencesPerPoint = 0
       public var skinInfluences = Pixar.VtVec2fArray()
       public var skinPalette: [Float] = []
       public var skinBounds: [Float] = []
       public var skinRevision: UInt64 = 0
-      /// Drawn by the transparency pass instead of the gbuffer.
+      /// drawn by the transparency pass instead of the gbuffer.
       public var transparent = false
-      /// Black and emissive, casts no shadow.
+      /// black and emissive, casts no shadow.
       public var emitter = false
-      /// Whether the material can cut holes in the shadow.
+      /// drawn only from the side its winding faces, as the mesh authors.
+      public var singleSided = false
+      /// whether the material can cut holes in the shadow.
       public var shadowCutout = true
-      /// The bound material's constant opacity.
+      /// the bound material's constant opacity.
       public var opacity: Float = 1
-      /// The bound material's constant color and roughness.
+      /// the bound material's constant color and roughness.
       public var color = SIMD3<Float>(repeating: 0.8)
       public var roughness: Float = 0.5
+
+      /// the limit surface cage of a refined subdivision surface, empty for other meshes.
+      public var coarsePoints = Pixar.VtVec3fArray()
+      public var coarseTris = Pixar.VtVec3iArray()
+      public var coarseUvs = Pixar.VtVec2fArray()
+      public var coarseTriangleFaces = Pixar.VtIntArray()
+
+      /// a moving refined mesh's cage, and the stencils that build its refined points from it on the gpu.
+      public var cagePoints = Pixar.VtVec3fArray()
+      public var stencilOffsets = Pixar.VtIntArray()
+      public var stencilIndices = Pixar.VtIntArray()
+      public var stencilWeights = Pixar.VtFloatArray()
+
+      /// whether the deformer builds this mesh's points from its cage instead of uploading them.
+      public var refinesOnGPU: Bool
+      {
+        !cagePoints.empty() && stencilOffsets.size() == points.size() + 1
+          && stencilIndices.size() == stencilWeights.size()
+      }
+
+      /// whether this mesh has a coarse cage to draw in place of its refined faces.
+      public var hasCoarse: Bool
+      {
+        !coarseTris.empty() && !coarsePoints.empty()
+      }
+
+      /// the coarse cage as a mesh of its own, keyed apart from the refined one.
+      public var coarse: RawMesh?
+      {
+        guard hasCoarse else { return nil }
+        let salt: UInt64 = 0xC0A2_5E00_C0A2_5E00
+        var mesh = self
+        mesh.points = coarsePoints
+        mesh.tris = coarseTris
+        mesh.uvs = coarseUvs
+        mesh.triangleFaces = coarseTriangleFaces
+        if coarseTriangleFaces.empty() { mesh.faceRes = Pixar.VtIntArray() }
+        mesh.coarsePoints = Pixar.VtVec3fArray()
+        mesh.coarseTris = Pixar.VtVec3iArray()
+        mesh.coarseUvs = Pixar.VtVec2fArray()
+        mesh.coarseTriangleFaces = Pixar.VtIntArray()
+        if mesh.contentKey != 0 { mesh.contentKey = (mesh.contentKey ^ salt) &* 1_099_511_628_211 }
+        mesh.dataRevision ^= salt
+        mesh.topologyRevision ^= salt
+        return mesh
+      }
 
       public init(id: String, key: UInt64, primId: Int32, dataRevision: UInt64, topologyRevision: UInt64,
                   flipWinding: Bool,
@@ -125,18 +169,16 @@ public extension Akari.Geom
       }
     }
 
-    /// One instance set a prototype draws with, the first `count`
-    /// of its matrices, the set's order makes any prefix an even
-    /// sample.
+    /// one instance set a prototype draws with, its first `count` matrices, ordered so any prefix is an even sample
     public struct InstanceDraw
     {
       public var key: UInt64
       public var transforms: Akari.Geom.Matrices
       public var count: Int
       public var livePrototype: String?
-      /// The level of detail band the prototype draws in, in pixels per unit of each instance's size.
+      /// the level of detail band the prototype draws in, in pixels per unit of each instance's size.
       public var lod = SIMD2<Float>(0, .infinity)
-      /// The bounds its level of detail and culling take, before each instance's transform, when not its own.
+      /// the bounds its level of detail and culling take, before each instance's transform, when not its own.
       public var bounds: [Float]?
 
       public init(key: UInt64, transforms: Akari.Geom.Matrices, count: Int, livePrototype: String? = nil)
@@ -148,7 +190,7 @@ public extension Akari.Geom
       }
     }
 
-    /// One mesh ready to append into a `Batch`.
+    /// one mesh ready to append into a `Batch`.
     public struct Item
     {
       public var primId: Int32
@@ -171,11 +213,11 @@ public extension Akari.Geom
 
       public var worldMatrix: [Float]
       public var normalMatrix: [Float]
-      /// Nonempty for a GPU instanced prototype.
+      /// nonempty for a gpu instanced prototype.
       public var instanceDraws: [InstanceDraw] = []
     }
 
-    /// A built mesh, with what the cache keys on.
+    /// a built mesh, with what the cache keys on.
     private struct BuiltMesh
     {
       var id: String
@@ -186,9 +228,7 @@ public extension Akari.Geom
       var instanceDraws: [InstanceDraw]
     }
 
-    /// Everything needed to build one mesh, `topology` when only its points
-    /// changed. The USD arrays are flattened by the build itself, so only the
-    /// meshes building at once hold their copies.
+    /// what building one mesh needs, `topology` when only its points changed
     private struct BuildInput
     {
       var id: String
@@ -198,10 +238,12 @@ public extension Akari.Geom
       var flipWinding: Bool
       var cacheKey: UInt64
       var smooth: Bool
+      var faceted: Bool
+      var normals: Pixar.VtVec3fArray
       var points: Pixar.VtVec3fArray
       var tris: Pixar.VtVec3iArray
       var uvs: Pixar.VtVec2fArray
-      /// Empty unless its Ptex streams.
+      /// empty unless its ptex streams.
       var triangleFaces: Pixar.VtIntArray
       var faceRes: Pixar.VtIntArray
       var topology: Akari.Geom.Topology?
@@ -220,8 +262,7 @@ public extension Akari.Geom
     }
 
     private var cache: [String: CachedMesh] = [:]
-    /// Keeps each mesh's triangulation for when only its points move,
-    /// off for meshes that rarely do, it costs about 50 bytes a triangle.
+    /// keeps each mesh's triangulation for when only its points move, off for meshes that rarely move since it costs about 50 bytes a triangle
     private let keepsTopology: Bool
 
     public init(keepsTopology: Bool = true)
@@ -229,19 +270,13 @@ public extension Akari.Geom
       self.keepsTopology = keepsTopology
     }
 
-    /// The most triangles one record keeps built for the next in memory,
-    /// past which a scene's vertices would be held twice, here and on the
-    /// GPU. Builds mapped from the geometry cache are kept regardless, the
-    /// ones it had no room for are not.
+    /// the most triangles one record keeps built in memory for the next, past that a scene would be held twice, mapped builds are kept anyway
     private static let cacheTriangles = 8_000_000
-    /// How much one chunk builds before its handed on.
+    /// how much one chunk builds before its handed on.
     private static let chunkTriangles = 2_000_000
     private static let chunkMeshes = 4096
 
-    /// Reuses whats cached here or in `others`, builds the rest in parallel
-    /// a chunk at a time, reusing a meshes triangulation when only its points
-    /// moved, and hands each chunk to `body` in order. Only one chunk's built
-    /// vertices are alive at once unless the meshes are few enough to cache.
+    /// reuses what's cached, builds the rest a chunk at a time in parallel and hands each chunk to `body` in order
     public func record(_ meshes: [RawMesh], reusing others: [Recorder] = [], body: ([Item]) -> Void)
     {
       let small = meshes.reduce(0) { $0 + $1.tris.size() } <= Self.cacheTriangles
@@ -279,7 +314,8 @@ public extension Akari.Geom
                                                       uvs: mesh.uvs.size())
           pendingInputs.append(BuildInput(id: mesh.id, primId: mesh.primId, dataRevision: mesh.dataRevision,
                                           topologyRevision: mesh.topologyRevision, flipWinding: mesh.flipWinding,
-                                          cacheKey: cacheKey, smooth: mesh.smooth, points: mesh.points, tris: mesh.tris, uvs: mesh.uvs,
+                                          cacheKey: cacheKey, smooth: mesh.smooth, faceted: mesh.faceted,
+                                          normals: mesh.normals, points: mesh.points, tris: mesh.tris, uvs: mesh.uvs,
                                           triangleFaces: streams ? mesh.triangleFaces : Pixar.VtIntArray(),
                                           faceRes: streams ? mesh.faceRes : Pixar.VtIntArray(),
                                           topology: topology, worldMatrix: mesh.worldMatrix,
@@ -312,18 +348,17 @@ public extension Akari.Geom
       cache = newCache
     }
 
-    /// Passes the results buffer into `concurrentPerform`'s
-    /// `@Sendable` closure, each iteration writes its own index.
+    /// hands the results buffer into the concurrent loop, each iteration writes its own index
     private struct UnsafeSendableBuffer: @unchecked Sendable
     {
       let buffer: UnsafeMutableBufferPointer<BuiltMesh?>
       let inputs: [BuildInput]
     }
 
-    /// Meshes past this build one at a time.
+    /// meshes past this build one at a time.
     private static let largeTriangles = 1_000_000
 
-    /// Triangulates the cache misses in parallel, the large ones after the rest and one by one.
+    /// triangulates the cache misses in parallel, the large ones after the rest and one by one.
     private static func buildInParallel(_ inputs: [BuildInput], keepsTopology: Bool) -> [BuiltMesh]
     {
       guard !inputs.isEmpty else { return [] }
@@ -377,7 +412,8 @@ public extension Akari.Geom
       var indices: [Int32] = []
       var sources: [Int32] = []
       Akari.Geom.buildMesh(pointsFlat: pointsFlat, topology: topology, verts: &verts,
-                           indices: &indices, sources: &sources, flipWinding: input.flipWinding, subdivided: input.smooth)
+                           indices: &indices, sources: &sources, flipWinding: input.flipWinding, subdivided: input.smooth,
+                           faceted: input.faceted, normals: Akari.Geom.flatten(points: input.normals))
       var ptexFaces: [UInt32] = []
       if !input.triangleFaces.empty()
       {

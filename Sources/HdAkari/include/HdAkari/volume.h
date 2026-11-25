@@ -54,10 +54,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// @class HdAkariVolume
-///
-/// A `UsdVolVolume`, ray marched by Akari from its density field.
-///
+/// a volume akari ray marches from its density field
 class HdAkariVolume final : public HdVolume
 {
 public:
@@ -86,10 +83,7 @@ protected:
   HdDirtyBits _PropagateDirtyBits(HdDirtyBits bits) const override;
 };
 
-/// @class HdAkariField
-///
-/// An `OpenVDBAsset` field a volume reads its density from.
-///
+/// an openvdb field a volume reads its density from
 class HdAkariField final : public HdField
 {
 public:

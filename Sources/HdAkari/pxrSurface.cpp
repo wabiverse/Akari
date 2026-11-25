@@ -112,6 +112,7 @@ bool Scalar(VtValue const &value, double &out)
   else if (value.IsHolding<double>()) out = value.UncheckedGet<double>();
   else if (value.IsHolding<int>()) out = value.UncheckedGet<int>();
   else return false;
+
   return true;
 }
 
@@ -131,18 +132,19 @@ float Reflectance(float n, float k)
   return ((n - 1.0f) * (n - 1.0f) + k * k) / ((n + 1.0f) * (n + 1.0f) + k * k);
 }
 
-/// A specular lobe's color facing the eye, physical mode tinting its conductor fresnel by the edge color.
+/// a specular lobe's color facing the eye, physical mode tints its conductor fresnel by the edge color
 GfVec3f FaceReflectance(int mode, GfVec3f const &face, GfVec3f const &edge, GfVec3f const &ior, GfVec3f const &k)
 {
   if (mode == 0) return Saturate(face);
+
   return Saturate(Mul(GfVec3f(Reflectance(ior[0], k[0]), Reflectance(ior[1], k[1]), Reflectance(ior[2], k[2])), edge));
 }
 
-/// The metallic whose base color reflects `specular` facing and scatters `diffuse`, Khronos' specular glossiness conversion.
-float SolveMetallic(float diffuse, float specular, float oneMinusSpecular)
+/// the metallic whose base color reflects `specular` and scatters `diffuse`, after the khronos specular glossiness conversion
+float SolveMetallic(float diffuse, float specular, float oneMinusSpecular, float dielectric)
 {
-  constexpr float dielectric = 0.04f;
   if (specular < dielectric) return 0.0f;
+
   const float b = diffuse * oneMinusSpecular / (1.0f - dielectric) + specular - 2.0f * dielectric;
   const float c = dielectric - specular;
   return Saturate((-b + std::sqrt(std::max(b * b - 4.0f * dielectric * c, 0.0f))) / (2.0f * dielectric));
@@ -222,6 +224,7 @@ bool HdAkariSetPxrSurfaceInput(HdAkariPxrSurface &surface, TfToken const &name, 
     else if (value.IsHolding<GfVec3d>()) surface.*input.member = GfVec3f(value.UncheckedGet<GfVec3d>());
     else if (Scalar(value, x)) surface.*input.member = GfVec3f(float(x));
     else return false;
+
     return true;
   }
 
@@ -248,11 +251,13 @@ HdAkariSurfaceLook HdAkariApproximatePxrSurface(HdAkariPxrSurface const &s)
 
   const GfVec3f rough = FaceReflectance(s.roughSpecularFresnelMode, s.roughSpecularFaceColor, s.roughSpecularEdgeColor,
                                         s.roughSpecularIor, s.roughSpecularExtinctionCoeff);
+
   const float transmit = Saturate(s.refractionGain);
   const GfVec3f glass = GfVec3f(Reflectance(s.glassIor, 0.0f) * std::max(Saturate(s.reflectionGain), transmit));
 
   const GfVec3f lobes[] = {coat, Mul(under, primary), Mul(under, rough), Mul(under, glass)};
   const float roughnesses[] = {s.clearcoatRoughness, s.specularRoughness, s.roughSpecularRoughness, s.glassRoughness};
+
   GfVec3f specular(0.0f);
   float weight = 0.0f, roughness = 0.0f;
   for (int i = 0; i < 4; ++i) {
@@ -272,10 +277,20 @@ HdAkariSurfaceLook HdAkariApproximatePxrSurface(HdAkariPxrSurface const &s)
 
   HdAkariSurfaceLook look;
   const float oneMinusSpecular = 1.0f - MaxOf(specular);
-  look.metallic = SolveMetallic(Brightness(diffuse), Brightness(specular), oneMinusSpecular) * (1.0f - transmit);
+
+  // a dielectric reflects at most a quarter facing the eye, brighter than that and it is behaving as a metal
+  const GfVec3f dielectric(std::clamp(specular[0], 0.01f, 0.25f),
+                           std::clamp(specular[1], 0.01f, 0.25f),
+                           std::clamp(specular[2], 0.01f, 0.25f));
+  const float level = Brightness(dielectric);
+  look.specular = dielectric;
+  look.metallic = SolveMetallic(Brightness(diffuse), Brightness(specular), oneMinusSpecular, level)
+                * (1.0f - transmit);
+
   const float m = look.metallic;
-  const GfVec3f fromDiffuse = diffuse * (oneMinusSpecular / (1.0f - 0.04f) / std::max(1.0f - m, eps));
-  const GfVec3f fromSpecular = (specular - GfVec3f(0.04f * (1.0f - m))) / std::max(m, eps);
+  const GfVec3f fromDiffuse = diffuse * (oneMinusSpecular / (1.0f - level) / std::max(1.0f - m, eps));
+  const GfVec3f fromSpecular = (specular - dielectric * (1.0f - m)) / std::max(m, eps);
+
   look.color = Saturate(Mix(fromDiffuse, fromSpecular, m * m));
   look.color = Saturate(Mix(look.color, s.refractionColor, transmit));
   look.roughness = Saturate(weight > eps ? roughness / weight : 1.0f);

@@ -57,36 +57,27 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// The Ptex texture at `path`'s average color, linearized from sRGB, what
-/// draws where its tiles haven't streamed, or can't.
+/// the ptex texture's average color, linearized, drawn where its tiles haven't streamed
 HDAKARI_API GfVec3f HdAkariPtexAverageColor(std::string const &path);
 
-/// Each face's resolution in the Ptex texture at `path`, ulog2 in the low
-/// four bits and vlog2 the four above, empty with HdAkariPtexFaceColors.
+/// each face's resolution in the ptex texture, ulog2 in the low four bits and vlog2 above
 HDAKARI_API VtIntArray HdAkariPtexFaceRes(std::string const &path);
 
-/// The id streamed tiles of the Ptex texture at `path` key on, -1 when its
-/// faces can't stream, not quads, or past what a key holds.
+/// the id streamed tiles of the ptex texture key on, -1 when its faces can't stream
 HDAKARI_API int HdAkariPtexMapId(std::string const &path);
 
-/// Streamed tiles key on (map + 1) << 18 | face in the high 32 bits and
-/// level << 16 | tile in the low, a level halving the face's resolution
-/// each step and a tile 64 texels a side, row by row across the level.
+/// streamed tiles key on map, face, level and tile, each level halves the face and each tile is 64 texels a side
 constexpr int HdAkariPtexTileSize = 64;
 constexpr int HdAkariPtexFaceBits = 18;
 
-/// Queues tiles for HdAkariPtexTakeTiles, decoded on worker threads.
-/// A key queued or decoded and not yet taken waits its turn just once.
+/// queues tiles to decode on worker threads, a key already queued only waits once
 HDAKARI_API void HdAkariPtexRequestTiles(uint64_t const *keys, int count);
 
-/// Takes up to `maxTiles` decoded tiles whose texels fit `maxTexels`
-/// each key, its interior width | height << 16, and the offset of its
-/// (width + 2) x (height + 2) texels, bordered by its neighbours', 8 bit
-/// rgba as the files store them. Returns how many it took.
+/// takes up to `maxTiles` decoded tiles that fit `maxTexels`, each with its key, size and bordered texels in 8 bit rgba
 HDAKARI_API int HdAkariPtexTakeTiles(uint64_t *keys, uint32_t *sizes, uint32_t *offsets, uint32_t *texels,
                                      int maxTiles, int maxTexels);
 
-/// Tiles queued or decoding.
+/// the tiles queued or decoding
 HDAKARI_API int HdAkariPtexPendingTiles();
 
 PXR_NAMESPACE_CLOSE_SCOPE

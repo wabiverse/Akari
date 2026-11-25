@@ -44,29 +44,26 @@ public extension Akari
 {
   enum GPU
   {
-    /// The GPU backend Akari renders through.
-    ///
-    /// Akari does not own a render hardware interface (RHI) of its own,
-    /// each case maps to a LabGL backend (`Metal`, `OpenGL`, `Vulkan`).
+    /// the gpu backend akari renders through, each case maps to a labgl backend
     public enum Backend: String, Sendable
     {
-      /// Apple platforms (macOS, iOS, visionOS) via `Metal`.
+      /// apple platforms through metal
       case metal
 
-      /// Linux, Android and Windows via `OpenGL`.
+      /// linux, android and windows via `OpenGL`.
       case openGL
 
-      /// A future Linux, Android, and Windows backend via `Vulkan`.
+      /// a future linux, android, and windows backend via `Vulkan`.
       @available(*, unavailable, message: "The .vulkan backend is not yet supported, use .openGL instead.")
       case vulkan
 
-      /// The backend Akari defaults to on the platform it's compiled for.
+      /// the backend akari defaults to on the platform it's compiled for.
       public static var preferredForCurrentPlatform: Backend
       {
         #if os(macOS) || os(iOS) || os(tvOS) || os(visionOS)
           return .metal
         #else
-          // default to Vulkan when it becomes available later.
+          // default to vulkan when it becomes available later.
           return .openGL
         #endif
       }

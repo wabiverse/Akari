@@ -46,15 +46,10 @@ import simd
 
 extension Kraken
 {
-  /// Where scene edits land, the way a Presto shot routes them: each department works in its own
-  /// sublayer of the shot, the stage's edit target, and overrides what it changes there. An edit
-  /// under an instance broadcasts through the class the instance inherits when there's one, so it
-  /// stays in the shot, and otherwise edits the asset through the arc bringing it in. A prim a
-  /// variant of the department's layer defines is edited inside that variant. The session layer
-  /// only keeps what the viewport shows, like hidden objects, and is never saved.
+  /// where scene edits land, each department in its own shot sublayer, instance edits through their class or asset, variant prims inside their variant, the session layer never saved
   enum Authoring
   {
-    /// The prim to author an edit of `path` on, the stage it's on, aimed at where it lands, and a name for there.
+    /// the prim to author an edit of `path` on, the stage it's on, aimed at where it lands, and a name for there.
     struct Site
     {
       var prim: UsdPrim
@@ -87,23 +82,23 @@ extension Kraken
       Pixar.UsdEditTarget(layer, Pixar.SdfLayerOffset(offset: 0, scale: 1))
     }
 
-    /// The department layer edits go to, the stage's edit target.
+    /// the department layer edits go to, the stage's edit target.
     nonisolated static func department(_ stage: UsdStage) -> SdfLayerHandle
     {
-      #if compiler(>=6.4)
+      #if compiler(>=6.4) && canImport(Usd)
         stage.editTarget.GetLayerConsuming()
       #else
         stage.editTarget.GetLayer()
       #endif
     }
 
-    /// The shot's layers, strongest first, without the session layer.
+    /// the shot's layers, strongest first, without the session layer.
     nonisolated static func layers(_ stage: UsdStage) -> [(identifier: String, name: String)]
     {
       stage.GetLayerStack(false).map { (identifier($0), layerName($0)) }
     }
 
-    /// Makes the layer `identifier` names the department layer.
+    /// makes the layer `identifier` names the department layer.
     nonisolated static func work(in identifier: String, _ stage: UsdStage)
     {
       guard let layer = stage.GetLayerStack(true).first(where: { Self.identifier($0) == identifier }) else { return }
@@ -111,13 +106,13 @@ extension Kraken
       stage.SetEditTarget(target(layer))
     }
 
-    /// A shot's departments, as Presto splits a shot's work into its layers.
+    /// a shot's departments, as presto splits a shot's work into its layers.
     enum Department: String, CaseIterable, Sendable
     {
       case layout = "Layout", animation = "Animation", lookDev = "Look Dev", lighting = "Lighting", fx = "FX"
     }
 
-    /// Adds a department sublayer next to the root layer, strongest, and works in it.
+    /// adds a department sublayer next to the root layer, strongest, and works in it.
     nonisolated static func newDepartment(_ department: Department, _ stage: UsdStage) -> String?
     {
       let root = stage.getRootLayer()
@@ -145,15 +140,37 @@ extension Kraken
     }
 
     nonisolated(unsafe) private static var departments: [Pixar.SdfLayerRefPtr] = []
+
+    /// the variant edits go into while editing one
+    nonisolated(unsafe) static var variantEdit: (prim: String, set: String, variant: String)?
+
+    /// where edits under the variant being edited land, nil when none is or the path is outside it
+    nonisolated static func editingVariant(_ department: SdfLayerHandle, for path: Sdf.Path? = nil)
+      -> (target: Pixar.UsdEditTarget, label: String)?
+    {
+      guard let edit = variantEdit else { return nil }
+      if let path, !path.HasPrefix(Sdf.Path(edit.prim)) { return nil }
+      let selection = String(Pixar.HdAkariVariantSelectionPath(std.string(edit.prim), std.string(edit.set),
+                                                               std.string(edit.variant)))
+      guard !selection.isEmpty else { return nil }
+      return (Pixar.UsdEditTarget.ForLocalDirectVariant(department, Sdf.Path(selection)), "{\(edit.set)=\(edit.variant)}")
+    }
+
+    /// the department layer, inside the variant being edited when there is one
+    nonisolated static func departmentTarget(_ stage: UsdStage, for path: Sdf.Path? = nil) -> Pixar.UsdEditTarget
+    {
+      let department = department(stage)
+      return editingVariant(department, for: path)?.target ?? target(department)
+    }
     nonisolated(unsafe) private static var assetStages: [String: Pixar.UsdStage] = [:]
 
-    /// Journals the shot's layers for undo.
+    /// journals the shot's layers for undo.
     nonisolated static func watch(_ stage: UsdStage)
     {
       for layer in stage.GetLayerStack(true) { Pixar.HdAkariJournalWatch(layer) }
     }
 
-    /// Where an edit of the prim at `path` lands, nil when nothing can take it.
+    /// where an edit of the prim at `path` lands, nil when nothing can take it.
     nonisolated static func site(_ stage: UsdStage, _ path: String) -> Site?
     {
       let prim = stage.GetPrimAtPath(Sdf.Path(path))
@@ -162,6 +179,11 @@ extension Kraken
       let name = layerName(department)
       guard prim.IsInstanceProxy() else
       {
+        if let variant = editingVariant(department, for: prim.GetPath())
+        {
+          return Site(prim: prim, stage: stage, target: variant.target, layer: department, label: "\(name) · \(variant.label)")
+        }
+
         if let variant = variantTarget(prim, department)
         {
           return Site(prim: prim, stage: stage, target: variant.target, layer: department, label: "\(name) · \(variant.label)")
@@ -216,7 +238,7 @@ extension Kraken
       return nil
     }
 
-    /// The variant of the department's layer defining `prim`, if one does.
+    /// the variant of the department's layer defining `prim`, if one does.
     nonisolated private static func variantTarget(_ prim: UsdPrim, _ department: SdfLayerHandle)
       -> (target: Pixar.UsdEditTarget, label: String)?
     {
@@ -228,10 +250,13 @@ extension Kraken
       {
         let layer = arc.GetTargetLayer()
         guard identifier(layer) == id else { continue }
-        let selectionPath = arc.GetTargetPrimPath()
-        let owner = selectionPath.StripAllVariantSelections()
-        let spec = selectionPath.append(path: prim.path.makeRelativePath(to: owner))
-        guard layer.pointee.HasSpec(spec) else { continue }
+
+        // the arc targets the prims spec inside the variant, its edit target is the variant selection path above it
+        let target = arc.GetTargetPrimPath()
+        guard layer.pointee.HasSpec(target) else { continue }
+        var selectionPath = target
+        while !selectionPath.IsEmpty(), !selectionPath.IsPrimVariantSelectionPath() { selectionPath = selectionPath.GetParentPath() }
+        guard !selectionPath.IsEmpty() else { continue }
         let selection = selectionPath.GetVariantSelection()
         return (Pixar.UsdEditTarget.ForLocalDirectVariant(layer, selectionPath),
                 "{\(String(selection.first))=\(String(selection.second))}")
@@ -240,7 +265,7 @@ extension Kraken
       return nil
     }
 
-    /// Runs `body` on where an edit of `path` lands, aimed there, journaled for undo.
+    /// runs `body` on where an edit of `path` lands, aimed there, journaled for undo.
     @discardableResult
     nonisolated static func edit(_ stage: UsdStage, _ path: String, _ body: (UsdPrim, UsdStage) -> Bool) -> Bool
     {
@@ -252,19 +277,19 @@ extension Kraken
       return body(site.prim, site.stage)
     }
 
-    /// Runs `body` aimed at the department layer.
+    /// runs `body` aimed at the department layer.
     @discardableResult
-    nonisolated static func inDepartment<T>(_ stage: UsdStage, _ body: () -> T) -> T
+    nonisolated static func inDepartment<T>(_ stage: UsdStage, for path: Sdf.Path? = nil, _ body: () -> T) -> T
     {
       let department = department(stage)
       Pixar.HdAkariJournalWatch(department)
       let previous = editTarget(stage)
-      stage.SetEditTarget(target(department))
+      stage.SetEditTarget(departmentTarget(stage, for: path))
       defer { stage.SetEditTarget(previous) }
       return body()
     }
 
-    /// Runs `body` aimed at the session layer, for what only the viewport shows.
+    /// runs `body` aimed at the session layer, for what only the viewport shows.
     nonisolated static func inSession(_ stage: UsdStage, _ body: () -> Void)
     {
       let session = stage.GetSessionLayer()
@@ -275,7 +300,7 @@ extension Kraken
       body()
     }
 
-    /// Saves every changed layer, the root layer to `path` instead when there's one.
+    /// saves every changed layer, the root layer to `path` instead when there's one.
     nonisolated static func save(_ stage: UsdStage, as path: String?) -> Bool
     {
       var saved = true

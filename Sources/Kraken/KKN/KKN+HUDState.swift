@@ -50,13 +50,13 @@ import class SwiftCrossUI.Published
 
 extension Kraken
 {
-  /// The live render settings the HUD edits, each edit written straight through to the engine.
+  /// the live render settings the hud edits, each edit written straight through to the engine.
   @MainActor
   final class HUDState: ObservableObject
   {
-    /// The engine's settings as the HUD's last edit left them.
+    /// the engine's settings as the HUD's last edit left them.
     @Published private(set) var current: RenderSettings
-    /// The eyedropper is waiting for a click in the viewport.
+    /// the eyedropper is waiting for a click in the viewport.
     @Published var pickingFocus = false
 
     private let engine: Akari.RenderEngine
@@ -82,17 +82,17 @@ extension Kraken
       }
     }
 
-    /// Changes the engine's settings as they are now, so edits made elsewhere stay.
+    /// changes the engine's settings as they are now, so edits made elsewhere stay.
     func edit(_ change: (inout RenderSettings) -> Void)
     {
       var settings = engine.settings
       change(&settings)
       engine.settings = settings
       current = settings
+      hydra.complexity = RenderSettings.complexity(subdivision: settings.subdivision)
     }
 
-    /// A control's binding to one setting, `scale` from the setting's units to the control's,
-    /// `marking` a flag the edit sets, such as one replacing the stage's own sun from then on.
+    /// a control's binding to a setting, `scale` converting units and `marking` a flag the edit sets
     func binding(_ keyPath: WritableKeyPath<RenderSettings, Float>, scale: Double = 1,
                  marking flag: WritableKeyPath<RenderSettings, Bool>? = nil) -> Binding<Double>
     {
@@ -124,7 +124,7 @@ extension Kraken
       )
     }
 
-    /// A dropdown's binding, clearing it leaves the setting as it is.
+    /// a dropdown's binding, clearing it leaves the setting as it is.
     func selection<Value>(_ keyPath: WritableKeyPath<RenderSettings, Value>) -> Binding<Value?>
     {
       Binding(
@@ -136,7 +136,7 @@ extension Kraken
       )
     }
 
-    /// A binding the HUD toggles write through for one feature.
+    /// a binding the hud toggles write through for one feature.
     func binding(for feature: RenderFeatures) -> Binding<Bool>
     {
       Binding(
@@ -151,7 +151,7 @@ extension Kraken
       )
     }
 
-    /// Volume shadows only tune the fog.
+    /// volume shadows only tune the fog.
     var volumeShadowsBinding: Binding<Bool>
     {
       Binding(
@@ -166,7 +166,7 @@ extension Kraken
       )
     }
 
-    /// Snap the feature toggles to a quality tier's default feature set.
+    /// snap the feature toggles to a quality tier's default feature set.
     func applyPreset(_ quality: RenderQuality)
     {
       edit
@@ -176,7 +176,7 @@ extension Kraken
       }
     }
 
-    /// The quality dropdown, picking a tier snaps the features to its defaults.
+    /// the quality dropdown, picking a tier snaps the features to its defaults.
     var qualitySelection: Binding<RenderQuality?>
     {
       Binding(
@@ -188,13 +188,13 @@ extension Kraken
       )
     }
 
-    /// The focus object's name, as the field shows it.
+    /// the focus object's name, as the field shows it.
     var focusObjectName: String
     {
       current.depthOfField.focusObject.split(separator: "/").last.map(String.init) ?? ""
     }
 
-    /// Arms the eyedropper, the next click in the viewport picks the focus object.
+    /// arms the eyedropper, the next click in the viewport picks the focus object.
     func pickFocusObject()
     {
       guard !pickingFocus
@@ -217,7 +217,8 @@ extension Kraken
           {
             // an instance holds still in its instancer, so the point follows the instancer.
             let path = String((result.isInstance ? result.instancerPath : result.primPath).GetAsString())
-            // a prim Hydra made up has no place on the stage, its point stays where it was picked.
+
+            // a prim hydra made up has no place on the stage, its point stays where it was picked.
             var p = [result.worldPoint[0], result.worldPoint[1], result.worldPoint[2]]
             _ = Pixar.HdAkariPrimTransformPoint(self.hydra.stage, std.string(path), self.hydra.currentTimeCode, true, &p)
             self.setFocusObject(path, at: SIMD3(p[0], p[1], p[2]))
@@ -230,7 +231,7 @@ extension Kraken
       }
     }
 
-    /// Akari answers a click from its prim ID buffer a frame later, focusing on the prim's middle.
+    /// akari answers a click from its prim id buffer a frame later, focusing on the prim's middle.
     private func focusOnAovPick(tries: Int)
     {
       guard let path = hydra.lastPickedPath.map({ String($0.GetAsString()) })
@@ -275,7 +276,7 @@ extension Kraken
       #endif
     }
 
-    /// How many frame graph passes the engine currently runs.
+    /// how many frame graph passes the engine currently runs.
     var activePassCount: Int
     {
       engine.activePasses.count

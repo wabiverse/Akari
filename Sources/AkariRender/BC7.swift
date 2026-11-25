@@ -43,18 +43,15 @@ import Foundation
 
 public extension Akari
 {
-  /// BC7 compression (one RGBA pair per block, 4 bit indices).
+  /// bc7 compression, one rgba endpoint pair per block with 4 bit indices
   enum BC7
   {
-    /// Bytes a 4x4 block encodes to.
+    /// bytes a 4x4 block encodes to.
     public static let blockBytes = 16
 
     private static let weights: [Float] = [0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64]
 
-    /// Encodes a `width` by `height` region of BGRA8 `pixels`,
-    /// as LabGL's 8 bit textures hold them, rows `stride` pixels
-    /// apart and both sizes multiples of 4, into `blocks`, a row
-    /// of blocks after another.
+    /// encodes a region of bgra8 pixels as labgl's 8 bit textures hold them into a row of blocks, both sizes multiples of 4
     public static func encode(_ pixels: UnsafePointer<UInt8>,
                               stride: Int, width: Int, height: Int,
                               into blocks: UnsafeMutablePointer<UInt8>)
@@ -98,8 +95,7 @@ public extension Akari
       }
     }
 
-    /// Decodes blocks `encode` wrote back to BGRA8,
-    /// rows of `pixels` `stride` pixels apart.
+    /// decodes blocks `encode` wrote back to bgra8 pixels
     public static func decode(_ blocks: UnsafePointer<UInt8>,
                               width: Int, height: Int,
                               into pixels: UnsafeMutablePointer<UInt8>,
@@ -168,9 +164,7 @@ public extension Akari
       let weights: UnsafeMutablePointer<Float>
     }
 
-    /// 7 bit endpoints and their p bits,
-    /// an 8 bit endpoint being `q * 2 + p`
-    /// in every channel.
+    /// 7 bit endpoints and their p bits, each 8 bit endpoint is q times 2 plus p in every channel
     private struct Endpoints
     {
       var q0: SIMD4<Float>
@@ -226,9 +220,7 @@ public extension Akari
       var best = endpoints(mean + axis * tMin, mean + axis * tMax)
       let bestError = assign(s, best, into: s.indices)
 
-      // solve for the endpoints that best fit each texel
-      // at the weight it got, keep them if they beat the
-      // first pass.
+      // solves for the endpoints that best fit each texel at its weight and keeps them if they beat the first pass
       var aa: Float = 0, ab: Float = 0, bb: Float = 0
       var ax = SIMD4<Float>.zero, bx = SIMD4<Float>.zero
       for i in 0 ..< 16
@@ -295,7 +287,7 @@ public extension Akari
       return length > 1e-6 ? v / length : .zero
     }
 
-    /// The nearest 7 bit endpoint, and the p bit shared across its channels.
+    /// the nearest 7 bit endpoint, and the p bit shared across its channels.
     private static func quantize(_ c: SIMD4<Float>) -> (q: SIMD4<Float>, p: Float)
     {
       let clamped = c.clamped(lowerBound: .zero, upperBound: SIMD4(repeating: 255))
@@ -317,14 +309,13 @@ public extension Akari
       return Endpoints(q0: qa.q, q1: qb.q, p0: qa.p, p1: qb.p)
     }
 
-    /// The weight index nearest each of 0...64, for a projection to start its search at.
+    /// the weight index nearest each of 0...64, for a projection to start its search at.
     private static let nearestWeight: [Int] = (0 ... 64).map
     { v in
       weights.indices.min { abs(weights[$0] - Float(v)) < abs(weights[$1] - Float(v)) }!
     }
 
-    /// Picks each texel's nearest of the 16 colors the endpoints decode to,
-    /// searching around where it projects onto them, returns the squared error.
+    /// picks each texel's nearest of the 16 colors the endpoints decode to and returns the squared error
     private static func assign(_ s: Scratch, _ e: Endpoints, into indices: UnsafeMutablePointer<Int32>) -> Float
     {
       let a = e.e0, b = e.e1

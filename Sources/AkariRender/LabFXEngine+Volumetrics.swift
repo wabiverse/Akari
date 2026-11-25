@@ -48,7 +48,7 @@ extension Akari.LabFXEngine
   struct Volumetrics
   {
     var stage: Pixar.HdAkariStageVolume?
-    /// The fog disturbers this frame, eight floats each (see `HdAkariFogDisturbersAt`).
+    /// the fog disturbers this frame, eight floats each like `HdAkariFogDisturbersAt` writes
     var disturbers: [Float] = []
     var disturberTexture: GLuint = 0
     var emptySim: GLuint = 0
@@ -56,9 +56,9 @@ extension Akari.LabFXEngine
     var simPassActive = true
     var thisFrame = false
     var passesActive = true
-    /// This frame's froxel grid, for the shadow pass volume usage tagging.
+    /// this frame's froxel grid, for the shadow pass volume usage tagging.
     var froxels: Akari.ShadowAtlas.VolumeFroxels?
-    /// The `u_volume` / `u_volumeRange` this frame wants, and what the graph last received.
+    /// the volume uniforms this frame wants and what the graph last got
     var pending = SIMD4<Float>(repeating: 0)
     var pendingRange = SIMD4<Float>(repeating: 0)
     var uploaded = SIMD4<Float>(repeating: .nan)
@@ -66,11 +66,11 @@ extension Akari.LabFXEngine
     var pendingSunLevelBias: Float = 0
     var uploadedSunLevelBias: Float = .nan
     var boundFroxelDepth: GLuint = 0
-    /// Read by the `volume-integrate` callback.
+    /// read by the `volume-integrate` callback.
     var grid = SIMD2<Int>(0, 0)
     var scatterTexture: GLuint = 0
     var integratedTexture: GLuint = 0
-    /// This frame's view projection, and last frame's while its scatter is still valid history.
+    /// this frame's view projection, and last frame's while its scatter is still valid history.
     var viewProjection = Akari.Matrix4.identity
     var previousViewProjection: Akari.Matrix4?
   }
@@ -80,11 +80,11 @@ extension Akari.LabFXEngine
     .volumeIntegrate
   ]
 
-  /// The froxel grid is 8x8 depth slices packed into the half resolution volume atlas.
+  /// the froxel grid is 8x8 depth slices packed into the half resolution volume atlas.
   private static let volumeSliceColumns = 8
   private static let volumeAtlasScale = 2
 
-  /// Turns on froxel volumetrics for this frame.
+  /// turns on froxel volumetrics for this frame.
   public func setVolumetrics(camera: Akari.Camera, volume settings: VolumeSettings)
   {
     volumetrics.simRequest?()
@@ -150,7 +150,7 @@ extension Akari.LabFXEngine
                                                           sunLevelBias: sunLevelBias)
   }
 
-  /// The fog's noise, flow, ground layer and disturbers for the scatter pass, all in world units.
+  /// the fog's noise, flow, ground layer and disturbers for the scatter pass, all in world units.
   private func applyFogShape(unitsPerMeter: Float, haze: Float)
   {
     let stage = usdVolume
@@ -181,6 +181,7 @@ extension Akari.LabFXEngine
     if count > 0
     {
       var texels = Array(volumetrics.disturbers.prefix(count * 8))
+
       // radii arrive in meters.
       for i in 0 ..< count
       {
@@ -226,21 +227,21 @@ extension Akari.LabFXEngine
 
   static let maxFogDisturbers = 8
 
-  /// Brings the fog simulation to this frame, run inside the next render once the GPU is up.
+  /// brings the fog simulation to this frame, run inside the next render once the gpu is up.
   public var fogSimRequest: (() -> Void)?
   {
     get { volumetrics.simRequest }
     set { volumetrics.simRequest = newValue }
   }
 
-  /// The fog disturbers the stage authors this frame, eight floats each.
+  /// the fog disturbers the stage authors this frame, eight floats each.
   public var usdFogDisturbers: [Float]
   {
     get { volumetrics.disturbers }
     set { volumetrics.disturbers = newValue }
   }
 
-  /// The fog the stage's `/World/RenderSettings` authors this frame, over the render settings own.
+  /// the fog the stage's `/World/RenderSettings` authors this frame, over the render settings own.
   public var usdVolume: Pixar.HdAkariStageVolume?
   {
     get { volumetrics.stage }
@@ -253,7 +254,7 @@ extension Akari.LabFXEngine
                             userdata: Unmanaged.passUnretained(self).toOpaque())
   }
 
-  /// Pushes this frame's volume state into the graph before it renders.
+  /// pushes this frame's volume state into the graph before it renders.
   func syncVolumetrics()
   {
     let thisFrame = volumetrics.thisFrame

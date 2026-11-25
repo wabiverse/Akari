@@ -60,22 +60,24 @@ def Xform "World"
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     def Xform "Dark" (
-        prepend references = @../../../Downloads/Pointe_of_Origin/usd/assets/saber.usda@
+        prepend references = @Lightsaber.usda@
         variants = { string side = "dark" }
     )
     {
         double3 xformOp:translate = (-0.9, 0.3, 0.9)
         float3 xformOp:rotateXYZ = (0, 30, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        float xformOp:rotateZ:spin = 90
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:rotateZ:spin"]
     }
     def Xform "Light" (
-        prepend references = @../../../Downloads/Pointe_of_Origin/usd/assets/saber.usda@
+        prepend references = @Lightsaber.usda@
         variants = { string side = "light" }
     )
     {
         double3 xformOp:translate = (0.9, 0.3, 0.9)
         float3 xformOp:rotateXYZ = (0, -30, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        float xformOp:rotateZ:spin = -90
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:rotateZ:spin"]
     }
     def Camera "Close"
     {

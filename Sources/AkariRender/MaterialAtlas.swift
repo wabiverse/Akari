@@ -45,53 +45,61 @@ import LabGL
 
 public extension Akari
 {
-  /// Uploads the shared material, color, normal and emissive texture atlases to the GPU.
+  /// uploads the shared material, color, normal and emissive texture atlases to the gpu.
   final class MaterialAtlas
   {
     private var materialTexture: GLuint = 0
     private var colorTexture: GLuint = 0
     private var normalTexture: GLuint = 0
     private var emissiveTexture: GLuint = 0
-    /// The textures uploaded as BC7, a quarter of RGBA8's memory, their mips built here.
+    /// the textures uploaded as BC7, a quarter of RGBA8's memory, their mips built here.
     private var compressedTextures = Set<GLuint>()
-    /// Untextured materials constants, `HdAkariConstantTexels()` RGBA32F texels a row.
+    /// each atlas texture's storage size, so a resized atlas gets new storage.
+    private var storageSize: [GLuint: SIMD2<Int>] = [:]
+    /// untextured materials constants, `HdAkariConstantTexels()` RGBA32F texels a row.
     private var constantsTexture: GLuint = 0
     private var constantsRows = 0
-    /// 4x4 stand ins while no textured material has baked a cell, so everything binding
-    /// the atlas has a texture, untextured materials read their constants instead of
-    /// sampling them.
+    /// small stand ins until a textured material bakes a cell, so everything binding the atlas has a texture
     private var placeholders = Set<GLuint>()
 
-    /// Pack materials horizontally into a single texture line to keep the total height
-    /// well below Metal's lowest 2D texture height limit (16,384), no matter how many
-    /// materials exist.
+    /// packs material rows across a texture line to stay far under metal's texture height limit however many materials there are
     static let constantsRowsPerLine = 128
 
-    /// Mips sampled, as `GL_TEXTURE_MAX_LEVEL` 3 had them.
+    /// mips sampled, as `GL_TEXTURE_MAX_LEVEL` 3 had them.
     private static let levels = 4
 
     public init() {}
 
-    /// Reuploads when the atlas is dirty, returns every
-    /// texture name (0 until the first upload).
+    /// uploads when the atlas is dirty and returns every texture name, 0 until the first upload
     public func uploadIfNeeded(_ atlas: Pixar.HdAkariTextureAtlas) -> (material: GLuint, color: GLuint, normal: GLuint, emissive: GLuint)
     {
       if atlas.ConsumeDirty()
       {
-        let width = GLsizei(atlas.Width())
-        let height = GLsizei(atlas.Height())
-        let rects = Array(atlas.DrainDirtyRects())
-        upload(&materialTexture, pixels: atlas.PixelData(), width: width, height: height, rects: rects)
-        upload(&colorTexture, pixels: atlas.ColorPixelData(), width: width, height: height, rects: rects)
-        upload(&normalTexture, pixels: atlas.NormalPixelData(), width: width, height: height, rects: rects)
-        upload(&emissiveTexture, pixels: atlas.EmissivePixelData(), width: width, height: height, rects: rects)
+        let width = Int(atlas.Width()), height = Int(atlas.Height())
+        let count = Int(atlas.TakeBakedRegions())
+        if count > 0
+        {
+          for (index, texture) in [\MaterialAtlas.materialTexture, \.colorTexture, \.normalTexture, \.emissiveTexture].enumerated()
+          {
+            ensureStorage(texture, width: width, height: height)
+            for i in 0 ..< count
+            {
+              let region = atlas.BakedRegion(Int32(i))
+              guard let pixels = atlas.BakedPixels(Int32(i), Int32(index)) else { continue }
+              upload(self[keyPath: texture], pixels: pixels, region: region)
+            }
+          }
+
+          // only what was taken lives on the cpu, and only until it's on the gpu.
+          atlas.ReleaseUploaded()
+        }
       }
-      // roughness 1, metallic 0, opaque, white, a flat normal (BGRA, as LabGL lays GL_RGBA out), no emission.
+
+      // roughness 1, metallic 0, opaque, white, a flat normal and no emission, in the bgra order labgl lays out
       if materialTexture == 0 { materialTexture = placeholder([255, 0, 255, 0]) }
       if colorTexture == 0 { colorTexture = placeholder([255, 255, 255, 255]) }
       if normalTexture == 0 { normalTexture = placeholder([255, 128, 128, 255]) }
       if emissiveTexture == 0 { emissiveTexture = placeholder([0, 0, 0, 255]) }
-      atlas.ReleasePixelsIfIdle()
       return (materialTexture, colorTexture, normalTexture, emissiveTexture)
     }
 
@@ -108,8 +116,7 @@ public extension Akari
       return texture
     }
 
-    /// Uploads the rows of untextured materials constants written since the last call, every row
-    /// when the table outgrew the texture. Returns the texture (0 until there's a row).
+    /// uploads the constant rows written since the last call, every row when the table outgrew the texture, 0 until there's a row
     public func uploadConstants(_ atlas: Pixar.HdAkariTextureAtlas) -> GLuint
     {
       let texels = Int(Pixar.HdAkariConstantTexels())
@@ -161,203 +168,91 @@ public extension Akari
       return constantsTexture
     }
 
-    /// Uploads a texture atlas's pixels to `texture`, the
-    /// whole atlas the first time and just `rects` after.
-    private func upload(_ texture: inout GLuint, pixels: UnsafePointer<UInt8>?,
-                        width: Int32, height: Int32, rects: [Pixar.HdAkariAtlasRect])
+    /// gives `texture` empty storage for the whole atlas, bc7 where the backend has it
+    private func ensureStorage(_ texture: ReferenceWritableKeyPath<MaterialAtlas, GLuint>, width: Int, height: Int)
     {
-      guard let pixels else { return }
-      if placeholders.remove(texture) != nil
+      var name = self[keyPath: texture]
+      if name != 0, placeholders.remove(name) == nil, storageSize[name] == SIMD2(width, height) { return }
+      if name != 0
       {
-        gl.deleteTextures(count: 1, textures: &texture)
-        texture = 0
+        compressedTextures.remove(name)
+        storageSize[name] = nil
+        gl.deleteTextures(count: 1, textures: &name)
       }
 
-      if uploadCompressed(&texture, pixels: pixels, width: Int(width), height: Int(height), rects: rects) { return }
-      if texture != 0
+      gl.genTextures(count: 1, textures: &name)
+      self[keyPath: texture] = name
+      storageSize[name] = SIMD2(width, height)
+      let block = 4 << (Self.levels - 1)
+      if width % block == 0, height % block == 0, labgl.textureCompressionSupported() != 0,
+         labgl.textureImageBC7(name, width: Int32(width), height: Int32(height), levels: Int32(Self.levels)) != 0
       {
-        guard !rects.isEmpty else { return }
-        gl.bindTexture(target: GL_TEXTURE_2D, texture: texture)
-        var region: [UInt8] = []
-        for rect in rects
-        {
-          let size = Int(rect.size)
-          region.removeAll(keepingCapacity: true)
-          for row in 0 ..< size
-          {
-            let start = ((Int(rect.y) + row) * Int(width) + Int(rect.x)) * 4
-            region.append(contentsOf: UnsafeBufferPointer(start: pixels + start, count: size * 4))
-          }
-
-          gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: rect.x, yOffset: rect.y,
-                           width: rect.size, height: rect.size, format: GL_RGBA, type: GL_UNSIGNED_BYTE,
-                           pixels: region)
-        }
-
-        gl.generateMipmap(GL_TEXTURE_2D)
+        compressedTextures.insert(name)
         return
       }
 
-      var tex: GLuint = 0
-      gl.genTextures(count: 1, textures: &tex)
-      texture = tex
-
-      gl.bindTexture(target: GL_TEXTURE_2D, texture: texture)
+      gl.bindTexture(target: GL_TEXTURE_2D, texture: name)
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GL_LINEAR_MIPMAP_LINEAR)
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GL_LINEAR)
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_WRAP_S, param: GL_CLAMP_TO_EDGE)
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_WRAP_T, param: GL_CLAMP_TO_EDGE)
-      gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAX_LEVEL, param: GLint(3))
-      gl.texImage2D(target: GL_TEXTURE_2D,
-                    level: 0,
-                    internalFormat: GL_RGBA,
-                    width: width,
-                    height: height,
-                    border: 0,
-                    format: GL_RGBA,
-                    type: GL_UNSIGNED_BYTE,
-                    pixels: pixels)
-      gl.generateMipmap(GL_TEXTURE_2D)
-    }
-
-    /// BC7 uploads where the backend has them and every mip divides into whole blocks,
-    /// false to fall back to RGBA8.
-    private func uploadCompressed(_ texture: inout GLuint, pixels: UnsafePointer<UInt8>,
-                                  width: Int, height: Int, rects: [Pixar.HdAkariAtlasRect]) -> Bool
-    {
-      if texture != 0
-      {
-        guard compressedTextures.contains(texture) else { return false }
-        for rect in rects
-        {
-          for level in 0 ..< Self.levels
-          {
-            encode(texture, pixels, width: width, height: height, level: level,
-                   x: Int(rect.x), y: Int(rect.y), size: (Int(rect.size), Int(rect.size)), late: true)
-          }
-        }
-
-        return true
-      }
-
-      let block = 4 << (Self.levels - 1)
-      guard
-        width % block == 0,
-        height % block == 0,
-        labgl.textureCompressionSupported() != 0
-      else { return false }
-
-      var tex: GLuint = 0
-      gl.genTextures(count: 1, textures: &tex)
-      guard labgl.textureImageBC7(tex, width: Int32(width), height: Int32(height), levels: Int32(Self.levels)) != 0
-      else
-      {
-        gl.deleteTextures(count: 1, textures: &tex)
-        return false
-      }
-
-      texture = tex
-      compressedTextures.insert(tex)
+      gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAX_LEVEL, param: GLint(Self.levels - 1))
       for level in 0 ..< Self.levels
       {
-        encode(tex, pixels, width: width, height: height, level: level, x: 0, y: 0, size: (width, height),
-               late: false)
+        gl.texImage2D(target: GL_TEXTURE_2D, level: GLint(level), internalFormat: GL_RGBA,
+                      width: GLsizei(width >> level), height: GLsizei(height >> level), border: 0,
+                      format: GL_RGBA, type: GL_UNSIGNED_BYTE, pixels: nil)
       }
-
-      return true
     }
 
-    /// Encodes what a level-0 region covers at `level`, grown to whole blocks. A `late` region's
-    /// pixels may be all the atlas still holds, its neighbors then come back from the texture.
-    private func encode(_ texture: GLuint, _ pixels: UnsafePointer<UInt8>, width: Int, height: Int, level: Int,
-                        x: Int, y: Int, size: (Int, Int), late: Bool)
+    /// uploads one baked region and its mips, whole cells keep every level on whole bc7 blocks
+    private func upload(_ texture: GLuint, pixels: UnsafePointer<UInt8>, region: Pixar.HdAkariAtlasRegion)
     {
-      let levelWidth = width >> level, levelHeight = height >> level
-      let x0 = (x >> level) & ~3, y0 = (y >> level) & ~3
-      let x1 = min((((x + size.0 + (1 << level) - 1) >> level) + 3) & ~3, levelWidth)
-      let y1 = min((((y + size.1 + (1 << level) - 1) >> level) + 3) & ~3, levelHeight)
-      let w = x1 - x0, h = y1 - y0
-      guard w > 0, h > 0 else { return }
-
-      var blocks = [UInt8](repeating: 0, count: w * h)
-      blocks.withUnsafeMutableBufferPointer
-      { out in
-        if level == 0
-        {
-          BC7.encode(pixels + (y0 * width + x0) * 4, stride: width, width: w, height: h, into: out.baseAddress!)
-          return
-        }
-
-        var mip = [UInt8](repeating: 0, count: w * h * 4)
-        if late
-        {
-          let source = Self.lateSource(texture, pixels, width: width, level: level, x0: x0, y0: y0, w: w, h: h,
-                                       rect: (x, y, size.0, size.1))
-          mip.withUnsafeMutableBufferPointer
-          { dst in
-            source.withUnsafeBufferPointer
-            {
-              Self.downsample($0.baseAddress!, width: w << level, height: h << level, level: level,
-                              x0: 0, y0: 0, w: w, h: h, into: dst.baseAddress!)
-            }
-          }
-        }
-        else
-        {
-          mip.withUnsafeMutableBufferPointer
-          { dst in
-            Self.downsample(pixels, width: width, height: height, level: level, x0: x0, y0: y0, w: w, h: h,
-                            into: dst.baseAddress!)
-          }
-        }
-
-        mip.withUnsafeBufferPointer
-        {
-          BC7.encode($0.baseAddress!, stride: w, width: w, height: h, into: out.baseAddress!)
-        }
-      }
-
-      _ = labgl.textureSubImageBC7(texture, level: Int32(level), x: Int32(x0), y: Int32(y0),
-                                   width: Int32(w), height: Int32(h), blocks: blocks)
-    }
-
-    /// The level-0 pixels a late region's mip filters down from: what level 0
-    /// already holds on the GPU, the region itself fresh from `pixels`.
-    private static func lateSource(_ texture: GLuint, _ pixels: UnsafePointer<UInt8>, width: Int, level: Int,
-                                   x0: Int, y0: Int, w: Int, h: Int, rect: (Int, Int, Int, Int)) -> [UInt8]
-    {
-      let sx = x0 << level, sy = y0 << level
-      let sw = w << level, sh = h << level
-      var source = [UInt8](repeating: 0, count: sw * sh * 4)
-      var blocks = [UInt8](repeating: 0, count: sw * sh)
-      if labgl.textureGetBC7(texture, level: 0, x: Int32(sx), y: Int32(sy), width: Int32(sw), height: Int32(sh),
-                             blocks: &blocks) != 0
+      let width = Int(region.width), height = Int(region.height)
+      let compressed = compressedTextures.contains(texture)
+      if !compressed { gl.bindTexture(target: GL_TEXTURE_2D, texture: texture) }
+      var mip: [UInt8] = []
+      var blocks: [UInt8] = []
+      for level in 0 ..< Self.levels
       {
-        blocks.withUnsafeBufferPointer
-        { b in
-          source.withUnsafeMutableBufferPointer
+        let w = width >> level, h = height >> level
+        guard w > 0, h > 0 else { break }
+        let x = Int(region.x) >> level, y = Int(region.y) >> level
+        if level > 0
+        {
+          mip = [UInt8](repeating: 0, count: w * h * 4)
+          mip.withUnsafeMutableBufferPointer
           {
-            BC7.decode(b.baseAddress!, width: sw, height: sh, into: $0.baseAddress!, stride: sw)
+            Self.downsample(pixels, width: width, height: height, level: level, x0: 0, y0: 0, w: w, h: h,
+                            into: $0.baseAddress!)
           }
         }
-      }
 
-      let rx0 = max(rect.0, sx), rx1 = min(rect.0 + rect.2, sx + sw)
-      let ry0 = max(rect.1, sy), ry1 = min(rect.1 + rect.3, sy + sh)
-      guard rx1 > rx0 else { return source }
-      source.withUnsafeMutableBufferPointer
-      { dst in
-        for row in ry0 ..< ry1
-        {
-          (dst.baseAddress! + ((row - sy) * sw + rx0 - sx) * 4)
-            .update(from: pixels + (row * width + rx0) * 4, count: (rx1 - rx0) * 4)
+        let encode = { (source: UnsafePointer<UInt8>) in
+          if compressed
+          {
+            blocks = [UInt8](repeating: 0, count: w * h)
+            blocks.withUnsafeMutableBufferPointer
+            {
+              BC7.encode(source, stride: w, width: w, height: h, into: $0.baseAddress!)
+            }
+
+            _ = labgl.textureSubImageBC7(texture, level: Int32(level), x: Int32(x), y: Int32(y),
+                                         width: Int32(w), height: Int32(h), blocks: blocks)
+          }
+          else
+          {
+            gl.texSubImage2D(target: GL_TEXTURE_2D, level: GLint(level), xOffset: GLint(x), yOffset: GLint(y),
+                             width: GLsizei(w), height: GLsizei(h), format: GL_RGBA, type: GL_UNSIGNED_BYTE,
+                             pixels: UnsafeRawPointer(source))
+          }
         }
-      }
 
-      return source
+        if level == 0 { encode(pixels) } else { mip.withUnsafeBufferPointer { encode($0.baseAddress!) } }
+      }
     }
 
-    /// The box filtered mip `level` of a region, straight from level 0.
+    /// the box filtered mip `level` of a region, straight from level 0.
     private static func downsample(_ pixels: UnsafePointer<UInt8>, width: Int, height: Int, level: Int,
                                    x0: Int, y0: Int, w: Int, h: Int, into dst: UnsafeMutablePointer<UInt8>)
     {

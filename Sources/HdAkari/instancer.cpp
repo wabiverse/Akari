@@ -92,7 +92,7 @@ namespace {
 
 size_t MaxInstances()
 {
-  // A development override, for profiling a dense scene.
+  // a development override, for profiling a dense scene.
   static const size_t limit = [] {
     if (const char *env = std::getenv("AKARI_MAX_INSTANCES")) return std::max<size_t>(1, std::strtoull(env, nullptr, 10));
     return HdAkariMaxInstances;
@@ -100,8 +100,7 @@ size_t MaxInstances()
   return limit;
 }
 
-/// Warns once per instancer that its instances were sampled, so a dense
-/// scatter is visible in the log without printing on every sync.
+/// warns once per instancer that its instances were sampled
 void WarnInstancesSampled(SdfPath const &instancerId, size_t total, size_t kept)
 {
   static std::mutex mutex;
@@ -179,8 +178,7 @@ GfMatrix4d LocalInstanceMatrix(VtValue const &transforms,
   return m * instancerXf;
 }
 
-/// Visits `0 ..< count` in bit reversed order, the first `limit` of them, so
-/// whichever prefix gets drawn spreads evenly across the whole range.
+/// visits the first `limit` of `count` in bit reversed order, so any prefix spreads evenly over the range
 template <typename Visit>
 void VisitBitReversed(size_t count, size_t limit, Visit &&visit)
 {
@@ -257,8 +255,7 @@ SdfPath HdAkariInstancer::_PrototypeOf(SdfPath const &path) const
 
 HdAkariInstanceSet HdAkariInstancer::Instances(HdRenderIndex &index, SdfPath const &path)
 {
-  // Held while composing, so the rprims of one prototype wait for its set
-  // instead of each composing their own. Parents lock after their children.
+  // held while composing so one prototype's rprims wait for its set instead of each composing their own, parents lock after children
   std::lock_guard<std::mutex> lock(_mutex);
   const SdfPath prototype = _PrototypeOf(path);
 

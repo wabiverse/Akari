@@ -51,9 +51,7 @@ import Foundation
 
 public extension Akari.FinalRender
 {
-  /// A rendered frame, the display image, and the same
-  /// pixels at 16 bits per channel when the output asks
-  /// for them.
+  /// a rendered frame with its display image, and the same pixels at 16 bits a channel when the output wants them
   struct Frame: Sendable
   {
     public let display: Image
@@ -85,10 +83,11 @@ public extension Akari.FinalRender
     }
   }
 
-  /// Writes the most recent frame, for saving a still render.
+  /// writes the most recent frame when saving a still render
   func saveLastFrame(to url: URL) throws
   {
     guard let frame = lastFrame else { return }
+
     #if canImport(Metal)
       try Self.writePNG(frame, to: url)
     #endif
@@ -99,12 +98,12 @@ public extension Akari.FinalRender
 
   extension Akari.FinalRender
   {
-    /// Copies the color AOV into memory, rows flipped top to bottom (the AOV is stored bottom up)
-    /// and opaque, as the viewport shows it.
+    /// copies the color aov into memory as the viewport shows it, opaque and flipped since the aov is stored bottom up
     static func readback(_ texture: MTLTexture, queue: MTLCommandQueue, depth: ColorDepth) -> Frame?
     {
       let width = texture.width
       let height = texture.height
+
       let bytesPerPixel: Int
       switch texture.pixelFormat
       {
@@ -171,7 +170,7 @@ public extension Akari.FinalRender
       return Frame(display: Image(width: width, height: height, rgba: display), wide: wide)
     }
 
-    /// Writes an sRGB PNG, at 16 bits per channel when the frame carries them.
+    /// writes an srgb png, at 16 bits per channel when the frame carries them
     static func writePNG(_ frame: Frame, to url: URL, color: ColorMode = .rgba) throws
     {
       try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -179,10 +178,12 @@ public extension Akari.FinalRender
       let width = frame.width
       let height = frame.height
       let channels = color == .bw ? 1 : 4
+
       let data: Data
       let bitsPerComponent: Int
       var bitmapInfo = CGBitmapInfo(rawValue: (color == .rgba ? CGImageAlphaInfo.last
           : color == .rgb ? .noneSkipLast : .none).rawValue)
+
       if let wide = frame.wide
       {
         data = (color == .bw ? gray(wide) : wide).withUnsafeBufferPointer { Data(buffer: $0) }
@@ -219,15 +220,15 @@ public extension Akari.FinalRender
       }
     }
 
-    /// An H.264 movie, with the stage's soundtrack interleaved as AAC.
+    /// an h264 movie with the stage soundtrack interleaved as aac
     final class MovieWriter
     {
       struct Soundtrack
       {
         let url: URL
-        /// Seconds after the first frame the sound starts, negative when it started before.
+        /// seconds after the first frame the sound starts, negative when it started before
         let delay: TimeInterval
-        /// Seconds into the file playback begins from.
+        /// seconds into the file that playback begins from
         let mediaOffset: TimeInterval
       }
 
@@ -252,7 +253,7 @@ public extension Akari.FinalRender
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: url)
 
-        // h.264 wants even dimensions.
+        // h264 wants even dimensions
         self.width = max(width & ~1, 2)
         self.height = max(height & ~1, 2)
         self.frameRate = frameRate
@@ -274,6 +275,7 @@ public extension Akari.FinalRender
           ],
         ])
         video.expectsMediaDataInRealTime = false
+
         adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: video, sourcePixelBufferAttributes: [
           kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
           kCVPixelBufferWidthKey as String: self.width,
@@ -313,7 +315,8 @@ public extension Akari.FinalRender
         guard let track = box.track else { return }
 
         let reader = try AVAssetReader(asset: asset)
-        // decoded from the top and skipped up to here, an mp3 seek only lands near it.
+
+        // decode from the top and skip up to here since an mp3 seek only lands near it
         let readStart = CMTime(seconds: soundtrack.mediaOffset + max(0, -soundtrack.delay), preferredTimescale: Self.timescale)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
           AVFormatIDKey: kAudioFormatLinearPCM,
@@ -324,6 +327,7 @@ public extension Akari.FinalRender
           AVLinearPCMIsBigEndianKey: false,
           AVLinearPCMIsNonInterleaved: false,
         ])
+
         guard reader.canAdd(output) else { return }
         reader.add(output)
 
@@ -334,6 +338,7 @@ public extension Akari.FinalRender
           AVEncoderBitRateKey: 256_000,
         ])
         audio.expectsMediaDataInRealTime = false
+
         guard writer.canAdd(audio) else { return }
         writer.add(audio)
 
@@ -358,6 +363,7 @@ public extension Akari.FinalRender
         }
 
         guard let pool = adaptor.pixelBufferPool else { throw OutputError.movie("no pixel buffer pool") }
+
         var pixels: CVPixelBuffer?
         CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixels)
         guard let pixels else { throw OutputError.movie("no pixel buffer") }
@@ -395,10 +401,11 @@ public extension Akari.FinalRender
         pumpAudio(until: time(of: frames))
       }
 
-      /// Feeds the audio input up to `limit`, as far as it will take right now.
+      /// feeds the audio input up to `limit`, as much as it will take right now
       private func pumpAudio(until limit: CMTime)
       {
         guard let audio, let readerOutput else { return }
+
         while audio.isReadyForMoreMediaData
         {
           guard let next = pendingAudio ?? readerOutput.copyNextSampleBuffer()
@@ -410,6 +417,7 @@ public extension Akari.FinalRender
 
           pendingAudio = nil
           guard let buffer = Self.trimmed(next, from: audioStart) else { continue }
+
           let start = CMSampleBufferGetPresentationTimeStamp(buffer) + audioShift
           if start > limit
           {
@@ -437,11 +445,13 @@ public extension Akari.FinalRender
       {
         let pts = CMSampleBufferGetPresentationTimeStamp(buffer)
         guard pts < start else { return buffer }
+
         let count = CMSampleBufferGetNumSamples(buffer)
         let rate = CMSampleBufferGetFormatDescription(buffer)
           .flatMap { CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee.mSampleRate } ?? 48000
         let drop = Int(((start - pts).seconds * rate).rounded())
         guard drop < count else { return nil }
+
         var out: CMSampleBuffer?
         CMSampleBufferCopySampleBufferForRange(allocator: nil, sampleBuffer: buffer,
                                                sampleRange: CFRange(location: drop, length: count - drop),
@@ -455,6 +465,7 @@ public extension Akari.FinalRender
         CMSampleBufferGetSampleTimingInfoArray(buffer, entryCount: 0, arrayToFill: nil, entriesNeededOut: &count)
         var timing = [CMSampleTimingInfo](repeating: CMSampleTimingInfo(), count: count)
         CMSampleBufferGetSampleTimingInfoArray(buffer, entryCount: count, arrayToFill: &timing, entriesNeededOut: &count)
+
         for i in timing.indices
         {
           timing[i].presentationTimeStamp = timing[i].presentationTimeStamp + shift
@@ -467,10 +478,11 @@ public extension Akari.FinalRender
         return out
       }
 
-      /// Closes the movie at the last frame, the sound trimmed to it.
+      /// closes the movie at the last frame with the sound trimmed to it
       func finish()
       {
         video.markAsFinished()
+
         let end = time(of: frames)
         while audio != nil
         {

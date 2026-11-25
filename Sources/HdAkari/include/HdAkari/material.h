@@ -55,8 +55,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// Follows a material's emission as it animates, the rest
-/// of a material bakes when the meshes using it sync.
+/// follows a material's emission as it animates, the rest of a material bakes when its meshes sync
 class HdAkariMaterial final : public HdMaterial
 {
 public:
@@ -72,7 +71,7 @@ public:
   HdDirtyBits GetInitialDirtyBitsMask() const override;
 
 private:
-  // the meshes bake a material on their first sync, its later syncs are edits.
+  // the meshes bake a material on its first sync, its later syncs are edits
   bool _baked = false;
 };
 

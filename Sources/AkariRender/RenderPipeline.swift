@@ -40,9 +40,7 @@
 
 import AkariCore
 
-/// Resolves a set of ``RenderSettings`` into the
-/// ordered list of passes that actually run this
-/// frame, the assembled frame graph.
+/// resolves ``RenderSettings`` into the ordered list of passes that run this frame
 public struct RenderPipeline: Sendable
 {
   public var settings: RenderSettings
@@ -52,7 +50,7 @@ public struct RenderPipeline: Sendable
     self.settings = settings
   }
 
-  /// The passes that run for the current settings, in execution order.
+  /// the passes that run for the current settings, in execution order
   public var activePasses: [RenderPassID]
   {
     let f = settings.features
@@ -61,17 +59,17 @@ public struct RenderPipeline: Sendable
 
     if f.contains(.volumetrics) { passes.append(.volumetrics) }
 
-    // shadows replay the geometry capture the geometry pass
-    // records, so they can only be drawn once it has run.
+    // shadows replay the capture the geometry pass records so they come after it
     if f.contains(.shadowMaps) { passes.append(.shadow) }
 
-    // probes replay the same capture into their own cube faces.
+    // probes replay the same capture into their own cube faces
     if f.contains(.lightProbes) { passes.append(.lightProbes) }
 
     passes.append(.lighting)
 
     if f.contains(.screenSpaceGI) { passes.append(.screenSpaceGI) }
-    // reflections run when either screen space or hardware RT is on.
+
+    // reflections run when either screen space or hardware ray tracing is on
     if f.contains(.screenSpaceReflections) || f.contains(.hardwareRayTracing)
     {
       passes.append(.reflections)
@@ -83,7 +81,7 @@ public struct RenderPipeline: Sendable
     if f.contains(.bloom) { passes.append(.bloom) }
     if f.contains(.depthOfField) { passes.append(.depthOfField) }
 
-    // the color pipeline.
+    // color pipeline
     passes.append(.tonemap)
     passes.append(.present)
 

@@ -78,21 +78,18 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 class HdRenderIndex;
 
-/// The most instances one prototype draws from one instancer, nested
-/// instancers composed, whatever the triangle budget works out to. It only
-/// bounds the allocation a very small prototype would otherwise ask for.
+/// the most instances one prototype draws from one instancer, it only bounds what a tiny prototype would allocate
 inline constexpr size_t HdAkariMaxInstances = size_t(1) << 14;
 
-/// A prototype's instances, the matrices taking its own transformed points to
-/// world space, nested instancers composed.
+/// a prototype's instances, the matrices taking its points to world space with nested instancers composed
 struct HdAkariInstanceSet
 {
   VtMatrix4fArray transforms;
-  /// Hashes `transforms`, equal sets from different instancers share it.
+  /// a hash of `transforms`, equal sets from different instancers share it
   uint64_t key = 0;
 };
 
-/// Caches an instancer's primvars and each prototype's composed instances.
+/// caches an instancer's primvars and each prototype's composed instances
 class HDAKARI_API HdAkariInstancer final : public HdInstancer
 {
 public:
@@ -103,14 +100,14 @@ public:
             HdRenderParam *renderParam,
             HdDirtyBits *dirtyBits) override;
 
-  /// The instances of whichever of this instancer's prototypes `path` is or
-  /// sits under, parent instancers composed.
+  /// the instances of whichever prototype `path` is or sits under, with parent instancers composed
   HdAkariInstanceSet Instances(HdRenderIndex &index, SdfPath const &path);
 
 private:
   SdfPath _PrototypeOf(SdfPath const &path) const;
 
   std::mutex _mutex;
+
   GfMatrix4d _transform{1.0};
   VtValue _translations;
   VtValue _rotations;
@@ -118,7 +115,8 @@ private:
   VtValue _transforms;
   SdfPathVector _prototypes;
   std::unordered_set<SdfPath, SdfPath::Hash> _prototypeSet;
-  /// Bumped whenever the primvars or prototypes change.
+
+  /// bumped whenever the primvars or prototypes change
   uint64_t _generation = 0;
 
   struct Composed
@@ -131,7 +129,7 @@ private:
   std::unordered_map<SdfPath, Composed, SdfPath::Hash> _sets;
 };
 
-/// `rprimId`'s instances under `instancerId`, empty when it has none.
+/// the instances of `rprimId` under `instancerId`, empty when it has none
 HdAkariInstanceSet HdAkariInstances(HdRenderIndex &index, SdfPath const &instancerId, SdfPath const &rprimId);
 
 PXR_NAMESPACE_CLOSE_SCOPE

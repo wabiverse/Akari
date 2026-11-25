@@ -46,16 +46,16 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// The stage's planet, a sphere with `primvars:akari:atmosphere`, lit by the sun.
+  /// the stage planet, a sphere with `primvars:akari:atmosphere` lit by the sun.
   struct Atmosphere
   {
     struct Planet: Equatable
     {
-      /// The ground's center and radius, in stage units.
+      /// the ground center and radius in stage units.
       var center: SIMD3<Double>
       var radius: Double
       var fromWorld: simd_float3x3
-      /// Thickness and every length after it in kilometers, coefficients per kilometer.
+      /// thickness and every length after it are in kilometers, coefficients are per kilometer.
       var thickness: Float
       var rayleigh: SIMD4<Float>
       var mie: SIMD4<Float>
@@ -67,21 +67,20 @@ extension Akari.LabFXEngine
       var nightIntensity: Float
       var groundTexture: String
       var nightTexture: String
-      /// The procedural surface, zero `procedural.x` when the planet uses its albedo or textures.
+      /// the procedural surface, `procedural.x` is zero when the planet uses its albedo or textures.
       var procedural: SIMD4<Float>
       var terrain: SIMD4<Float>
       var ocean: SIMD4<Float>
       var clouds: SIMD4<Float>
       var cities: SIMD4<Float>
-      /// The cloud slab's thickness in km.
+      /// cloud thickness in km, swirl, detail and softness.
       var cloudShape: SIMD4<Float>
-      /// The surface palette, a color per column with w 1 where authored
-      /// (land low, land high, forest, desert, shallows, rock, snow, bloom (its w the bloom amount)).
+      /// the surface palette, a color per column with w 1 where authored, the last column's w is the bloom amount
       var paletteA: simd_float4x4
       var paletteB: simd_float4x4
-      /// Halo (color, strength), (radius as a fraction of the planet's, streaks, night side shadow, 0), fill, rim.
+      /// columns are halo color and strength, halo radius as a fraction of the planet with streaks and night shadow, fill, and rim.
       var look: simd_float4x4
-      /// Wave strength, wave time in seconds, cloud shading.
+      /// wave strength, wave time in seconds and cloud shading.
       var style: SIMD4<Float>
     }
 
@@ -98,7 +97,7 @@ extension Akari.LabFXEngine
     var night = Map()
     var placeholder: GLuint = 0
     var bakedLUTs: [Float] = []
-    /// What the planet's cloud map was last baked from, and whether it bakes this frame.
+    /// what the cloud map was last baked from, and whether it bakes this frame.
     var bakedCloudMap: [Float] = []
     var cloudMapThisFrame = true
     var lutsThisFrame = true
@@ -106,22 +105,24 @@ extension Akari.LabFXEngine
     var aerialActive = true
     var bakedAltitude = Double.nan
     var bakedSun = SIMD3<Int32>(repeating: .min)
-    /// The sun's transmittance down to the eye, for what lights without the per pixel lookup.
+    /// the sun transmittance down to the eye, for lighting that skips the per pixel lookup.
     var sunTransmittance = SIMD3<Float>(repeating: 1)
   }
 
   static let atmosphereLUTPasses: [Pass] = [.atmosphereTransmittance, .atmosphereMultiscatter]
 
-  /// The sun's illuminance when the stage has an atmosphere but no distant light.
+  /// sun illuminance used when the stage has an atmosphere but no distant light.
   static let atmosphereDefaultSun = SIMD3<Float>(repeating: 3)
 
-  /// Picks up the stage's planet, `eye` is where this frame's camera sits in the world.
+  /// picks up the stage planet, `eye` is where the camera sits in the world this frame.
   func syncAtmosphere(_ scene: Pixar.HdAkariScene, eye: SIMD3<Float>, cloudMarchSteps: Int)
   {
     atmosphere.eye = eye
     setFloat(.planetCloudMarchSteps, Float(min(max(cloudMarchSteps, 1), 128)))
+
     let revision = scene.AtmosphereRevision()
     guard revision != atmosphere.revision else { return }
+
     atmosphere.revision = revision
 
     var data = Pixar.HdAkariAtmosphereData()
@@ -135,6 +136,7 @@ extension Akari.LabFXEngine
     let rows = (0 ..< 3).map { SIMD3(p[$0 * 4], p[$0 * 4 + 1], p[$0 * 4 + 2]) }
     let scale = Akari.Math.length(rows[0])
     let fromWorld = simd_float3x3(rows: rows.map { SIMD3<Float>(Akari.Math.normalize($0)) })
+
     atmosphere.planet = Atmosphere.Planet(
       center: SIMD3(p[12], p[13], p[14]),
       radius: data.radius * scale,
@@ -169,20 +171,19 @@ extension Akari.LabFXEngine
     )
   }
 
-  /// Whether `key` differs from what was baked by more than the rounding a held USD key interpolates with.
+  /// whether `key` differs from the baked key by more than the rounding a held usd key interpolates with.
   private static func moved(_ key: [Float], from baked: [Float]) -> Bool
   {
     key.count != baked.count || zip(key, baked).contains { abs($0 - $1) > 1e-5 * max(abs($0), abs($1)) }
   }
 
-  /// A palette color from its USD triple, w 1 when authored.
+  /// a palette color from its usd triple, w is 1 when authored.
   private static func paletteColor(_ c: (Float, Float, Float)) -> SIMD4<Float>
   {
     c.0 < 0 ? .zero : SIMD4(c.0, c.1, c.2, 1)
   }
 
-  /// Binds the planet for the frame, toggles its passes, and rebakes the LUTs or the
-  /// environment once the atmosphere, the sun, or the eye's altitude has moved enough.
+  /// binds the planet for the frame, toggles its passes and rebakes once the atmosphere, sun or eye altitude moves enough
   func applyAtmosphere(sun: SIMD3<Float>)
   {
     guard let planet = atmosphere.planet
@@ -207,12 +208,15 @@ extension Akari.LabFXEngine
     let lutKey = [bottom, top, planet.ozone.w, planet.ground.w]
       + [planet.rayleigh, planet.mie, planet.mieExtra, planet.ozone, planet.ground].flatMap { [$0.x, $0.y, $0.z, $0.w] }
     if environment.iblNeedsBake { atmosphere.bakedLUTs = [] }
+
     let luts = Self.moved(lutKey, from: atmosphere.bakedLUTs)
     if luts { atmosphere.bakedLUTs = lutKey }
-    // the cloud cover only changes with the clouds' own settings, not with the camera.
+
+    // the cloud cover only changes with its own settings, not with the camera.
     let cloudKey = [bottom] + [planet.procedural, planet.clouds, planet.cities, planet.cloudShape].flatMap { [$0.x, $0.y, $0.z, $0.w] }
     let cloudMap = Self.moved(cloudKey, from: atmosphere.bakedCloudMap)
     if cloudMap { atmosphere.bakedCloudMap = cloudKey }
+
     if cloudMap != atmosphere.cloudMapThisFrame
     {
       runtime.setPassActive(.planetCloudMap, active: cloudMap)
@@ -262,15 +266,13 @@ extension Akari.LabFXEngine
 
     setAtmospherePasses(luts: luts, skyView: bottom + Float(height) < top, aerial: true)
 
-    // the sky only rebakes when the camera crosses into another altitude band (3 % wide, never
-    // narrower than ~60 m near the ground) or the sun turns ~0.05°: fixed bands, so a frame bakes the
-    // same sky whichever frame a render started from.
-    // above the atmosphere the sky is the planet's disk, it changes far more slowly with height.
+    // the sky rebakes when the camera crosses a fixed altitude band or the sun turns a little, so every frame bakes the same sky
     let thickness = Double(top - bottom)
     let band = altitude < thickness
       ? (log((max(altitude, 0) + 2) / 2) / 0.03).rounded(.down)
       : 1e6 + (log(altitude / thickness) / 0.25).rounded(.down)
     let sunBand = SIMD3<Int32>(Akari.Math.normalize(sun) * 1000, rounding: .toNearestOrEven)
+
     if luts || band != atmosphere.bakedAltitude || sunBand != atmosphere.bakedSun
     {
       atmosphere.bakedAltitude = band
@@ -280,7 +282,7 @@ extension Akari.LabFXEngine
     }
   }
 
-  /// The LUTs bake once, on the frame after they changed.
+  /// the luts bake once, on the frame after they changed.
   func finishAtmosphereFrame()
   {
     if volumes.shadowThisFrame
@@ -332,6 +334,7 @@ extension Akari.LabFXEngine
       gl.bindTexture(target: GL_TEXTURE_2D, texture: atmosphere.placeholder)
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_LINEAR))
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GLint(GL_LINEAR))
+
       let pixels = [UInt8](repeating: 0, count: 4)
       gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA8,
                     width: 1, height: 1, border: 0,
@@ -344,13 +347,22 @@ extension Akari.LabFXEngine
   private func loadAtmosphereMap(_ file: String, into map: Atmosphere.Map) -> Atmosphere.Map
   {
     guard file != map.file else { return map }
+
     var next = map
     next.file = file
-    if next.texture != 0 { gl.deleteTextures(count: 1, textures: &next.texture); next.texture = 0 }
+    if next.texture != 0
+    {
+      gl.deleteTextures(count: 1, textures: &next.texture)
+      next.texture = 0
+    }
+
     guard !file.isEmpty, let image = Pixar.HdAkariLoadDomeImage(std.string(file), 16, 0, nil) else { return next }
     defer { Pixar.HdAkariFreeDomeImage(image) }
-    let width = Int(Pixar.HdAkariDomeImageWidth(image)), height = Int(Pixar.HdAkariDomeImageHeight(image))
+
+    let width = Int(Pixar.HdAkariDomeImageWidth(image))
+    let height = Int(Pixar.HdAkariDomeImageHeight(image))
     let pixels = Array(UnsafeBufferPointer(start: Pixar.HdAkariDomeImagePixels(image), count: width * height * 4))
+
     gl.genTextures(count: 1, textures: &next.texture)
     gl.bindTexture(target: GL_TEXTURE_2D, texture: next.texture)
     gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_LINEAR_MIPMAP_LINEAR))
@@ -361,18 +373,21 @@ extension Akari.LabFXEngine
                   width: GLsizei(width), height: GLsizei(height), border: 0,
                   format: GL_RGBA, type: GLenum(GL_HALF_FLOAT), pixels: pixels)
     gl.generateMipmap(GL_TEXTURE_2D)
+
     return next
   }
 
-  /// The sun's transmittance from `r` km toward `mu`, zero behind the planet.
+  /// the sun transmittance from `r` km toward `mu`, zero behind the planet.
   private static func atmosphereSunTransmittance(_ planet: Atmosphere.Planet, bottom: Float, top: Float,
                                                  r: Float, mu: Float) -> SIMD3<Float>
   {
     if mu < 0, r * r * mu * mu - (r - bottom) * (r + bottom) >= 0 { return .zero }
+
     let reach = max(-r * mu + max(r * r * mu * mu + (top - r) * (top + r), 0).squareRoot(), 0)
     let steps = 64
     let dt = reach / Float(steps)
     var depth = SIMD3<Float>(repeating: 0)
+
     for i in 0 ..< steps
     {
       let t = (Float(i) + 0.5) * dt

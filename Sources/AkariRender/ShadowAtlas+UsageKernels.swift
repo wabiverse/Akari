@@ -86,7 +86,7 @@ extension Akari.ShadowAtlas
     }
     """
 
-  /// Tiles a sun's penumbra reaches past the tiles it falls on, so pages stand ready around them.
+  /// tiles a sun's penumbra reaches past the tiles it falls on, so pages stand ready around them.
   static let penumbraTiles = 2
 
   static let dilateUsageDirectionalGLSL = """
@@ -146,7 +146,7 @@ extension Akari.ShadowAtlas
     }
     """
 
-  /// For punctual shadows of the directional dilate, at every LOD.
+  /// for punctual shadows of the directional dilate, at every lod.
   static let dilateUsagePunctualGLSL = """
     #version 430
     layout(local_size_x = \(tilemapRes), local_size_y = \(tilemapRes), local_size_z = 1) in;
@@ -294,7 +294,7 @@ extension Akari.ShadowAtlas
     }
     """
 
-  /// Per screen pixel, per active light.
+  /// per screen pixel, per active light.
   static let tagUsagePunctualCommon = """
     int akpFaceIndex(vec3 lL)
     {
@@ -802,6 +802,9 @@ extension Akari.ShadowAtlas
     #version 430
     layout(local_size_x = \(tilemapRes), local_size_y = \(tilemapRes), local_size_z = 1) in;
     shared uint tiles_local[\(tilesPerTilemap)];
+
+    // a tile whose page holds its drawn depth, so a coarser tile may give way to it.
+    shared uint ready_local[\(tilesPerTilemap)];
     shared uint levels_rendered;
     shared uint force_base_page;
     layout(std430, binding = 0) buffer Tiles { uint tiles_buf[]; };
@@ -832,6 +835,9 @@ extension Akari.ShadowAtlas
         {
           int tile_offset = tileOffsetLds(tile_co, lod);
           uint tile_data = tiles_buf[tilemapBase + tile_offset];
+
+          // used, allocated and not waiting on a static draw, a dynamic redraw always lands this frame.
+          ready_local[tile_offset] = (tile_data & (0x80000000u | 0x10000000u | 0x20000000u)) == (0x80000000u | 0x10000000u) ? 1u : 0u;
           if ((tile_data & 0x80000000u) == 0u) { tile_data &= ~0x20002000u; }
           else { force_base_page = 1u; }
           tile_data &= ~(0x40000000u | 0x10000000u);
@@ -850,11 +856,15 @@ extension Akari.ShadowAtlas
           int t1 = tileOffsetLds(prevCo + ivec2(1, 0), prevLod);
           int t2 = tileOffsetLds(prevCo + ivec2(0, 1), prevLod);
           int t3 = tileOffsetLds(prevCo + ivec2(1, 1), prevLod);
+
+          // a coarser tile stays the fallback until its four finer ones are drawn, else a deferred tile would show lit
           bool isMasked = ((tiles_local[t0] & tiles_local[t1] & tiles_local[t2] & tiles_local[t3])
-                          & 0x80000000u) != 0u;
+                          & 0x80000000u) != 0u
+                       && (ready_local[t0] & ready_local[t1] & ready_local[t2] & ready_local[t3]) != 0u;
           int tile_offset = tileOffsetLds(tile_co, lod);
           if (isMasked)
           {
+            ready_local[tile_offset] = 1u;
             tiles_local[tile_offset] |= 0x80000000u;
             tiles_local[tile_offset] &= ~0x20002000u;
             tiles_local[tile_offset] |= 0x40000000u;
@@ -948,6 +958,9 @@ extension Akari.ShadowAtlas
                              uint local_tile_index [[thread_index_in_threadgroup]])
     {
       threadgroup uint tiles_local[\(tilesPerTilemap)];
+
+      // a tile whose page holds its drawn depth, so a coarser tile may give way to it.
+      threadgroup uint ready_local[\(tilesPerTilemap)];
       threadgroup atomic_uint levels_rendered;
       threadgroup uint force_base_page;
 
@@ -963,6 +976,9 @@ extension Akari.ShadowAtlas
         {
           int tile_offset = tileOffsetLds(tile_co, lod);
           uint tile_data = tiles_buf[tilemapBase + tile_offset];
+
+          // used, allocated and not waiting on a static draw, a dynamic redraw always lands this frame.
+          ready_local[tile_offset] = (tile_data & (0x80000000u | 0x10000000u | 0x20000000u)) == (0x80000000u | 0x10000000u) ? 1u : 0u;
           if ((tile_data & 0x80000000u) == 0u) { tile_data &= ~0x20002000u; }
           else { force_base_page = 1u; }
           tile_data &= ~(0x40000000u | 0x10000000u);
@@ -981,11 +997,15 @@ extension Akari.ShadowAtlas
           int t1 = tileOffsetLds(prevCo + int2(1, 0), prevLod);
           int t2 = tileOffsetLds(prevCo + int2(0, 1), prevLod);
           int t3 = tileOffsetLds(prevCo + int2(1, 1), prevLod);
+
+          // a coarser tile stays the fallback until its four finer ones are drawn, else a deferred tile would show lit
           bool isMasked = ((tiles_local[t0] & tiles_local[t1] & tiles_local[t2] & tiles_local[t3])
-                          & 0x80000000u) != 0u;
+                          & 0x80000000u) != 0u
+                       && (ready_local[t0] & ready_local[t1] & ready_local[t2] & ready_local[t3]) != 0u;
           int tile_offset = tileOffsetLds(tile_co, lod);
           if (isMasked)
           {
+            ready_local[tile_offset] = 1u;
             tiles_local[tile_offset] |= 0x80000000u;
             tiles_local[tile_offset] &= ~0x20002000u;
             tiles_local[tile_offset] |= 0x40000000u;

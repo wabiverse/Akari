@@ -42,7 +42,7 @@ import Foundation
 
 extension Kraken
 {
-  /// The scene's file, none for a new scene that's only in memory until it's saved.
+  /// the scene's file, none for a new scene that's only in memory until it's saved.
   struct SceneFile
   {
     var fileURL: URL?

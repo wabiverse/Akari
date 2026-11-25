@@ -43,20 +43,16 @@ import simd
 
 extension Akari.ShadowAtlas
 {
-  /// Holds the sun's levels coarse while it moves,
-  /// then forces a few fine redraws once it settles.
+  /// holds the sun's levels coarse while it moves, then forces a few fine redraws once it settles
   struct SunMotion
   {
     static let movingLodBias: Float = 2
-    /// Long enough to bridge a slow slider drag's gaps between steps.
+    /// long enough to bridge a slow slider drag's gaps between steps.
     static let holdDuration = 45
-    /// Frames the fine levels stay forced after the bias drops.
+    /// frames the fine levels stay forced after the bias drops.
     static let settleDuration = 5
 
-    /// On an initial scene load, the default y: 1 for the sun's direction causes
-    /// a pretty "fly in" animated effect of the shadows, which is more of a happy
-    /// little accident that i'd like to keep in for now (unless it becomes an issue
-    /// then we can gate it with a toggle or remove it completely).
+    /// starts pointing up so the shadows fly in on a scene's first load, kept on purpose for now
     public private(set) var smoothDirection: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
 
     private var movingFrames = 0
@@ -67,16 +63,12 @@ extension Akari.ShadowAtlas
       movingFrames > 0 ? Self.movingLodBias : 0
     }
 
-    /// Fraction of the way to the sun each viewport frame glides.
+    /// fraction of the way to the sun each viewport frame glides.
     static let blendFactor: Float = 0.08
-    /// Within this (about 0.03 degrees) the glide lands on the sun,
-    /// used for a minor optimization so that it doesn't spend many
-    /// extra shadow redraws for the scene.
+    /// how near the glide gets before it lands on the sun, about 0.03 degrees, which saves redraws
     static let arrivalDistance: Float = 5e-4
 
-    /// Returns true when the directional pages must be redrawn this frame, set `snap`
-    /// to `true` for final renders, so the frame shows its own time code's shadows at
-    /// full detail.
+    /// true when the directional pages redraw this frame, `snap` lands right on the sun for final renders
     mutating func advance(to direction: SIMD3<Float>, snap: Bool = false) -> Bool
     {
       let target = Akari.ShadowAtlas.quantize(Akari.Math.normalize(direction))
@@ -120,14 +112,14 @@ extension Akari.ShadowAtlas
     private var lastRotationFingerprint: [UInt64?] = Array(repeating: nil, count: maxDirectionalTilemaps)
     private var lastLevel: [Int32?] = Array(repeating: nil, count: maxDirectionalTilemaps)
     private var lastDepth: [SIMD3<Float>?] = Array(repeating: nil, count: maxDirectionalTilemaps)
-    /// Per directional slot offset.
+    /// per directional slot offset.
     private(set) var pendingShift: [SIMD2<Int32>] = Array(repeating: .zero, count: maxDirectionalTilemaps)
 
-    /// Directional tilemaps active as of the last `render`, in loop position order.
+    /// directional tilemaps active as of the last `render`, in loop position order.
     var slots: [Int] = []
     var view: Akari.Matrix4 = .identity
 
-    /// Stable per tilemap slot for each active directional entry, in fit order.
+    /// stable per tilemap slot for each active directional entry, in fit order.
     mutating func assignSlots(_ directional: [Cascade], technique: ShadowSettings.Technique) -> [Int]
     {
       switch technique
@@ -204,7 +196,7 @@ extension Akari.ShadowAtlas
   struct PunctualHistory
   {
     private var lastFingerprint: [UInt64?] = Array(repeating: nil, count: maxPunctualTilemaps)
-    /// Punctual only dirty bits.
+    /// punctual only dirty bits.
     var pendingDirty: Int32 = 0
 
     mutating func update(_ punctualFaces: [[PunctualFace]])
@@ -228,7 +220,7 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// What `markPageUsage` fit for `render` to draw this frame.
+  /// what `markPageUsage` fit for `render` to draw this frame.
   struct FrameFit
   {
     var directional: [Cascade] = []
@@ -240,15 +232,15 @@ extension Akari.ShadowAtlas
     var isCurrent = false
     var castersMoved = false
     var redraw = CasterRedraw.none
-    /// Moved static caster boxes, uploaded to `Frame.movedStaticBoxes`, whose tiles redraw.
+    /// moved static caster boxes, uploaded to `Frame.movedStaticBoxes`, whose tiles redraw.
     var staticRedraw = 0
   }
 
-  /// What a scene change left stale in the shadow pages.
+  /// what a scene change left stale in the shadow pages.
   enum CasterRedraw: Equatable
   {
     case none
-    /// Only around this many moved boxes, uploaded to `Frame.movedBoxes`.
+    /// only around this many moved boxes, uploaded to `Frame.movedBoxes`.
     case boxes(Int)
     case all
 
@@ -258,14 +250,13 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// Finds the casters that moved or changed between scene revisions.
-  /// A batch's caster boxes, six floats each, and their keys, read in place from the batch.
+  /// a batch's caster boxes and keys, read in place, for finding the casters that moved between revisions
   public typealias Casters = (bounds: [Float], keys: [UInt64])
 
-  /// Finds the casters that moved or changed between scene revisions.
+  /// finds the casters that moved or changed between scene revisions.
   struct CasterMotion
   {
-    /// Each caster's hash of its box and key, sorted, with where it sits across `parts`.
+    /// each caster's hash of its box and key, sorted, with where it sits across `parts`.
     private var previous: (hashes: [UInt64], order: [Int32], parts: [Casters])?
 
     private static func sorted(_ parts: [Casters]) -> (hashes: [UInt64], order: [Int32])
@@ -302,9 +293,7 @@ extension Akari.ShadowAtlas
       return []
     }
 
-    /// Old and new boxes of every changed caster, six floats each, merged down
-    /// to `limit` boxes past it. nil on the first frame, when every shadow has
-    /// to redraw.
+    /// the old and new boxes of every changed caster merged down to `limit`, nil on the first frame when every shadow redraws
     mutating func movedBoxes(_ parts: [Casters], limit: Int) -> [Float]?
     {
       let next = Self.sorted(parts)
@@ -327,8 +316,7 @@ extension Akari.ShadowAtlas
       return moved.count / 6 > limit ? Self.merge(moved, into: limit) : moved
     }
 
-    /// Unions neighboring boxes, in Morton order of their centers,
-    /// into `limit` boxes.
+    /// unions neighboring boxes in morton order into `limit` boxes
     private static func merge(_ boxes: [Float], into limit: Int) -> [Float]
     {
       let count = boxes.count / 6

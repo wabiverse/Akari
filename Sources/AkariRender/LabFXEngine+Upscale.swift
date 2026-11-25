@@ -45,34 +45,41 @@ import LabGL
 
 extension Akari.LabFXEngine
 {
-  /// How the scene reaches the target's size, and what the MetalFX callback reads.
+  /// how the scene reaches the target size and what the metalfx callback reads
   struct Upscale
   {
     var mode = UpscaleMode.taa
-    /// The textures the upscale callback reads, looked up before the graph runs.
+
+    /// the textures the upscale callback reads, looked up before the graph runs
     var textures = UpscaleTextures()
     var registered = false
-    /// MetalFX turned an upscale down, the TAA pass takes over.
+
+    /// set when metalfx refused an upscale, the taa pass takes over
     var failed = false
-    /// MetalFX's temporal scaler waits out a heavy frame or memory pressure on the TAA pass until then.
+
+    /// the metalfx temporal scaler waits out a heavy frame or memory pressure on the taa pass until then
     var neuralHeldUntil = Date.distantPast
-    /// The capture rebuilds `prepareUpscale` last saw.
+
+    /// the capture rebuild count `prepareUpscale` last saw
     var rebuilds = 0
-    /// MetalFX didn't run last frame, its history is from before the TAA pass took over.
+
+    /// metalfx did not run last frame so its history is from before the taa pass took over
     var stale = true
-    /// The viewport size, and when it last changed.
+
+    /// the viewport size and when it last changed
     var size = PixelSize(width: 0, height: 0)
     var resizedAt = Date.distantPast
   }
 
-  /// What brings this frame's scene up to the target.
+  /// what brings this frame's scene up to the target size
   enum UpscaleMode
   {
-    /// The `taa` pass, which also downsamples a supersampled frame.
+    /// the `taa` pass, which also downsamples a supersampled frame
     case taa
     case temporal
     case spatial
-    /// MetalFX temporal up to `supersampleScale`, then the `downsample` pass.
+
+    /// metalfx temporal up to `supersampleScale`, then the `downsample` pass
     case supersample
   }
 
@@ -84,7 +91,7 @@ extension Akari.LabFXEngine
     var output: GLuint = 0
   }
 
-  /// Picks this frame's upscaler and turns its pass on.
+  /// picks this frame's upscaler and turns its pass on
   func configureUpscale(settings: RenderSettings, width: Int, height: Int)
   {
     if !upscaling.registered
@@ -94,15 +101,17 @@ extension Akari.LabFXEngine
       upscaling.registered = true
     }
 
-    // metalfx can't build its scaler for a frame as small as hydra's 1x1 populate pass.
+    // metalfx cannot build its scaler for a frame as small as the 1x1 hydra populate pass
     let tiny = min(width, height) < 64
-    // MetalFX builds a scaler (a Neural Engine model) for each size, so use TAA until a resize settles.
+
+    // metalfx builds a neural engine scaler for each size so use taa until a resize settles
     let size = PixelSize(width: width, height: height)
     if size != upscaling.size
     {
       upscaling.size = size
       upscaling.resizedAt = Date()
     }
+
     let resizing = Self.resizingArea || Date().timeIntervalSince(upscaling.resizedAt) < 0.5
     upscaling.mode = if settings.upscaler != .metalFX || renderScale > 1 || tiny || upscaling.failed || motionBlur.subframes > 0
       || resizing
@@ -131,10 +140,10 @@ extension Akari.LabFXEngine
     runtime.setPassActive(.upscaleSanitize, active: upscaling.mode != .taa)
   }
 
-  /// Set while a workspace edge is dragged, so MetalFX waits even if the drag pauses.
+  /// set while a workspace edge is dragged so metalfx waits even if the drag pauses
   nonisolated(unsafe) public static var resizingArea = false
 
-  /// Whether MetalFX's temporal scaler may run this frame.
+  /// whether the metalfx temporal scaler may run this frame
   var neuralUpscaleSafe: Bool
   {
     var pressure: Int32 = 0
@@ -144,19 +153,20 @@ extension Akari.LabFXEngine
     {
       upscaling.neuralHeldUntil = Date(timeIntervalSinceNow: 2)
     }
-    // judged once the scene's geometry has settled, a load still syncing would let it in and keep it.
+
+    // only judged once the scene geometry has settled, a load still syncing would let it in and keep it
     return Date() >= upscaling.neuralHeldUntil
       && (upscaling.mode != .taa || geometry.record.triangles > 0 && Date().timeIntervalSince(geometry.record.rebuiltAt) > 5
         && Self.footprint() + (2 << 30) < Self.memoryBudget)
   }
 
-  /// What the scene may take of the machine's memory.
+  /// how much of the machine's memory the scene may take
   static var memoryBudget: UInt64
   {
     UInt64(Double(ProcessInfo.processInfo.physicalMemory) * 0.65)
   }
 
-  /// The process's physical footprint, what the system counts against it.
+  /// the process's physical footprint, which is what the system counts against it
   static func footprint() -> UInt64
   {
     var info = task_vm_info_data_t()
@@ -172,10 +182,10 @@ extension Akari.LabFXEngine
     return result == KERN_SUCCESS ? info.phys_footprint : 0
   }
 
-  /// The callback runs inside `runtime.render()`, so it can't look the textures up itself.
+  /// the callback runs inside `runtime.render()` so it cannot look the textures up itself
   func prepareUpscale()
   {
-    // rebuilding the captures makes the heaviest frame there is.
+    // rebuilding the captures makes the heaviest frame there is
     if geometry.record.rebuilds != upscaling.rebuilds
     {
       upscaling.rebuilds = geometry.record.rebuilds
@@ -187,33 +197,40 @@ extension Akari.LabFXEngine
       }
     }
 
-    guard upscaling.mode != .taa else { upscaling.stale = true; return }
+    guard upscaling.mode != .taa
+    else
+    {
+      upscaling.stale = true
+      return
+    }
+
     upscaling.textures = UpscaleTextures(color: runtime.texture(.upscaleInput, named: .upscaleColor),
-                                      depth: runtime.bufferDepth(.gbuffer),
-                                      velocity: runtime.texture(.upscaleInput, named: .upscaleVelocity),
-                                      output: upscaling.mode == .supersample
-                                        ? runtime.writeTexture(.supersample, named: .supersample)
-                                        : runtime.writeTexture(.taa, named: .final))
+                                         depth: runtime.bufferDepth(.gbuffer),
+                                         velocity: runtime.texture(.upscaleInput, named: .upscaleVelocity),
+                                         output: upscaling.mode == .supersample
+                                           ? runtime.writeTexture(.supersample, named: .supersample)
+                                           : runtime.writeTexture(.taa, named: .final))
   }
 
   fileprivate func upscale()
   {
     let color = upscaling.textures.color
     let output = upscaling.textures.output
+
     switch upscaling.mode
     {
       case .temporal, .supersample:
-        // labgl's targets keep gl's bottom up rows, so MetalFX's pixels run up like the uv.
+        // labgl targets keep the bottom up rows of gl, so metalfx pixels run upward like the uv
         upscaling.failed = labgl.upscaleTemporal(color: color,
-                                              depth: upscaling.textures.depth,
-                                              motion: upscaling.textures.velocity,
-                                              output: output,
-                                              jitterX: taaJitter.x,
-                                              jitterY: taaJitter.y,
-                                              motionScaleX: Float(sizes.render.width),
-                                              motionScaleY: Float(sizes.render.height),
-                                              reversedDepth: 1,
-                                              reset: temporalReset || upscaling.stale ? 1 : 0) == 0
+                                                 depth: upscaling.textures.depth,
+                                                 motion: upscaling.textures.velocity,
+                                                 output: output,
+                                                 jitterX: taaJitter.x,
+                                                 jitterY: taaJitter.y,
+                                                 motionScaleX: Float(sizes.render.width),
+                                                 motionScaleY: Float(sizes.render.height),
+                                                 reversedDepth: 1,
+                                                 reset: temporalReset || upscaling.stale ? 1 : 0) == 0
         upscaling.stale = false
       case .spatial:
         upscaling.failed = labgl.upscaleSpatial(color: color, output: output) == 0
@@ -223,7 +240,7 @@ extension Akari.LabFXEngine
   }
 }
 
-/// `Runtime.setPassCallback` takes a plain C function pointer.
+/// `Runtime.setPassCallback` takes a plain c function pointer
 private func akariUpscaleCallback(_ userdata: UnsafeMutableRawPointer?, _: Int32, _: Int32)
 {
   guard let userdata else { return }

@@ -50,7 +50,7 @@ import class SwiftCrossUI.Published
 
 extension Kraken
 {
-  /// The active prim as the Object, Object Data and Material properties tabs show and edit it.
+  /// the active prim as the object, object data and material properties tabs show and edit it.
   @MainActor
   final class Inspector: ObservableObject
   {
@@ -68,7 +68,7 @@ extension Kraken
       var checkbox = false
     }
 
-    /// A page of a shader's inputs, as its definition groups them, with its nested pages.
+    /// a page of a shader's inputs, as its definition groups them, with its nested pages.
     struct Page
     {
       var title: String
@@ -89,23 +89,28 @@ extension Kraken
     @Published var location = SIMD3<Double>.zero
     @Published var rotation = SIMD3<Double>.zero
     @Published var scale = SIMD3<Double>(repeating: 1)
-    /// The newest animated values during playback. They aren't published, since that would redo the layout of
-    /// the whole properties panel every frame. The keyed fields read them directly and redraw only themselves.
+    /// the newest animated values during playback, unpublished so the panel isn't laid out again every frame
     private var liveValues: [Tf.Token: [Double]] = [:]
     private var liveTransform: [ReferenceWritableKeyPath<Inspector, SIMD3<Double>>: SIMD3<Double>] = [:]
     @Published var attributes: [Field] = []
     @Published var material = ""
+    /// every material on the stage the material tab can bind.
+    @Published var materials: [String] = []
+    @Published var variantSets: [SceneEdit.VariantSet] = []
+    /// the prims modifier stack, bottom to top, and the ones already baked and waiting for a save
+    @Published var modifiers: [Modifiers.Entry] = []
+    @Published var appliedModifiers: [String] = []
     @Published var shader = ""
     @Published var inputs: [Field] = []
     @Published var route = ""
     @Published var materialRoute = ""
     @Published var values: [Tf.Token: [Double]] = [:]
     @Published var projection: String? = Inspector.projections[0].label
-    /// Key state on the current frame for each animated property, by `KeyTarget.id`.
+    /// key state on the current frame for each animated property, by `KeyTarget.id`.
     @Published var keyStates: [String: KeyState] = [:]
 
     weak var layout: Layout?
-    private let hydra: Hydra.RenderEngine
+    let hydra: Hydra.RenderEngine
     private var preview: MaterialPreview?
     private var parent = matrix_identity_double4x4
     private var lastCheckpoint = Date.distantPast
@@ -139,13 +144,13 @@ extension Kraken
       keyStates[target.id] ?? .none
     }
 
-    /// Reloads the active prim, e.g. after a frame change or key edit.
+    /// reloads the active prim, e.g. after a frame change or key edit.
     func reload()
     {
       load(path)
     }
 
-    /// Reads the prim at `path`, or clears the tabs for none.
+    /// reads the prim at `path`, or clears the tabs for none.
     func load(_ path: String?)
     {
       guard let path else
@@ -180,6 +185,10 @@ extension Kraken
         let camera = info.camera, light = info.light, projection = info.projection
         let active = info.active, instanceable = info.instanceable, visible = info.visible, geometry = info.geometry
         let material = info.material, shader = info.shader, route = info.route, materialRoute = info.materialRoute
+        let materials = SceneEdit.materials(stage)
+        let variantSets = SceneEdit.variantSets(stage, path)
+        let modifiers = Modifiers.read(stage, path)
+        let appliedModifiers = Modifiers.applied(stage, path)
 
         DispatchQueue.main.async
         { [weak self] in
@@ -198,6 +207,10 @@ extension Kraken
           self.geometry = geometry
           self.attributes = attributes
           self.material = material
+          self.materials = materials
+          self.variantSets = variantSets
+          self.modifiers = modifiers
+          self.appliedModifiers = appliedModifiers
           self.preview?.show(material: material)
           self.shader = shader
           self.inputs = inputs
@@ -211,9 +224,7 @@ extension Kraken
       }
     }
 
-    /// Takes a transform the viewport changed.
-    /// Rereads only the values animation can change, for playback. A full reload would update
-    /// every property and redo the layout of the whole properties panel.
+    /// rereads only the values animation can change during playback, a full reload would lay out the whole panel again
     func reloadAnimated()
     {
       guard let path, !keyStates.isEmpty || isCamera || isLight else { return }
@@ -239,7 +250,7 @@ extension Kraken
       }
     }
 
-    /// Camera and light values by name, from the three numbers `SceneEdit.values` gives each one.
+    /// camera and light values by name, from the three numbers `SceneEdit.values` gives each one.
     nonisolated static func values(_ flat: [Double]) -> [Tf.Token: [Double]]
     {
       var values: [Tf.Token: [Double]] = [:]
@@ -251,7 +262,7 @@ extension Kraken
       return values
     }
 
-    /// Key states for the decorators. Any animated transform op counts for the whole transform.
+    /// key states for the decorators. any animated transform op counts for the whole transform.
     nonisolated static func keyStates(_ stage: UsdStage, _ path: String, _ time: Double) -> [String: KeyState]
     {
       var states: [String: KeyState] = [:]
@@ -277,7 +288,7 @@ extension Kraken
       if simd_distance(s, scale) > 1e-9 { scale = s }
     }
 
-    /// Translation, XYZ Euler rotation in degrees and scale, as the properties show a transform.
+    /// translation, xyz euler rotation in degrees and scale, as the properties show a transform.
     nonisolated static func euler(_ m: simd_double4x4) -> (SIMD3<Double>, SIMD3<Double>, SIMD3<Double>)
     {
       let (t, q, s) = Layout.decompose(m)
@@ -321,7 +332,7 @@ extension Kraken
               })
     }
 
-    /// Writes numbers to an attribute of the prim, or of `target`.
+    /// writes numbers to an attribute of the prim, or of `target`.
     func write(_ name: Tf.Token, _ numbers: [Double], type: Sdf.ValueTypeNameType = .float, on target: String? = nil)
     {
       guard let path = target ?? path else { return }
@@ -423,8 +434,7 @@ extension Kraken
               })
     }
 
-    /// The Material tab's preview, made the first time the tab shows.
-    /// The inputs on their pages in the order the definition first gives them, none when it has no pages.
+    /// the inputs on their pages in the order the definition gives them, none when it has no pages
     var pages: [Page]
     {
       guard inputs.contains(where: { !$0.page.isEmpty }) else { return [] }
@@ -485,6 +495,19 @@ extension Kraken
       return made
     }
 
+    /// binds the stage's material at `material` to the active prim.
+    func bind(material: String)
+    {
+      guard let path, material != self.material else { return }
+      layout?.checkpoint()
+      let hydra = hydra
+      hydra.performOnFrameQueue
+      {
+        SceneEdit.bindMaterial(hydra.stage, path, material)
+        DispatchQueue.main.async { [weak self = self] in self?.load(path) }
+      }
+    }
+
     func newMaterial()
     {
       guard let path else { return }
@@ -497,7 +520,7 @@ extension Kraken
       }
     }
 
-    /// The UI's name for a shader input, or its own name in words.
+    /// the UI's name for a shader input, or its own name in words.
     static func label(_ input: Tf.Token) -> String
     {
       if let known = ShaderInput.allCases.first(where: { $0.attribute == input }) { return known.label }
@@ -514,3 +537,7 @@ extension Kraken
     }
   }
 }
+
+#if !canImport(Usd)
+  extension Pixar.SdfValueTypeNameType: @unchecked Sendable {}
+#endif

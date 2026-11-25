@@ -43,11 +43,11 @@ import Metal
 
 extension Akari.ShadowAtlas
 {
-  /// LOD tiles per side of one tilemap's internal quadtree.
+  /// lod tiles per side of one tilemap's internal quadtree.
   static let tilemapRes = 32
   static let lodMax = 5
   static let lodCount = lodMax + 1
-  /// 32*32 + 16*16 + 8*8 + 4*4 + 2*2 + 1*1.
+  /// the tiles of every level of a tilemap, 32 squared down to 1
   static let tilesPerTilemap: Int = {
     var total = 0, size = tilemapRes
     for _ in 0 ... lodMax
@@ -58,7 +58,7 @@ extension Akari.ShadowAtlas
     return total
   }()
 
-  /// The maximum number of concurrent output streams the GPU supports.
+  /// the maximum number of concurrent output streams the gpu supports.
   static let maxAmplificationViews: Int = {
     guard let device = MTLCreateSystemDefaultDevice() else { return 2 }
 
@@ -73,42 +73,41 @@ extension Akari.ShadowAtlas
     return 2
   }()
 
-  /// Bound by the deferred shader's four `pointShadow` targets.
+  /// bound by the deferred shader's four `pointShadow` targets.
   static let maxPunctualLights = 16
   static let facesPerLight = 6
-  /// Punctual tilemaps occupy slots [0, maxPunctualTilemaps).
+  /// punctual tilemaps take the first slots
   static let maxPunctualTilemaps = maxPunctualLights * facesPerLight
   static let maxDirectionalTilemaps = Int(ShadowSettings.maxLevels)
   static let directionalTilemapBase = maxPunctualTilemaps
-  /// One render view per cube face and LOD, after the directional views.
+  /// one render view per cube face and lod, after the directional views.
   static let punctualViewBase = maxDirectionalTilemaps
   static let maxViews = maxDirectionalTilemaps + maxPunctualTilemaps * lodCount
   static let maxPunctualViews = maxPunctualTilemaps * lodCount
   static let maxTilemaps = maxPunctualTilemaps + maxDirectionalTilemaps
   static let maxTiles = maxTilemaps * tilesPerTilemap
-  /// GPU chunk culling per run, one run per view at worst plus the instanced punctual slot.
+  /// gpu chunk culling per run, one run per view at worst plus the instanced punctual slot.
   static let maxRuns = maxViews + 1
-  /// Culled replay slots below this belong to the camera.
+  /// culled replay slots below this belong to the camera.
   static let cullSlotBase = 2
-  /// Runs whose instances are culled to them, each a copy of every instance's transform, the rest draw them all.
+  /// runs whose instances are culled to them, each a copy of every instance's transform, the rest draw them all.
   static let maxInstanceCullRuns = 4
-  /// Instances under this radius in a run's finest texels aren't drawn into it.
+  /// instances under this radius in a run's finest texels aren't drawn into it.
   static let instanceMinTexels: Float = 0.5
-  /// Static redraws a frame at most, the rest wait on their coarser level.
-  /// Tiles only dynamic casters moved over always draw, deferring those flickers.
+  /// the most static redraws a frame, the rest wait on their coarser level, tiles dynamic casters moved over always draw
   static let renderTileBudget = 64
-  /// Moved caster boxes tracked per frame, past this neighbors are merged.
+  /// moved caster boxes tracked per frame, past this neighbors are merged.
   static let maxMovedCasters = 4096
 
-  /// Pages per atlas layer, one per amplified view.
+  /// pages per atlas layer, one per amplified view.
   static let pagesPerLayer = maxAmplificationViews
   static let maxPage = 2048
   static let poolLayers = maxPage / pagesPerLayer
-  /// Radix the page pack format's x/y fields use for a page id.
+  /// the radix a page id's packed x and y use
   static let pagePackRadix = 64
-  /// Texels per page.
+  /// texels per page.
   static let pageResolution = 256
-  /// Point light pages a LOD coarser than the screen asks, a quarter of the pages.
+  /// point light pages a lod coarser than the screen asks, a quarter of the pages.
   static let punctualLodBias = 1
   static let pageShift = 8
   /// `pageResolution * tilemapRes`.
@@ -118,13 +117,13 @@ extension Akari.ShadowAtlas
   static let flagDoUpdate: UInt32 = 1 << 29
   static let flagIsRendered: UInt32 = 1 << 30
   static let flagIsUsed: UInt32 = 1 << 31
-  /// Only moved dynamic casters touched the tile, it's redrawn from its static page.
+  /// only moved dynamic casters touched the tile, it's redrawn from its static page.
   static let flagDynamicUpdate: UInt32 = 1 << 13
 
-  /// Frames in flight, the depth of every written ring.
+  /// frames in flight, the depth of every written ring.
   static let bufferRing = 3
   static let levelParamsStride = 16
-  /// Texels per row of `data`.
+  /// texels per row of `data`.
   static let dataTextureWidth = 6
 
   static func punctualUniforms(_ uniform: Akari.ComputeUniform) -> String

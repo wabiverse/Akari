@@ -44,14 +44,14 @@ import simd
 
 extension Akari.ShadowAtlas
 {
-  /// One cube face's view/projection for a point light.
+  /// one cube face's view and projection for a point light
   struct PunctualFace
   {
     var view: Akari.Matrix4
     var projection: Akari.Matrix4
     var viewProjection: Akari.Matrix4
     var faceIndex: Int32
-    /// The face's clip planes, for the lookup's linear depth.
+    /// the face's clip planes, for the lookup's linear depth.
     var near: Float
     var far: Float
   }
@@ -94,7 +94,7 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// One cascade or clipmap level's light transform.
+  /// one cascade or clipmap level's light transform.
   struct Cascade
   {
     var view: Akari.Matrix4
@@ -103,7 +103,7 @@ extension Akari.ShadowAtlas
     var splitFar: Float
     var key: UInt64
     var absoluteLevel: Int32 = 0
-    /// This slice's absolute integer tile grid position.
+    /// this slice's absolute integer tile grid position.
     var gridOffsetX: Int32 = 0
     var gridOffsetY: Int32 = 0
 
@@ -122,7 +122,7 @@ extension Akari.ShadowAtlas
     var isClipmap: Bool
   }
 
-  /// Coverage of a whole tilemap at `level`, in world units.
+  /// coverage of a whole tilemap at `level`, in world units.
   static func coverageGet(_ level: Int) -> Float
   {
     exp2(Float(level))
@@ -303,6 +303,7 @@ extension Akari.ShadowAtlas
     let distanceToFrustumCenter = sqrt(Akari.Matrix.dot(toFrustumCenter, toFrustumCenter))
 
     let bias = Int(settings.levelLodBias.rounded())
+
     // finest a 1m level, however big the world unit.
     let metricLevel = Int(floor(log2(camera.world(meters: 1))))
     let minLevel = max(metricLevel, Int(floor(log2(max(nearClip, 1e-3))))) + bias
@@ -331,7 +332,7 @@ extension Akari.ShadowAtlas
                           refOffset: .zero, isClipmap: true)
   }
 
-  /// The scene's depth along the light, snapped to an eighth of its power of two extent so it holds still.
+  /// the scene's depth along the light, snapped to an eighth of its power of two extent so it holds still.
   private static func lightDepthRange(_ sceneCorners: [SIMD3<Float>], rotation: Akari.Matrix4) -> (Float, Float)?
   {
     var sceneNear = Float.greatestFiniteMagnitude
@@ -352,7 +353,7 @@ extension Akari.ShadowAtlas
     return (sceneNear, sceneFar)
   }
 
-  /// The bounding sphere of the camera's frustum, in eye space.
+  /// the bounding sphere of the camera's frustum, in eye space.
   private static func viewFrustumSphere(_ camera: Akari.Camera, nearClip: Float, farClip: Float)
     -> (center: SIMD3<Float>, radius: Float)
   {
@@ -401,7 +402,7 @@ extension Akari.ShadowAtlas
     )
   }
 
-  /// One clipmap level, a light view 2^level across snapped to its own tiles.
+  /// one clipmap level, a light view 2^level across snapped to its own tiles.
   private static func clipmapLevel(_ level: Int, around windowCenterLightPos: SIMD3<Float>, rotation: Akari.Matrix4,
                                    eyeDepth: Float, margin: Float, depthFar: Float, depthOffset: Float,
                                    zScale: Float, zBias: Float) -> Cascade
@@ -448,7 +449,7 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// A tile grid coordinate as Int32, clamped inside what Float can represent.
+  /// a tile grid coordinate as Int32, clamped inside what float can represent.
   static func gridCoordinate(_ value: Float) -> Int32
   {
     guard value.isFinite else { return 0 }
@@ -463,7 +464,7 @@ extension Akari.ShadowAtlas
     return UInt64(bitPattern: Int64(hasher.finalize()))
   }
 
-  /// Fingerprints only a view matrix's rotation part.
+  /// fingerprints only a view matrix's rotation part.
   static func rotationOnlyFingerprint(_ matrix: Akari.Matrix4) -> UInt64
   {
     var rotationOnly = matrix.simd

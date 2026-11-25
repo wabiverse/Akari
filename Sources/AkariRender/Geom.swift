@@ -47,7 +47,7 @@ public extension Akari
 {
   enum Geom
   {
-    /// Convenience entry point that touches USD's arrays directly.
+    /// builds a mesh straight from the usd arrays
     public static func buildMesh(points: Pixar.VtVec3fArray,
                                  tris: Pixar.VtVec3iArray,
                                  uvs: Pixar.VtVec2fArray,
@@ -60,7 +60,7 @@ public extension Akari
                 verts: &verts, indices: &indices, flipWinding: flipWinding)
     }
 
-    /// Copies USD's points into a plain Swift array.
+    /// copies the usd points into a plain swift array
     public static func flatten(points: Pixar.VtVec3fArray) -> [Float]
     {
       let ptCount = points.size()
@@ -76,7 +76,7 @@ public extension Akari
       return pointsFlat
     }
 
-    /// Copies USD's point/triangle/uv arrays into plain Swift arrays.
+    /// copies the usd point, triangle and uv arrays into plain swift arrays
     public static func flatten(points: Pixar.VtVec3fArray,
                                tris: Pixar.VtVec3iArray,
                                uvs: Pixar.VtVec2fArray,
@@ -102,8 +102,7 @@ public extension Akari
         }
       }
 
-      // uvs are per corner, two floats each. a constant uv arrives as a single value,
-      // which keeps denser generated geometry from storing a copy per corner.
+      // two floats of uv per corner, a constant uv comes as one value so dense generated geometry doesn't copy it per corner
       let corners = !expandsConstantUv && uvs.size() == 1 ? 1 : triCount * 3
       var uvsFlat = [Float](repeating: 0, count: corners * 2)
       if corners > 0
@@ -117,25 +116,25 @@ public extension Akari
       return (pointsFlat, trisFlat, uvsFlat)
     }
 
-    /// What a mesh's build needs from its triangles alone,
-    /// reused while only its points move.
+    /// what a mesh build needs from its triangles alone, reused while only its points move
     public struct Topology: Sendable
     {
-      /// Triangle corners into the points, with the winding repaired.
+      /// triangle corners into the points, with the winding repaired
       var triIndices: [Int32]
-      /// Two floats per corner, swapped along with the winding.
+      /// two floats per corner, swapped along with the winding
       var triUvs: [Float]
-      /// The triangles around each point, `vertexFaces[vertexFaceStart[p] ..< vertexFaceStart[p + 1]]`.
+      /// the triangles around each point, `vertexFaces[vertexFaceStart[p] ..< vertexFaceStart[p + 1]]`
       var vertexFaceStart: [Int32]
       var vertexFaces: [Int32]
-      /// The triangles the repair turned over, empty when it turned none.
+      /// the triangles the repair turned over, empty when it turned none
       var flipped: [Bool]
     }
 
     public static func topology(trisFlat: [Int32], uvsFlat: [Float], pointCount: Int) -> Topology
     {
       var triIndices = trisFlat
-      // two floats per corner, or one constant pair.
+
+      // two floats per corner or one constant pair
       var triUvs = uvsFlat.count == trisFlat.count * 2 || uvsFlat.count == 2 && !trisFlat.isEmpty
         ? uvsFlat : [Float](repeating: 0, count: trisFlat.count * 2)
       let flipped = repairWinding(&triIndices, &triUvs)
@@ -175,8 +174,7 @@ public extension Akari
       return Topology(triIndices: triIndices, triUvs: triUvs, vertexFaceStart: start, vertexFaces: faces, flipped: flipped)
     }
 
-    /// Builds the indexed triangle stream with auto smooth normals by
-    /// splitting vertices at hard edges.
+    /// builds the indexed triangle stream with auto smooth normals, splitting vertices at hard edges
     public static func buildMesh(pointsFlat: [Float],
                                  trisFlat: [Int32],
                                  uvsFlat: [Float],
@@ -190,16 +188,16 @@ public extension Akari
                 verts: &verts, indices: &indices, sources: &sources, flipWinding: flipWinding)
     }
 
-    /// `subdivided` shades a subdivision surface's cage without hard edges.
-    /// `sources` takes each drawn triangle's own in `topology`, the sign bit
-    /// set where its second and third corners swapped places.
+    /// builds the triangles with their normals, flat for faceted meshes, authored when given, and records each triangle's source in `sources`
     public static func buildMesh(pointsFlat: [Float],
                                  topology: Topology,
                                  verts: inout [Float],
                                  indices: inout [Int32],
                                  sources: inout [Int32],
                                  flipWinding: Bool = false,
-                                 subdivided: Bool = false)
+                                 subdivided: Bool = false,
+                                 faceted: Bool = false,
+                                 normals: [Float] = [])
     {
       let triIndices = topology.triIndices
       let triUvs = topology.triUvs
@@ -209,12 +207,31 @@ public extension Akari
       verts.reserveCapacity(verts.count + ptCount * 8)
       indices.reserveCapacity(indices.count + triCount * 3)
 
-      let (smooth, faceNormals, faceValid) = normals(pointsFlat, triIndices: triIndices, pointCount: ptCount)
-      let vertexIsSmooth = subdivided
-        ? [Bool](repeating: true, count: ptCount)
-        : smoothVertices(topology, pointCount: ptCount, smooth: smooth, faceNormals: faceNormals, faceValid: faceValid)
+      let (smooth, faceNormals, faceValid) = Self.normals(pointsFlat, triIndices: triIndices, pointCount: ptCount)
+      let authored = !subdivided && normals.count == triCount * 9
+      let vertexIsSmooth: [Bool] = if subdivided
+      {
+        [Bool](repeating: true, count: ptCount)
+      }
+      else if faceted || authored
+      {
+        [Bool](repeating: false, count: ptCount)
+      }
+      else
+      {
+        smoothVertices(topology, pointCount: ptCount, smooth: smooth, faceNormals: faceNormals, faceValid: faceValid)
+      }
 
-      // corners sharing a point, uv and normal weld into one vertex.
+      /// the authored normal of a corner, which follows the corner when the winding repair swapped it
+      func authoredNormal(_ idx: Int, _ c: Int) -> SIMD3<Float>
+      {
+        let repaired = !topology.flipped.isEmpty && topology.flipped[idx]
+        let original = repaired && c != 0 ? 3 - c : c
+        let o = (idx * 3 + original) * 3
+        return SIMD3(normals[o], normals[o + 1], normals[o + 2])
+      }
+
+      // corners sharing a point, uv and normal weld into one vertex
       let base = Int32(verts.count / 8)
       var head = [Int32](repeating: -1, count: ptCount)
       var next: [Int32] = []
@@ -225,15 +242,20 @@ public extension Akari
       func emitCorner(_ idx: Int, _ c: Int)
       {
         let p = Int(triIndices[idx * 3 + c])
-        let face = vertexIsSmooth[p] ? -1 : Int32(idx)
         let uo = triUvs.count == 2 ? 0 : (idx * 3 + c) * 2
         let uv = SIMD2<Float>(triUvs[uo], triUvs[uo + 1])
-        // a face owned corner is the only one of its face at this point.
+
+        // authored normals weld wherever the corners of a point agree on them
+        let given = authored ? authoredNormal(idx, c) : nil
+        let face = vertexIsSmooth[p] || given != nil ? -1 : Int32(idx)
+
+        // a face owned corner is the only one of its face at this point
         var slot = face < 0 ? head[p] : -1
         while slot >= 0
         {
           let o = Int(slot + base) * 8
-          if owner[Int(slot)] == face, verts[o + 6] == uv.x, verts[o + 7] == uv.y
+          let sameNormal = given.map { verts[o + 3] == $0.x && verts[o + 4] == $0.y && verts[o + 5] == $0.z } ?? true
+          if owner[Int(slot)] == face, verts[o + 6] == uv.x, verts[o + 7] == uv.y, sameNormal
           {
             indices.append(slot + base)
             return
@@ -242,7 +264,7 @@ public extension Akari
           slot = next[Int(slot)]
         }
 
-        let n = face < 0 ? smooth[p] : faceNormals[idx]
+        let n = given ?? (face < 0 ? smooth[p] : faceNormals[idx])
         indices.append(appendVertex(p, n, uv, pointsFlat, &verts))
         next.append(head[p])
         owner.append(face)
@@ -252,19 +274,26 @@ public extension Akari
       for idx in 0 ..< triCount
       {
         guard faceValid[idx] else { continue }
-        sources.append(Int32(idx) | (flipWinding != (!topology.flipped.isEmpty && topology.flipped[idx]) ? Int32.min : 0))
+
+        let repaired = !topology.flipped.isEmpty && topology.flipped[idx]
+        sources.append(Int32(idx) | (flipWinding != repaired ? Int32.min : 0))
+
         if flipWinding
         {
-          emitCorner(idx, 0); emitCorner(idx, 2); emitCorner(idx, 1)
+          emitCorner(idx, 0)
+          emitCorner(idx, 2)
+          emitCorner(idx, 1)
         }
         else
         {
-          emitCorner(idx, 0); emitCorner(idx, 1); emitCorner(idx, 2)
+          emitCorner(idx, 0)
+          emitCorner(idx, 1)
+          emitCorner(idx, 2)
         }
       }
     }
 
-    /// Each triangle's unit normal, and each point's area weighted smooth normal.
+    /// the unit normal of each triangle and the area weighted smooth normal of each point
     private static func normals(_ pointsFlat: [Float], triIndices: [Int32], pointCount ptCount: Int)
       -> (smooth: [SIMD3<Float>], faces: [SIMD3<Float>], valid: [Bool])
     {
@@ -287,7 +316,9 @@ public extension Akari
         let i2 = triIndices[idx * 3 + 2]
         guard i0 >= 0, i1 >= 0, i2 >= 0, Int(i0) < ptCount, Int(i1) < ptCount, Int(i2) < ptCount else { continue }
 
-        let p0 = point(i0); let p1 = point(i1); let p2 = point(i2)
+        let p0 = point(i0)
+        let p1 = point(i1)
+        let p2 = point(i2)
         let fn = cross(p1 - p0, p2 - p0)
         let fnLen = length(fn)
         guard fnLen > 1e-8 else { continue }
@@ -310,20 +341,23 @@ public extension Akari
       return (smooth, faceNormals, faceValid)
     }
 
-    /// Points whose faces all meet within the crease angle, which share one smooth normal.
+    /// the points whose faces all meet within the crease angle and so share one smooth normal
     private static func smoothVertices(_ topology: Topology, pointCount ptCount: Int, smooth: [SIMD3<Float>],
                                        faceNormals: [SIMD3<Float>], faceValid: [Bool]) -> [Bool]
     {
-      let hardEdgeCos: Float = 0.8660254 // cos(30°)
+      let hardEdgeCos: Float = 0.8660254 // cos of 30 degrees
       let faceStart = topology.vertexFaceStart
       let vertexFaces = topology.vertexFaces
       var vertexIsSmooth = [Bool](repeating: true, count: ptCount)
-      // a point is still smooth when every face is within half the crease of its normal.
-      let halfCreaseCos: Float = 0.9659258 // cos(15°)
+
+      // a point is still smooth when every face is within half the crease of its normal
+      let halfCreaseCos: Float = 0.9659258 // cos of 15 degrees
+
       for v in 0 ..< ptCount
       {
         let faces = Int(faceStart[v]) ..< Int(faceStart[v + 1])
         guard faces.count > 1 else { continue }
+
         if faces.count > 32
         {
           vertexIsSmooth[v] = faces.allSatisfy
@@ -350,7 +384,7 @@ public extension Akari
       return vertexIsSmooth
     }
 
-    /// Repairs mesh face winding inconsistencies.
+    /// flips triangles so each connected piece of the mesh winds the same way
     private static func repairWinding(_ indices: inout [Int32], _ uvs: inout [Float]) -> [Bool]
     {
       let triCount = indices.count / 3
@@ -358,11 +392,12 @@ public extension Akari
 
       func edgeKey(_ a: Int32, _ b: Int32) -> UInt64
       {
-        let ua = UInt64(bitPattern: Int64(a)); let ub = UInt64(bitPattern: Int64(b))
+        let ua = UInt64(bitPattern: Int64(a))
+        let ub = UInt64(bitPattern: Int64(b))
         return ua < ub ? (ua << 32) | ub : (ub << 32) | ua
       }
 
-      // flat linked lists over the triangles.
+      // flat linked lists over the triangles
       var adjacencyHead = [Int32](repeating: -1, count: triCount)
       var adjacencyTri: [Int32] = []
       var adjacencyNext: [Int32] = []
@@ -379,8 +414,7 @@ public extension Akari
         adjacencyHead[from] = Int32(adjacencyTri.count - 1)
       }
 
-      // pack the owner triangle and its edge direction into one Int64,
-      // which keeps the dictionary small enough for a few million triangles.
+      // packs the owner triangle and its edge direction in one int so the table stays small for millions of triangles
       var edgeFirstOwner: [UInt64: Int64] = [:]
       edgeFirstOwner.reserveCapacity(triCount * 3)
 
@@ -388,6 +422,7 @@ public extension Akari
       {
         let key = edgeKey(a, b)
         let forward = a < b
+
         if let packed = edgeFirstOwner.removeValue(forKey: key)
         {
           let firstTri = Int(packed >> 1)
@@ -404,8 +439,11 @@ public extension Akari
 
       for t in 0 ..< triCount
       {
-        let v0 = indices[t * 3 + 0]; let v1 = indices[t * 3 + 1]; let v2 = indices[t * 3 + 2]
+        let v0 = indices[t * 3 + 0]
+        let v1 = indices[t * 3 + 1]
+        let v2 = indices[t * 3 + 2]
         guard v0 >= 0, v1 >= 0, v2 >= 0, v0 != v1, v1 != v2, v2 != v0 else { continue }
+
         processEdge(v0, v1, t)
         processEdge(v1, v2, t)
         processEdge(v2, v0, t)
@@ -419,6 +457,7 @@ public extension Akari
         visited[seed] = true
         var component = [seed]
         var queue = [seed]
+
         while let t = queue.popLast()
         {
           var edge = adjacencyHead[t]
@@ -452,6 +491,7 @@ public extension Akari
       {
         indices.swapAt(t * 3 + 1, t * 3 + 2)
         guard uvs.count > 2 else { continue }
+
         let uo = t * 6
         uvs.swapAt(uo + 2, uo + 4)
         uvs.swapAt(uo + 3, uo + 5)
@@ -468,6 +508,7 @@ public extension Akari
     {
       let slot = Int32(verts.count / 8)
       let o = p * 3
+
       verts.append(pointsFlat[o + 0])
       verts.append(pointsFlat[o + 1])
       verts.append(pointsFlat[o + 2])
@@ -476,6 +517,7 @@ public extension Akari
       verts.append(n.z)
       verts.append(uv.x)
       verts.append(uv.y)
+
       return slot
     }
   }
@@ -483,9 +525,7 @@ public extension Akari
 
 public extension Swift.Array where Element == Float
 {
-  /// Copies a packed 16 float (column major) matrix into a
-  /// GfMatrix4d. Used to reinterpret per mesh transform and
-  /// camera matrices for LabGL's immediate mode capture.
+  /// a packed column major matrix as a `GfMatrix4d`, for the transforms in labgl's immediate mode capture
   var toMatrix4d: Pixar.GfMatrix4d
   {
     precondition(count == 16, "expected a packed 4x4 matrix (16 floats)")

@@ -38,19 +38,19 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-/// The lens a view's depth of field focuses with.
+/// the lens a view's depth of field focuses with.
 public struct DepthOfFieldSettings: Sendable
 {
-  /// Whether these replace the USD camera's own `fStop` and `focusDistance`.
+  /// whether these replace the usd camera's own `fStop` and `focusDistance`.
   public var overridesCamera = false
-  /// The prim kept in focus, empty for `focusDistance`.
+  /// the prim kept in focus, empty for `focusDistance`.
   public var focusObject = ""
-  /// Where on the focus object, in its own space, or the world's when it isn't on the stage.
+  /// where on the focus object, in its own space, or the world's when it isn't on the stage.
   public var focusPoint: SIMD3<Double> = .zero
-  /// In meters.
+  /// in meters.
   public var focusDistance: Float = 10
   public var fStop: Float = 2.8
-  /// The widest blur, in pixels of a 1920 wide frame.
+  /// the widest blur, in pixels of a 1920 wide frame.
   public var maxSize: Float = 32
 
   public init()

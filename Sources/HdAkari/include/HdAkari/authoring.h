@@ -61,29 +61,28 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// Journals every change to `layer` from now on, for undo, until the journal is cleared.
+/// records every change to `layer` from now on for undo, until the journal is cleared
 HDAKARI_API void HdAkariJournalWatch(SdfLayerHandle const &layer);
 
-/// How many changes the journal holds before the current state.
+/// how many changes the journal holds before the current state
 HDAKARI_API size_t HdAkariJournalPosition();
 
-/// Undoes or redoes the journaled changes until `position` of them are applied,
-/// a change after an undo drops the ones past it.
+/// undoes or redoes changes until `position` of them are applied, a new change after an undo drops the ones past it
 HDAKARI_API void HdAkariJournalSeek(size_t position);
 
-/// Forgets every journaled change.
+/// forgets every recorded change
 HDAKARI_API void HdAkariJournalClear();
 
-/// A value as the properties panel shows it.
+/// a value as the properties panel shows it
 HDAKARI_API std::string HdAkariDescribeValue(VtValue const &value);
 
-/// A value's numbers into `out`, up to 3 of them, how many it has, 0 when it isn't numeric.
+/// writes up to 3 of a value's numbers into `out` and returns how many, 0 when it isn't numeric
 HDAKARI_API int HdAkariValueNumbers(VtValue const &value, double *out);
 
-/// The times `attribute` has keys at.
+/// the times `attribute` has keys at
 HDAKARI_API std::vector<double> HdAkariTimeSamples(UsdAttribute const &attribute);
 
-/// Writes `value` to `attribute` at `time`, or as its default when `time` is NaN.
+/// writes `value` to `attribute` at `time`, or as its default when `time` is nan
 HDAKARI_API bool HdAkariSetValue(UsdAttribute const &attribute, VtValue const &value, double time);
 
 PXR_NAMESPACE_CLOSE_SCOPE

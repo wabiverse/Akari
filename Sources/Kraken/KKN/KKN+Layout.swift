@@ -54,7 +54,7 @@ import class SwiftCrossUI.Published
 
 extension Kraken
 {
-  /// The 3D viewport's editing state: modes, tools, the selection and the 3D cursor.
+  /// the 3d viewport's editing state, its modes, tools, selection and 3d cursor
   @MainActor
   final class Layout: ObservableObject
   {
@@ -71,8 +71,11 @@ extension Kraken
     enum Tab: String, CaseIterable
     {
       case layout = "Layout"
+      /// dressing a set out of the asset libraries, objects down the side and materials along the bottom
+      case assets = "Assets"
       case modeling = "Modeling"
       case shading = "Shading"
+      case sculpting = "Sculpting"
     }
 
     struct Widget
@@ -101,6 +104,15 @@ extension Kraken
 
     @Published var tab: Tab = .layout
     @Published var mode: Mode = .object
+
+    /// the icons of object, edit and sculpt mode, the same in their menu, the header and the touch bar
+    static let objectSymbol = "cube", editSymbol = "point.3.filled.connected.trianglepath.dotted", sculptSymbol = "hand.draw.fill"
+
+    /// the icon of the mode the viewport is in
+    var modeSymbol: String
+    {
+      tab == .sculpting ? Self.sculptSymbol : mode == .edit ? Self.editSymbol : Self.objectSymbol
+    }
     @Published var shading: ViewportShading = .rendered
     @Published var tool: Tool = .select
     @Published var selectMode: SelectMode = .vertex
@@ -109,15 +121,29 @@ extension Kraken
     {
       didSet { applyOverlays() }
     }
-    /// The shot's layers, strongest first, and the department layer edits go to.
+
+    /// the shot's layers, strongest first, and the department layer edits go to
     @Published var layers: [(identifier: String, name: String)] = []
     @Published var department = ""
+
+    /// the variant edits go into, nil while editing the layer itself
+    @Published var editingVariant: String?
+
+    /// the render settings the hud edits, for scripts
+    var settings: HUDState?
     @Published var xray = false
     @Published var showsToolbar = true
 
-    #if os(macOS)
-      weak var viewport: LayoutView?
-    #endif
+    /// transforms snap to whole steps the way a held ctrl does, for when there's no keyboard
+    @Published var snaps = false
+
+    /// the screen's safe area as the touch layout last saw it, which swiftcrossui's own size misses after a rotation
+    @Published var safeArea: ViewSize?
+
+    /// picks add to the selection the way a held shift does, for when there's no keyboard
+    @Published var extendsSelection = false
+
+    weak var viewport: LayoutView?
     var cursor = SIMD3<Double>.zero
     var widgets: [Widget] = []
     var placements: [String: Placement] = [:]
@@ -128,29 +154,51 @@ extension Kraken
     let hydra: Hydra.RenderEngine
     let engine: Akari.RenderEngine
     let inspector: Inspector
-    /// Keyframe editing for the properties, viewport and dope sheet.
-    lazy var keyframes = Keyframes(layout: self)
-    let driver: Akari.FrameDriver?
-    let isZUp: Bool
-    let metersPerUnit: Double
 
-    /// Edits since the scene was opened or last saved.
+    /// keyframe editing for the properties, viewport and dope sheet
+    lazy var keyframes = Keyframes(layout: self)
+
+    /// the sculpting session the sculpting tab works in
+    lazy var sculpt: Sculpt =
+    {
+      let sculpt = Sculpt()
+      sculpt.layout = self
+      return sculpt
+    }()
+    let driver: Akari.FrameDriver?
+
+    /// the stage up axis and units, kept current as scenes open and change
+    var isZUp: Bool
+    var metersPerUnit: Double
+
+    /// whether anything was edited since the scene was opened or last saved
     var edited = false
-    /// The scene's file, nil for a new scene only in memory.
+
+    /// the scene's file, nil for a new scene that only lives in memory
     var sceneURL: URL?
-    /// The app's part of a scene change: its title, render output, playback range and probes.
+
+    /// the app's part of a scene change, its title, render output, playback range and probes
     var adoptStage: (@MainActor (URL?, [Double]) -> Void)?
-    /// Bumped whenever the scene's prims change, for views listing them.
+
+    /// toggles in and out of the render camera's view, what numpad 0 does
+    var toggleCamera: (@MainActor () -> Void)?
+
+    /// bumped whenever the scene's prims change, for views listing them
     var sceneRevision = 0
-    /// Set while a modal transform owns the selection's placements, or a light handle its widget.
+
+    /// set while a modal transform owns the selection's placements, or a light handle owns its widget
     var dragging: Drag?
+    {
+      didSet { engine.labfx.isEditing = dragging != nil }
+    }
+
     var hidden: [String] = []
 
     var widgetPaths: [String] = []
     var rescan = true
     var refreshing = false
 
-    /// The session layer and what was selected, an undo step.
+    /// an undo step, where the layer journal stood and what was selected
     struct Step: Sendable
     {
       var text: String
@@ -168,7 +216,7 @@ extension Kraken
       (selection, mesh?.verts ?? [], mesh?.edges ?? [], mesh?.selectedFaces ?? [])
     }
 
-    var tabShading: [Tab: ViewportShading] = [.layout: .solid, .modeling: .solid, .shading: .materialPreview]
+    var tabShading: [Tab: ViewportShading] = [.layout: .solid, .assets: .rendered, .modeling: .solid, .shading: .materialPreview, .sculpting: .solid]
     let transformWriter = Writer()
     private let meshWriter = Writer()
     let lightWriter = Writer()
@@ -182,10 +230,14 @@ extension Kraken
       inspector = Inspector(hydra: hydra)
       isZUp = UsdGeom.getUpAxis(for: hydra.stage) == .z
       metersPerUnit = UsdGeom.getMetersPerUnit(for: hydra.stage)
+
       self.driver?.select(objects: [])
+      if let launch = Kraken.parseArgs().viewport.shading { tabShading[tab] = launch }
       setShading(tabShading[tab] ?? .solid)
+      if !Kraken.parseArgs().viewport.overlays { overlays = false }
       applyOverlays()
       inspector.layout = self
+
       let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
         MainActor.assumeIsolated { self?.refresh() }
       }
@@ -194,7 +246,7 @@ extension Kraken
       self.timer = timer
     }
 
-    /// One meter, in the stage's units.
+    /// one meter in the stage's units
     var unit: Double
     {
       1 / max(metersPerUnit, 1e-9)
@@ -212,7 +264,7 @@ extension Kraken
 
     // MARK: stage access
 
-    /// Coalesces writes that only the latest of matters, a drag's transforms or points.
+    /// coalesces writes where only the latest one matters, like a drag's transforms or points
     final class Writer: @unchecked Sendable
     {
       private let lock = NSLock()
@@ -253,7 +305,7 @@ extension Kraken
       hydra.performOnFrameQueue { work(hydra.stage) }
     }
 
-    /// Marks where the layer journal stands before an edit, for undo.
+    /// marks where the layer journal stands before an edit, for undo
     func checkpoint()
     {
       edited = true
@@ -262,9 +314,11 @@ extension Kraken
       { [self] stage in
         Authoring.watch(stage)
         let text = String(Pixar.HdAkariJournalPosition())
+
         DispatchQueue.main.async
         { [weak self] in
           guard let self else { return }
+
           self.undoStack.append(Step(text: text, selection: kept.selection, verts: kept.verts, edges: kept.edges,
                                      faces: kept.faces))
           if self.undoStack.count > 64 { self.undoStack.removeFirst() }
@@ -275,6 +329,12 @@ extension Kraken
 
     func undo()
     {
+      if tab == .sculpting
+      {
+        sculpt.undo()
+        return
+      }
+
       guard let target = undoStack.popLast() else
       {
         status = "Nothing to undo"
@@ -286,6 +346,12 @@ extension Kraken
 
     func redo()
     {
+      if tab == .sculpting
+      {
+        sculpt.redo()
+        return
+      }
+
       guard let target = redoStack.popLast() else
       {
         status = "Nothing to redo"
@@ -305,10 +371,13 @@ extension Kraken
         let current = String(Pixar.HdAkariJournalPosition())
         Pixar.HdAkariJournalSeek(Int(target.text) ?? 0)
         let reloaded = editing.map { Self.readMesh(stage, $0, time) } ?? nil
+
         DispatchQueue.main.async
         { [weak self] in
           guard let self else { return }
+
           keep(Step(text: current, selection: now.selection, verts: now.verts, edges: now.edges, faces: now.faces))
+
           if editing != nil
           {
             if var next = reloaded
@@ -328,14 +397,15 @@ extension Kraken
 
           self.primsChanged()
           self.select(target.selection)
-          // Undo restores the keys too, so refresh them.
+
+          // undo restores the keys too so refresh them
           self.inspector.reload()
           self.keyframes.changed(reload: false)
         }
       }
     }
 
-    /// Writes the scene's changed layers, a new scene to the file it asks for, `path` saving it as that file instead.
+    /// writes the scene's changed layers. a new scene asks for a file first and `path` saves it as that file instead
     func save(as path: String? = nil, then done: (@MainActor () -> Void)? = nil)
     {
       guard path != nil || !isUntitled else
@@ -344,31 +414,47 @@ extension Kraken
         return
       }
 
+      // a sculpt waiting to be written goes in first so the save carries it
+      if tab == .sculpting { sculpt.flush(now: true) }
+
+      let time = hydra.currentTimeCode
       onStage
       { [self] stage in
+        // applying a modifier only reaches the shot here, everything else it does stays in the session layer
+        Modifiers.flush(stage, Modifiers.stacked(stage), time)
+
+        // the sculpt volumes written so far are what the saved surfaces hash to, so they stay cached
+        SculptCache.claimPending()
         let saved = Authoring.save(stage, as: path)
+
         DispatchQueue.main.async
         { [weak self] in
           guard let self else { return }
           self.status = !saved ? "Couldn't save" : path.map { "Saved \(URL(fileURLWithPath: $0).lastPathComponent)" } ?? "Saved"
           guard saved else { return }
+
           self.edited = false
           self.undoStack.removeAll()
           self.redoStack.removeAll()
-          // saved as another file, that file is the scene from now on.
-          if let path { self.replaceStage(with: URL(fileURLWithPath: path), asking: false) }
-          else { self.primsChanged() }
-          done?()
+
+          // saved under another name, so that file is the scene from now on
+          if let path { self.replaceStage(with: URL(fileURLWithPath: path), asking: false, keepView: true, then: done) }
+          else
+          {
+            self.primsChanged()
+            done?()
+          }
         }
       }
     }
 
     // MARK: edit mode
 
-    /// Runs `body` on the edit mesh as one undoable edit, then writes it.
+    /// runs `body` on the edit mesh as one undoable edit, then writes it
     func editMesh(_ body: (inout EditMesh, simd_double4x4) -> Void)
     {
       guard var current = mesh else { return }
+
       checkpoint()
       body(&current, meshWorld)
       mesh = current
@@ -378,13 +464,23 @@ extension Kraken
     func writeMesh()
     {
       guard let mesh else { return }
+
       let path = mesh.path
       let flat = mesh.points.flatMap { [$0.x, $0.y, $0.z] }
       let counts = mesh.faces.map { Int32($0.count) }
       let indices = mesh.faces.flatMap { $0.map(Int32.init) }
+      let creased = mesh.creases.sorted { ($0.key.a, $0.key.b) < ($1.key.a, $1.key.b) }
+      let creases = creased.flatMap { [Int32($0.key.a), Int32($0.key.b)] }
+      let creaseSharpness = creased.map { $0.value * EditMesh.creaseSharpness }
+      let sharp = mesh.sharp.sorted { ($0.a, $0.b) < ($1.a, $1.b) }.flatMap { [Int32($0.a), Int32($0.b)] }
+
+      let time = hydra.currentTimeCode
       meshWriter.submit(hydra)
       { stage in
-        SceneEdit.setMesh(stage, path, flat, counts, indices)
+        // the edit goes onto the cage, so the stacks result comes off first and goes back on after
+        Modifiers.clearSession(stage, path)
+        SceneEdit.setMesh(stage, path, flat, counts, indices, creases: creases, creaseSharpness: creaseSharpness, sharp: sharp)
+        Modifiers.sync(stage, path, time)
       }
     }
   }

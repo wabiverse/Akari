@@ -65,7 +65,8 @@
 # include <pxr/base/gf/vec3i.h>
 # include <pxr/base/vt/array.h>
 # include <pxr/base/vt/types.h>
-# include <pxr/base/tf/sharedPtrRetainReleaseHelper.h>
+# include <HdAkari/swiftInterop.h>
+# include <HdAkari/sharedPtrRetainReleaseHelper.h>
 # include <pxr/base/tf/stringUtils.h>
 #endif
 
@@ -83,58 +84,88 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/// @struct HdAkariMeshData
-///
-/// The CPU-side geometry Akari keeps for one mesh Rprim.
-///
-/// Updated in Sync and consumed by the GPU draw path, which gets
-/// triangulated on ingest so the renderer never retessellates per
-/// frame.
-///
+/// the weights building each refined point from cage points, row `i` spans `offsets[i]` up to `offsets[i + 1]`
+struct HdAkariStencils
+{
+  VtIntArray offsets;
+  VtIntArray indices;
+  VtFloatArray weights;
+
+  bool IsEmpty() const { return offsets.empty(); }
+};
+
+/// how a resolved material draws its surface, stored the same by a full sync and a look only update
+struct HdAkariSurface
+{
+  bool transparent = false;  // a constant opacity below 1 without a threshold, drawn by the transparency pass
+  bool hidden = false;       // a constant opacity under its threshold cuts the whole surface away
+  bool shadowCutout = true;  // the material can cut holes in the shadow
+  bool emitter = false;      // black and emissive, light that casts no shadow
+};
+
+/// the triangulated geometry akari keeps for one mesh rprim, updated in sync and read by the draw path
 struct HdAkariMeshData
 {
   SdfPath id;
   VtVec3fArray points;          // object space
   VtVec3iArray triangleIndices; // into points
-  VtVec2fArray uvs;             // atlas space UV, one per triangleIndices corner, or one constant value
+  VtVec2fArray uvs;             // atlas space uv, one per `triangleIndices` corner or one constant value
   GfMatrix4d transform = GfMatrix4d(1.0);
-  /// The matrices taking `transform`'s output to world space, one per
-  /// instance, empty when the mesh is drawn once at `transform`. Shared with
-  /// every rprim under the same prototype, see `HdAkariInstanceSet`.
+
+  /// the matrices taking `transform`'s output to world space per instance, empty when drawn once, shared under a prototype
   VtMatrix4fArray instances;
   uint64_t instancesKey = 0;
+
   GfVec3f displayColor = GfVec3f(0.8f, 0.8f, 0.8f);
-  float opacity = 1.0f;   // from the bound material's UsdPreviewSurface.
-  bool transparent = false; // a constant opacity below 1 without a threshold, drawn by the transparency pass.
-  bool emitter = false;     // black and emissive, light that casts no shadow.
-  /// Whether the material can cut holes in the shadow.
+  float opacity = 1.0f;     // from the bound material's preview surface
+  bool transparent = false; // a constant opacity below 1 without a threshold, drawn by the transparency pass
+  bool emitter = false;     // black and emissive, light that casts no shadow
+  bool doubleSided = true;  // false draws only the side its winding faces, as the mesh authors
+
+  /// whether the material can cut holes in the shadow
   bool shadowCutout = true;
-  bool smooth = false;      // a subdivision surface, shaded without hard edges.
-  /// Each triangle's Ptex face, its corners' places on it two bits apiece above.
+  bool smooth = false;      // a subdivision surface, shaded without hard edges
+  bool faceted = false;     // a polygon mesh without authored normals, shaded flat per face
+
+  /// a polygon mesh's authored normals, one per `triangleIndices` corner, empty when it authors none
+  VtVec3fArray normals;
+
+  /// each triangle's ptex face, with its corners' places on it two bits each above
   VtIntArray triangleFaces;
-  /// Its faces' resolutions and the map's streaming id, -1 when it doesn't stream.
+
+  /// its faces' resolutions and the map's streaming id, -1 when it doesn't stream
   VtIntArray faceRes;
   int ptexMap = -1;
-  float roughness = 0.5f; // UsdPreviewSurface's own default.
-  float metallic = 0.0f;  // UsdPreviewSurface's own default.
-  bool visible = true;
-  uint64_t dataRevision = 0; // incremented each Sync, GPU cache keys off this.
-  uint64_t topologyRevision = 0; // only moves with the triangles and uvs, not the points.
-  /// Hashes the object space geometry and material, so identical prototypes
-  /// under different instancers can share one draw. Zero when not computed.
-  uint64_t contentKey = 0;
-  int32_t primId = -1;       // the Rprim's id, written to the primId AOV for picking.
 
-  // UsdSkel meshes skinned on the GPU, `points` then holds the bind space rest points.
-  int32_t skinInfluencesPerPoint = 0; // 0 when the points arrive already skinned.
-  VtVec2fArray skinInfluences;        // (joint, weight), skinInfluencesPerPoint per point.
-  VtMatrix4fArray skinXforms;         // per joint, bind space to the prim's local space.
-  GfVec3f skinMin = GfVec3f(0.0f), skinMax = GfVec3f(0.0f); // this frame's local bounds.
-  uint64_t skinRevision = 0;          // only moves with the influences and rest points.
+  /// the cage of a refined mesh on its limit surface, drawn by shadows, probes and distant views
+  VtVec3fArray coarsePoints;
+  VtVec3iArray coarseTriangles;
+  VtVec2fArray coarseUvs;
+  VtIntArray coarseTriangleFaces;
+
+  /// an animated subdivision surface sends its moving cage and refines on the gpu through `stencils`
+  VtVec3fArray cagePoints;
+  HdAkariStencils stencils;
+
+  float roughness = 0.5f; // the preview surface default
+  float metallic = 0.0f;  // the preview surface default
+  bool visible = true;
+  uint64_t dataRevision = 0;     // bumped each sync, the gpu cache keys off it
+  uint64_t topologyRevision = 0; // only moves with the triangles and uvs, not the points
+
+  /// a hash of the object space geometry and material so identical prototypes share a draw, zero when not computed
+  uint64_t contentKey = 0;
+  int32_t primId = -1;       // the rprim's id, written to the prim id aov for picking
+
+  // skel meshes skinned on the gpu, where `points` holds the bind space rest points
+  int32_t skinInfluencesPerPoint = 0; // 0 when the points arrive already skinned
+  VtVec2fArray skinInfluences;        // joint and weight pairs, `skinInfluencesPerPoint` per point
+  VtMatrix4fArray skinXforms;         // per joint, from bind space to the prim's local space
+  GfVec3f skinMin = GfVec3f(0.0f), skinMax = GfVec3f(0.0f); // this frame's local bounds
+  uint64_t skinRevision = 0;          // only moves with the influences and rest points
 
   size_t TriangleCount() const { return triangleIndices.size(); }
 };
-
 
 struct HdAkariLightData
 {
@@ -148,21 +179,23 @@ struct HdAkariLightData
   float radius = 0.5f;
   float diffuse = 1.0f;
   float specular = 1.0f;
-  /// A cylinder light's length along its local x axis and its own radius, 0 for the rest.
+
+  /// a cylinder light's length along its local x axis and its own radius, 0 for the rest
   float length = 0.0f;
   float tubeRadius = 0.0f;
-  /// A rect light's size along its local x and y, emitting toward -z, a disk's as the square of its area, 0 for the rest.
+
+  /// a rect light's size along local x and y emitting down z, a disk's as the square of its area, 0 otherwise
   float width = 0.0f;
   float height = 0.0f;
+
   bool hero = false;
   bool visible = true;
-  bool cameraVisible = true; // false keeps its glow out of what the camera sees through the fog, it still lights.
-  bool probes = true;        // false leaves it out of the light probes' bounce, for lights that move every frame.
+  bool cameraVisible = true; // false keeps its glow out of what the camera sees through the fog, it still lights
+  bool probes = true;        // false leaves it out of the light probes' bounce, for lights that move every frame
   uint64_t dataRevision = 0;
 };
 
-/// A dome light, the environment every direction sees, `textureFile` is
-/// resolved and empty for a constant color.
+/// a dome light, the environment every direction sees, its texture empty for a constant color
 struct HdAkariDomeData
 {
   SdfPath id;
@@ -176,7 +209,7 @@ struct HdAkariDomeData
   bool visible = true;
 };
 
-/// A distant light, the sun or moon, `angle` its apparent diameter in degrees.
+/// a distant light like the sun or moon, `angle` is its apparent diameter in degrees
 struct HdAkariDistantData
 {
   SdfPath id;
@@ -190,9 +223,7 @@ struct HdAkariDistantData
   bool visible = true;
 };
 
-/// A light probe authored as a gprim with `primvars:akari:lightProbe`
-/// ("volume" or "sphere"), its local bounds from `transform` give the extent.
-/// Volumes may set `primvars:akari:lightProbeResolution` (int3) probe counts.
+/// a light probe authored as a gprim with a volume or sphere light probe primvar, its local bounds give the extent
 struct HdAkariLightProbeData
 {
   SdfPath id;
@@ -201,12 +232,10 @@ struct HdAkariLightProbeData
   float maxX = 1.0f, maxY = 1.0f, maxZ = 1.0f;
   bool isSphere = false;
   bool visible = true;
-  int resolutionX = 0, resolutionY = 0, resolutionZ = 0; // 0 = auto
+  int resolutionX = 0, resolutionY = 0, resolutionZ = 0; // 0 picks automatically
 };
 
-/// A planet with an atmosphere, authored as a sphere with `primvars:akari:atmosphere`.
-/// The sphere's `radius` and `transform` place the ground, in stage units, every
-/// other length is in kilometers and every coefficient per kilometer.
+/// a planet with an atmosphere authored as a sphere, ground in stage units and every other length in kilometers
 struct HdAkariAtmosphereData
 {
   SdfPath id;
@@ -228,7 +257,8 @@ struct HdAkariAtmosphereData
   float nightIntensity = 1.0f;
   float aerialPerspectiveDistance = 128.0f;
   float skyIntensity = 1.0f;
-  // the procedural planet, `primvars:akari:planet`, in place of the ground albedo or textures.
+
+  // the procedural planet from `primvars:akari:planet`, in place of the ground albedo or textures
   bool planet = false;
   float planetSeed = 0.0f;
   float seaLevel = 0.62f;
@@ -245,8 +275,9 @@ struct HdAkariAtmosphereData
   float cloudEvolution = 0.0f;
   float cloudOpacity = 0.95f;
   float cloudScale = 1.0f;
-  float cloudThickness = 4.0f; // km, the slab the clouds fill above cloudAltitude.
-  // the surface palette, negative where unauthored (the built in colors then).
+  float cloudThickness = 4.0f; // the slab in km the clouds fill above `cloudAltitude`
+
+  // the surface palette, negative where unauthored so the built in colors apply
   float landColorLow[3] = {-1.0f, -1.0f, -1.0f};
   float landColorHigh[3] = {-1.0f, -1.0f, -1.0f};
   float forestColor[3] = {-1.0f, -1.0f, -1.0f};
@@ -258,13 +289,14 @@ struct HdAkariAtmosphereData
   float bloomAmount = 0.0f;
   float cityIntensity = 0.02f;
   float cityDensity = 0.5f;
-  float cloudSwirl = 0.0f; // feeds the cloud noise back into itself
-  float detail = 0.0f; // fine speckle across the ground
+  float cloudSwirl = 0.0f;    // feeds the cloud noise back into itself
+  float detail = 0.0f;        // fine speckle across the ground
   float cloudSoftness = 0.0f; // 1 drops the billowed edges for soft, round weather
-  float cloudShading = 0.0f; // wrap lit tops and dark undersides
+  float cloudShading = 0.0f;  // wrap lit tops and dark undersides
   float waves = 0.0f;
-  float waveTime = 0.0f; // seconds
-  // an art directed halo, fill and rim (after McGuire's Tiny Planet), all off by default.
+  float waveTime = 0.0f;      // in seconds
+
+  // an art directed halo, fill and rim, all off by default
   float haloIntensity = 0.0f;
   float haloColor[3] = {0.45f, 0.72f, 1.0f};
   float haloRadius = 0.25f; // of the planet's radius
@@ -272,12 +304,13 @@ struct HdAkariAtmosphereData
   float haloShadow = 0.75f;
   float fillIntensity = 0.0f;
   float fillColor[3] = {0.55f, 0.65f, 1.0f};
-  float rimIntensity = 0.0f; // how far (0-1) the limb dissolves into rimColor
+  float rimIntensity = 0.0f; // how far from 0 to 1 the limb dissolves into `rimColor`
   float rimColor[3] = {0.6f, 0.8f, 1.0f};
+
   bool visible = true;
 };
 
-/// A `UsdVolVolume`'s density field and how it scatters, `primvars:akari:volume:*` on the volume.
+/// a `UsdVolVolume` density field and how it scatters, from `primvars:akari:volume:*` on the volume
 struct HdAkariVolumeData
 {
   SdfPath id;
@@ -292,7 +325,7 @@ struct HdAkariVolumeData
   bool visible = true;
 };
 
-/// An `OpenVDBAsset` field, `filePath` resolved.
+/// an `OpenVDBAsset` field with `filePath` resolved
 struct HdAkariFieldData
 {
   SdfPath id;
@@ -300,11 +333,7 @@ struct HdAkariFieldData
   std::string fieldName;
 };
 
-/// How a stylized mesh is drawn, `primvars:akari:*` on the mesh:
-/// `shadingModel` 0 wireframe, 1 flat, 2 Gouraud, 3 Phong, 4 radiosity / Whitted, 5 full (fractions blend),
-/// an `shadingModelFront` sphere (center, radius) inside which the mesh is at `shadingModel` and outside one
-/// shadingModel behind, `color` (1 color, 0 luminance), `unlit` (black outside the front) and `assemble` (0
-/// collapsed into one triangle, 1 whole).
+/// how a stylized mesh is drawn from its akari primvars, shading model, front sphere, color, unlit and assembly
 struct HdAkariStyleData
 {
   int32_t primId = -1;
@@ -322,8 +351,7 @@ struct HdAkariStyleData
   float size = 0.4f;
 };
 
-/// The meshes Hydra touched since the last drain, the ones still
-/// visible, and the path keys of the ones removed or hidden.
+/// the still visible meshes hydra touched since the last drain and the keys of those removed or hidden
 struct HdAkariMeshChanges
 {
   std::vector<HdAkariMeshData> updated;

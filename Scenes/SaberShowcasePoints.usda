@@ -1,0 +1,199 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    doc = """Akari saber showcase with eight point lights down each blade in place of its cylinder light."""
+    endTimeCode = 1
+    framesPerSecond = 24
+    metersPerUnit = 1
+    startTimeCode = 1
+    subLayers = [@SaberShowcase.usda@]
+    upAxis = "Z"
+)
+
+over "World"
+{
+    over "Dark"
+    {
+        over "Blade"
+        {
+            over "Light" (
+                active = false
+            )
+            {
+            }
+
+            def SphereLight "Point0"
+            {
+                color3f inputs:color = (1, 0.04, 0.03)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.2131)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point1"
+            {
+                color3f inputs:color = (1, 0.04, 0.03)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.3294)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point2"
+            {
+                color3f inputs:color = (1, 0.04, 0.03)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.4456)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point3"
+            {
+                color3f inputs:color = (1, 0.04, 0.03)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.5619)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point4"
+            {
+                color3f inputs:color = (1, 0.04, 0.03)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.6781)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point5"
+            {
+                color3f inputs:color = (1, 0.04, 0.03)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.7944)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point6"
+            {
+                color3f inputs:color = (1, 0.04, 0.03)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.9106)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point7"
+            {
+                color3f inputs:color = (1, 0.04, 0.03)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 1.0269)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+        }
+    }
+
+    over "Light"
+    {
+        over "Blade"
+        {
+            over "Light" (
+                active = false
+            )
+            {
+            }
+
+            def SphereLight "Point0"
+            {
+                color3f inputs:color = (0.45, 0.3, 1)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.2131)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point1"
+            {
+                color3f inputs:color = (0.45, 0.3, 1)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.3294)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point2"
+            {
+                color3f inputs:color = (0.45, 0.3, 1)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.4456)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point3"
+            {
+                color3f inputs:color = (0.45, 0.3, 1)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.5619)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point4"
+            {
+                color3f inputs:color = (0.45, 0.3, 1)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.6781)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point5"
+            {
+                color3f inputs:color = (0.45, 0.3, 1)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.7944)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point6"
+            {
+                color3f inputs:color = (0.45, 0.3, 1)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 0.9106)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            def SphereLight "Point7"
+            {
+                color3f inputs:color = (0.45, 0.3, 1)
+                float inputs:intensity = 639.4
+                float inputs:radius = 0.02
+                bool treatAsPoint = 0
+                double3 xformOp:translate = (0, 0, 1.0269)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+        }
+    }
+
+}

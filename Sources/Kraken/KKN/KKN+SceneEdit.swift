@@ -46,10 +46,10 @@ import simd
 
 extension Kraken
 {
-  /// The layout workspace's scene edits, each aimed where ``Authoring`` routes it.
+  /// the layout workspace's scene edits, each aimed where ``authoring`` routes it.
   enum SceneEdit
   {
-    /// What a widget draws, the camera or light its prim is.
+    /// what a widget draws, the camera or light its prim is.
     enum WidgetKind
     {
       case camera
@@ -62,7 +62,7 @@ extension Kraken
       case cylinderLight
       case other
 
-      /// Lights the viewport shows aim and size handles for.
+      /// lights the viewport shows aim and size handles for.
       var hasLightHandles: Bool
       {
         switch self
@@ -72,7 +72,7 @@ extension Kraken
         }
       }
 
-      /// Widgets drawn without their transform's scale.
+      /// widgets drawn without their transform's scale.
       var ignoresScale: Bool
       {
         switch self
@@ -103,6 +103,11 @@ extension Kraken
       var points: [Float] = []
       var counts: [Int32] = []
       var indices: [Int32] = []
+      /// each creased edge's two verts, and its usd crease sharpness.
+      var creases: [Int32] = []
+      var creaseSharpness: [Float] = []
+      /// each sharp edge's two verts.
+      var sharp: [Int32] = []
     }
 
     struct Attribute
@@ -113,7 +118,7 @@ extension Kraken
       var components = 0
       var values: [Double] = [0, 0, 0]
       var texture = ""
-      /// Its shader definition's label and page, a nested page after a colon.
+      /// its shader definition's label and page, a nested page after a colon.
       var label = ""
       var page = ""
       var options: [Option] = []

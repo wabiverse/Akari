@@ -49,19 +49,14 @@ import HydraKit
 
 public extension Akari
 {
-  /// Renders stage frames for output. Each frame is its time code, seen through
-  /// the output camera, accumulated over the render sample count from a clean
-  /// history, read back, and written as an image or a movie frame.
-  ///
-  /// The whole job runs on Hydra's frame queue, so the interactive viewport
-  /// waits rather than interleaving its own frames (and sizes) between samples.
+  /// renders stage frames for output through its camera, accumulated from a clean history on the frame queue so the viewport waits rather than slips frames in between
   final class FinalRender: @unchecked Sendable
   {
     public enum Job: Sendable, Equatable
     {
-      /// One frame, `F12`.
+      /// one frame, `F12`
       case image(frame: Int)
-      /// Every frame of the output range, `Ctrl F12`.
+      /// every frame of the output range, `Ctrl F12`
       case animation
     }
 
@@ -79,7 +74,7 @@ public extension Akari
       }
     }
 
-    /// A finished frame, display encoded RGBA, rows top to bottom.
+    /// a finished frame in display encoded rgba, rows top to bottom
     public struct Image: Sendable
     {
       public let width: Int
@@ -91,22 +86,22 @@ public extension Akari
     {
       public var job: Job
       public var status: Status = .preparing
-      /// The frame being rendered (a time code).
+      /// the frame being rendered, as a time code
       public var frame: Int
-      /// Position of `frame` in the job, from 1.
+      /// position of `frame` in the job, counting from 1
       public var frameNumber = 0
       public var frameCount: Int
       public var sample = 0
       public var samples: Int
-      /// Set to `frame` once that frame is written.
+      /// set to `frame` once that frame is written
       public var finishedFrame: Int?
       public var elapsed: TimeInterval = 0
       public var lastFrameTime: TimeInterval = 0
-      /// Estimated from the average frame time so far.
+      /// estimated from the average frame time so far
       public var remaining: TimeInterval?
-      /// The most recently finished frame.
+      /// the most recently finished frame
       public var image: Image?
-      /// Where the most recent frame or the movie was written.
+      /// where the most recent frame or the movie was written
       public var output: URL?
     }
 
@@ -120,7 +115,10 @@ public extension Akari
     private var _running = false
     private var _lastFrame: Frame?
 
-    /// The most recently rendered frame, at its full color depth.
+    /// called on the frame queue when a render takes the stage and when it gives it back, so the app can switch what it evaluates to its render settings
+    public var onRenderStage: (@Sendable (UsdStage, Double, Bool) -> Void)?
+
+    /// the most recently rendered frame at its full color depth
     public var lastFrame: Frame?
     {
       lock.withLock { _lastFrame }
@@ -134,7 +132,7 @@ public extension Akari
       hasAuthoredTimeCodeRange = hydra.stage.HasAuthoredTimeCodeRange()
     }
 
-    /// Reads the cameras, frame range and soundtrack of the stage hydra now shows.
+    /// reads the cameras, frame range and soundtrack of the stage hydra now shows
     public func adoptStage()
     {
       guard let hydra else { return }
@@ -147,7 +145,7 @@ public extension Akari
       lock.withLock { _running }
     }
 
-    /// Stops after the current sample, keeping what was written.
+    /// stops after the current sample and keeps what was written
     public func cancel()
     {
       lock.withLock { _cancelled = true }
@@ -158,8 +156,7 @@ public extension Akari
       lock.withLock { _cancelled }
     }
 
-    /// Starts `job` on the frame queue, reporting on the main actor.
-    /// Returns `false` when a render is already running.
+    /// starts `job` on the frame queue and reports on the main actor, false when a render is already running
     @discardableResult
     public func start(_ job: Job,
                       output: OutputSettings,
@@ -173,7 +170,12 @@ public extension Akari
         return true
       }
 
-      guard began, let hydra else { lock.withLock { _running = false }; return false }
+      guard began, let hydra
+      else
+      {
+        lock.withLock { _running = false }
+        return false
+      }
 
       hydra.performOnFrameQueue
       { [self] in
@@ -184,11 +186,11 @@ public extension Akari
       return true
     }
 
-    /// Runs `job` on the calling thread, for background (`-b`) renders.
-    /// Call it from a thread that isn't drawing a viewport.
+    /// runs `job` on the calling thread for background renders, from a thread that isn't drawing a viewport
     public func runBlocking(_ job: Job, output: OutputSettings, onProgress: @escaping @Sendable (Progress) -> Void)
     {
       guard let hydra else { return }
+
       lock.withLock
       {
         _running = true
@@ -220,6 +222,7 @@ public extension Akari
         progress.status = .failed("the render engine went away")
         return report(progress)
       }
+
       #if canImport(Metal)
         let size = output.pixelSize
         let camera = output.cameraPath.map { UsdGeom.Camera(hydra.stage.getPrim(at: $0)) }
@@ -243,10 +246,19 @@ public extension Akari
         let saved = ViewState(hydra.viewCamera, timeCode: hydra.currentTimeCode)
         let isZUp = UsdGeom.getUpAxis(for: hydra.stage) == .z
         let began = Date()
+
+        // final renders refine subdivision surfaces to the render level and the viewport gets its own back after
+        let viewportComplexity = hydra.complexity
+        Pixar.HdAkariSetSubdivisionRender(true)
+        hydra.complexity = RenderSettings.complexity(subdivision: akari.settings.renderSubdivision)
+        onRenderStage?(hydra.stage, hydra.currentTimeCode, true)
         defer
         {
           Self.clearStageOverrides(akari)
+          onRenderStage?(hydra.stage, saved.timeCode, false)
           saved.restore(hydra)
+          hydra.complexity = viewportComplexity
+          Pixar.HdAkariSetSubdivisionRender(false)
         }
 
         progress.status = .rendering
@@ -275,6 +287,7 @@ public extension Akari
 
           let timeCode = Double(frame)
           hydra.currentTimeCode = timeCode
+
           let pose: (Double) -> Void =
           { time in
             guard let camera else { return }
@@ -302,6 +315,7 @@ public extension Akari
           }
 
           lock.withLock { _lastFrame = image }
+
           do
           {
             if let written = try Self.write(image, index: index, to: movie, url: url, animation: job == .animation,
@@ -356,6 +370,7 @@ public extension Akari
       private func makeMovie(_ job: Job, output: OutputSettings) throws -> MovieWriter?
       {
         guard job == .animation, output.format == .mpeg4 else { return nil }
+
         let size = output.pixelSize
         return try MovieWriter(url: output.movieURL, width: size.width, height: size.height,
                                frameRate: output.frameRate,
@@ -363,7 +378,7 @@ public extension Akari
                                                                      frameRate: output.frameRate) : nil)
       }
 
-      /// The camera, volume and fog the stage gives the frame at `timeCode`.
+      /// applies the camera, volume and fog the stage gives the frame at `timeCode`
       private func applyStageOverrides(at timeCode: Double, cameraPath: String?, hydra: Hydra.RenderEngine,
                                        akari: Akari.RenderEngine, isZUp: Bool)
       {
@@ -376,9 +391,13 @@ public extension Akari
         akari.labfx.usdCameraLens = cameraPath.map { Pixar.HdAkariCameraLensAt(hydra.stage, std.string($0), timeCode) }
         akari.labfx.usdVolume = Pixar.HdAkariStageVolumeAt(hydra.stage, timeCode)
         akari.labfx.usdFogDisturbers = Self.fogDisturbers(hydra.stage, timeCode)
-        let fogSim = akari.labfx.fogSim, fps = stageInfo.timeCodesPerSecond > 0 ? stageInfo.timeCodesPerSecond : 24
+
+        let fogSim = akari.labfx.fogSim
+        let fps = stageInfo.timeCodesPerSecond > 0 ? stageInfo.timeCodesPerSecond : 24
         akari.labfx.waterTime = timeCode / fps
-        akari.labfx.fogSimRequest = { [hydra] in Self.advanceFogSim(fogSim, stage: hydra.stage, to: timeCode, zUp: isZUp, framesPerSecond: fps) }
+        akari.labfx.fogSimRequest = { [hydra] in
+          Self.advanceFogSim(fogSim, stage: hydra.stage, to: timeCode, zUp: isZUp, framesPerSecond: fps)
+        }
       }
 
       private static func clearStageOverrides(_ akari: Akari.RenderEngine)
@@ -391,7 +410,7 @@ public extension Akari
         akari.labfx.fogSimRequest = nil
       }
 
-      /// Appends the frame to the movie, or writes its PNG for an animation, returning where it went.
+      /// appends the frame to the movie or writes its png for an animation, returning where it went
       private static func write(_ image: Frame, index: Int, to movie: MovieWriter?, url: URL, animation: Bool,
                                 output: OutputSettings) throws -> URL?
       {
@@ -402,24 +421,25 @@ public extension Akari
         }
 
         guard animation else { return nil }
+
         try writePNG(image, to: url, color: output.colorMode)
         return url
       }
 
-      /// Where the stage's soundtrack starts, relative to the first frame.
+      /// the stage soundtrack and where it starts relative to the first frame
       private func soundtrack(frameStart: Int, frameRate: Double) -> MovieWriter.Soundtrack?
       {
         let info = stageInfo
         let path = String(info.soundtrack)
         guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { return nil }
+
         let timeCodesPerSecond = info.timeCodesPerSecond > 0 ? info.timeCodesPerSecond : frameRate
         return MovieWriter.Soundtrack(url: URL(fileURLWithPath: path),
                                       delay: (info.soundtrackStartTimeCode - Double(frameStart)) / timeCodesPerSecond,
                                       mediaOffset: info.soundtrackMediaOffset)
       }
 
-      /// Renders `samples` jittered passes at `timeCode` from a clean history,
-      /// after waiting out the light probe bake, returning the last color AOV.
+      /// renders `samples` jittered passes at `timeCode` from a clean history once the light probes bake and returns the last color aov
       private func accumulate(at timeCode: Double,
                               size: (width: Int, height: Int),
                               samples: Int,
@@ -439,7 +459,8 @@ public extension Akari
           _ = autoreleasepool { Self.render(hydra, at: timeCode, size: viewSize) }
           bake += 1
         }
-        // streamed Ptex tiles arrive over frames, the samples wait for the ones in view.
+
+        // streamed ptex tiles arrive over several frames so the samples wait for the ones in view
         var streamed = 0
         while akari.labfx.ptex.isStreaming, streamed < Self.maxPtexStreamPasses, !isCancelled
         {
@@ -448,7 +469,8 @@ public extension Akari
         }
 
         akari.labfx.resetHistory()
-        // a shutter spreads the samples over it, each blurred over its own slice of it.
+
+        // an open shutter spreads the samples across it, each blurred over its own slice
         let shutter = SIMD2<Double>(akari.labfx.usdCameraShutter ?? akari.labfx.cameraShutter)
         let blur = akari.settings.features.contains(.motionBlur) && shutter.y > shutter.x
         let slice = (shutter.y - shutter.x) / Double(max(samples, 1))
@@ -470,9 +492,11 @@ public extension Akari
         for sample in 0 ..< samples
         {
           if isCancelled { return nil }
+
           akari.finalRenderSample = sample
           if blur { pose(timeCode + shutter.x + (Double(sample) + 0.5) * slice) }
-          // each pass drains its own command buffers and encoders, a long render would hold them all.
+
+          // each pass drains its own command buffers and encoders or a long render would hold them all
           texture = autoreleasepool
           {
             Self.render(hydra, at: blur ? timeCode + shutter.x + (Double(sample) + 0.5) * slice : timeCode, size: viewSize)
@@ -485,11 +509,11 @@ public extension Akari
         return texture
       }
 
-      /// A probe bake that never settles (a layout that keeps moving) stops here.
+      /// a probe bake that never settles, like a layout that keeps moving, stops here
       private static let maxProbeBakePasses = 2048
       private static let maxPtexStreamPasses = 600
 
-      /// One Hydra frame, the same bracket the viewport's renderer draws in.
+      /// one hydra frame inside the same bracket the viewport renderer draws in
       private static func render(_ hydra: Hydra.RenderEngine, at timeCode: Double, size: CGSize) -> MTLTexture?
       {
         #if canImport(Hgi)
@@ -497,10 +521,13 @@ public extension Akari
         #else
           var hgi = hydra.getHgi()
         #endif
+
         hgi.StartFrame()
+        Pixar.HdAkariSetSyncStage(hydra.stage)
         let hgiTexture = hydra.render(at: timeCode, viewSize: size)
         hgi.CommitPrimaryCommandBuffer(.init(rawValue: 0), false)
         hgi.EndFrame()
+
         #if canImport(Hgi)
           return hgiTexture?.asMetalTexture
         #else
@@ -515,7 +542,7 @@ public extension Akari
 
     #endif
 
-    /// The stage's fog disturbers at `timeCode`, eight floats each, velocity over the `window` frames before.
+    /// the stage fog disturbers at `timeCode`, eight floats each, with velocity over the `window` frames before
     public static func fogDisturbers(_ stage: UsdStage, _ timeCode: Double, window: Double = 1) -> [Float]
     {
       var out = [Float](repeating: 0, count: Akari.LabFXEngine.maxFogDisturbers * 8)
@@ -527,8 +554,7 @@ public extension Akari
       return Array(out.prefix(count * 8))
     }
 
-    /// Steps the fog smoke simulation to `timeCode` with the stage's `akari:fogSim:*` and fog settings,
-    /// or with a `preview`'s single substep and fewer pressure iterations, for the viewport to play back.
+    /// steps the fog smoke simulation to `timeCode` from the stage's fog settings, a preview takes one substep and fewer pressure passes for playback
     public static func advanceFogSim(_ sim: Akari.FogSim, stage: UsdStage, to timeCode: Double, zUp: Bool,
                                      framesPerSecond: Double, preview: Bool = false)
     {
@@ -550,6 +576,7 @@ public extension Akari
     {
       let s = Pixar.HdAkariFogSimAt(stage, timeCode)
       let v = Pixar.HdAkariStageVolumeAt(stage, timeCode)
+
       var f = Akari.FogSim.Frame()
       f.enable = s.enable
       f.boundsMin = SIMD3(Float(s.minX), Float(s.minY), Float(s.minZ))
@@ -572,9 +599,7 @@ public extension Akari
       return f
     }
 
-    /// Points the orbit camera Hydra renders through exactly along a USD camera.
-    /// No orbit distance, focus at the camera, and the rotation that rebuilds its
-    /// world matrix through `Hydra.Camera.getTransform()`.
+    /// points hydra's orbit camera exactly along a usd camera with no orbit distance, so `getTransform` rebuilds its world matrix
     static func pose(_ view: Hydra.Camera, from camera: Gf.Camera, aspect: Double, isZUp: Bool)
     {
       let m = camera.transform
@@ -584,7 +609,7 @@ public extension Akari
       var w = rows.map { [$0[0], $0[1], $0[2]] }
       if isZUp
       {
-        // undo the quarter turn about x the orbit camera appends for z up stages.
+        // undo the quarter turn about x the orbit camera appends for z up stages
         w = w.map { [$0[0], $0[2], -$0[1]] }
       }
 
@@ -596,20 +621,20 @@ public extension Akari
       view.focus = m.ExtractTranslation()
       view.distance = 0
 
-      // hydra's frustum takes its aperture angle as the vertical field of
-      // view, so the horizontal aperture is fitted down to the image's height.
+      // hydra takes its aperture angle as the vertical field of view, so the horizontal aperture is fitted to the image height
       var lens = view.gfCamera
       lens.projection = camera.projection
       lens.focalLength = camera.focalLength
       lens.horizontalAperture = Float(Double(camera.horizontalAperture) / aspect)
       lens.verticalAperture = camera.verticalAperture
       view.gfCamera = lens
+
       let clipping = camera.clippingRange
       view.nearClipOverride = Double(clipping.GetMin())
       view.farClipOverride = Double(clipping.GetMax())
     }
 
-    /// The viewport's camera and time, put back once a render ends.
+    /// the viewport camera and time, put back once a render ends
     struct ViewState
     {
       let rotation: Pixar.GfVec3d

@@ -85,12 +85,12 @@ TF_DEFINE_PRIVATE_TOKENS(_tokens,
   (bumpNormal)
   (emitColor)
   (presence)
+  (specular)
 );
 
 namespace {
 
-/// Finds the node feeding a given (nodePath, inputName) via a relationship,
-/// and which of its outputs it feeds from.
+/// the node feeding an input through a relationship and which of its outputs feeds it
 HdMaterialNode const *
 FindUpstreamNode(HdMaterialNetwork const &network, SdfPath const &nodePath, TfToken const &inputName,
                  TfToken *outputName = nullptr)
@@ -108,7 +108,7 @@ FindUpstreamNode(HdMaterialNetwork const &network, SdfPath const &nodePath, TfTo
   return nullptr;
 }
 
-/// Extracts an asset path parameter (e.g. a UsdUVTexture's "file" input).
+/// an asset path parameter, like a texture's file input
 std::string
 GetAssetPathParam(HdMaterialNode const &node, TfToken const &paramName)
 {
@@ -119,8 +119,7 @@ GetAssetPathParam(HdMaterialNode const &node, TfToken const &paramName)
   return !resolved.empty() ? resolved : assetPath.GetAssetPath();
 }
 
-/// If `inputName` on `previewSurfaceNode` is fed by a UsdUVTexture
-/// node, returns that texture's resolved file path.
+/// the resolved file of the texture feeding `inputName` on the preview surface, if one does
 std::string
 ResolveTextureConnection(HdMaterialNetwork const &network, HdMaterialNode const &previewSurfaceNode,
                          TfToken const &inputName, HdAkariMaterialTextures &textures,
@@ -150,8 +149,12 @@ ResolveTextureConnection(HdMaterialNetwork const &network, HdMaterialNode const 
   HdMaterialNode const *uvNode = FindUpstreamNode(network, texNode->path, kSt);
   if (uvNode && uvNode->identifier == kUsdPrimvarReader) {
     auto varIt = uvNode->parameters.find(kVarname);
+
+    // authored readers carry a string, generated ones like the draw mode cards carry a token.
     if (varIt != uvNode->parameters.end() && varIt->second.IsHolding<std::string>()) {
       textures.uvVarname = TfToken(varIt->second.UncheckedGet<std::string>());
+    } else if (varIt != uvNode->parameters.end() && varIt->second.IsHolding<TfToken>()) {
+      textures.uvVarname = varIt->second.UncheckedGet<TfToken>();
     }
   }
 
@@ -159,8 +162,15 @@ ResolveTextureConnection(HdMaterialNetwork const &network, HdMaterialNode const 
   return path;
 }
 
-/// The color `input` on `node` takes, through a PxrColorCorrect whose gamma linearizes an sRGB pick or map,
-/// out of a texture or a Ptex, which lands in `textures`.
+/// whether a node reads a primvar straight off the gprim, as a painted displayColor is read
+bool
+IsPrimvarReader(HdMaterialNode const &node)
+{
+  static const TfToken kPxrPrimvar("PxrPrimvar");
+  return node.identifier == kPxrPrimvar || TfStringStartsWith(node.identifier.GetString(), "UsdPrimvarReader_float3");
+}
+
+/// the color an input takes, through a color correct that linearizes an srgb pick or map, out of a texture or ptex into `textures`
 GfVec3f
 ResolveColor(HdMaterialNetwork const &network, HdMaterialNode const &node, TfToken const &input, GfVec3f fallback,
              HdAkariMaterialTextures &textures)
@@ -184,6 +194,9 @@ ResolveColor(HdMaterialNetwork const &network, HdMaterialNode const &node, TfTok
     upstream = FindUpstreamNode(network, upstream->path, kInputRGB);
   }
 
+  // a primvar reader hands the color over per vertex, so the surface itself stays white under it
+  if (upstream && IsPrimvarReader(*upstream)) return GfVec3f(1.0f);
+
   if (upstream && upstream->identifier == kPxrPtexture) {
     textures.ptexPath = GetAssetPathParam(*upstream, kFilename);
   } else {
@@ -197,8 +210,7 @@ ResolveColor(HdMaterialNetwork const &network, HdMaterialNode const &node, TfTok
 
 }  // namespace
 
-/// Reads UsdPreviewSurface's diffuseColor/opacity/roughness/metallic
-/// from the prim's bound material.
+/// reads the preview surface's color, opacity, roughness and metallic from the prim's bound material
 void HdAkariApplyMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
                           GfVec3f &color, float &opacity,
                           float &roughness, float &metallic,
@@ -208,6 +220,15 @@ void HdAkariApplyMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
 {
   HdAkariApplyMaterialId(sceneDelegate, sceneDelegate->GetMaterialId(id), color, opacity, roughness, metallic,
                          opacityThreshold, textures, materialIdOut);
+
+  // the gprim's own display opacity dims the material, which is how the viewport ghosts a mesh while its cage is edited
+  const VtValue display = sceneDelegate->Get(id, HdTokens->displayOpacity);
+  if (display.IsHolding<VtFloatArray>()) {
+    VtFloatArray const &values = display.UncheckedGet<VtFloatArray>();
+    if (!values.empty()) opacity *= values[0];
+  } else if (display.IsHolding<float>()) {
+    opacity *= display.UncheckedGet<float>();
+  }
 }
 
 namespace {
@@ -249,6 +270,9 @@ void ParseMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &materialId,
   static const TfToken kOpacityThreshold("opacityThreshold");
   static const TfToken kNormal("normal");
   static const TfToken kEmissiveColor("emissiveColor");
+  static const TfToken kIor("ior");
+  static const TfToken kUseSpecularWorkflow("useSpecularWorkflow");
+  static const TfToken kSpecularColor("specularColor");
 
   static const TfToken kPxrSurface("PxrSurface");
   static const TfToken kSpecularFaceColor("specularFaceColor"), kSpecularRoughness("specularRoughness"),
@@ -264,6 +288,7 @@ void ParseMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &materialId,
     roughness = look.roughness;
     opacity = look.opacity;
     textures.emissiveColor = look.emissive;
+    textures.specular = look.specular;
     if (metallic >= 0.5f) {
       HdAkariMaterialTextures face = textures;
       face.colorPath = ResolveTextureConnection(network, node, kSpecularFaceColor, face);
@@ -297,6 +322,7 @@ void ParseMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &materialId,
     textures.roughnessPath = ResolveTextureConnection(network, node, kRoughness, textures, &textures.sources.roughness);
     opacity = param(node, _tokens->presence, 1.0f);
     textures.opacityPath = ResolveTextureConnection(network, node, _tokens->presence, textures, &textures.sources.opacity);
+    textures.specular = GfVec3f(std::clamp(0.08f * param(node, _tokens->specular, 0.5f), 0.0f, 1.0f));
     textures.emissiveColor = param(node, _tokens->emitColor, GfVec3f(0.0f));
     textures.emissivePath = ResolveTextureConnection(network, node, _tokens->emitColor, textures);
     textures.normalPath = ResolveTextureConnection(network, node, _tokens->bumpNormal, textures);
@@ -318,7 +344,15 @@ void ParseMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &materialId,
     color = param(kColor, GfVec3f(0.5f)) * param(kDiffuse, 0.8f);
     textures.colorPath = ResolveTextureConnection(network, node, kColor, textures);
     const GfVec3f transparency = param(kTransparency, GfVec3f(0.0f));
-    opacity = 1.0f - std::clamp((transparency[0] + transparency[1] + transparency[2]) / 3.0f, 0.0f, 1.0f);
+    const float clarity = std::clamp((transparency[0] + transparency[1] + transparency[2]) / 3.0f, 0.0f, 1.0f);
+    opacity = 1.0f - clarity;
+
+    // maya transparency tints the light passing through, so clear surfaces take its hue over their diffuse color.
+    if (clarity > 0.0f && textures.colorPath.empty()) {
+      const float peak = std::max({transparency[0], transparency[1], transparency[2], 1e-6f});
+      const GfVec3f tint = transparency / peak;
+      color = color * (1.0f - clarity) + tint * clarity;
+    }
     roughness = blinn ? std::sqrt(std::clamp(param(kEccentricity, 0.3f), 0.0f, 1.0f)) : 1.0f;
     metallic = 0.0f;
     textures.emissiveColor = param(kIncandescence, GfVec3f(0.0f));
@@ -339,6 +373,9 @@ void ParseMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &materialId,
       textures.colorPath = ResolveTextureConnection(network, node, kDiffuseColor, textures);
       HdMaterialNode const *texNode = textures.colorPath.empty()
         ? FindUpstreamNode(network, node.path, kDiffuseColor, nullptr) : nullptr;
+
+      // a primvar reader hands the color over per vertex, so the surface itself stays white under it
+      if (texNode && IsPrimvarReader(*texNode)) color = GfVec3f(1.0f);
       if (texNode && TfStringContains(texNode->identifier.GetString(), "Ptex")) {
         static const TfToken kFile("file"), kFilename("filename");
         textures.ptexPath = GetAssetPathParam(*texNode, kFile);
@@ -371,6 +408,34 @@ void ParseMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &materialId,
       metallic = metallicIt->second.UncheckedGet<float>();
     } else {
       textures.metallicPath = ResolveTextureConnection(network, node, kMetallic, textures, &textures.sources.metallic);
+    }
+
+    // index of refraction sets what the surface reflects facing the eye, 1.5 giving the usual four percent
+    float ior = 1.5f;
+    auto iorIt = node.parameters.find(kIor);
+    if (iorIt != node.parameters.end() && iorIt->second.IsHolding<float>()) {
+      ior = std::max(iorIt->second.UncheckedGet<float>(), 1.0f);
+    }
+    const float facing = (ior - 1.0f) / (ior + 1.0f);
+    textures.specular = GfVec3f(std::clamp(facing * facing, 0.0f, 1.0f));
+
+    // the specular workflow names that reflectance outright and leaves metallic unused
+    bool specularWorkflow = false;
+    auto workflowIt = node.parameters.find(kUseSpecularWorkflow);
+    if (workflowIt != node.parameters.end()) {
+      if (workflowIt->second.IsHolding<int>()) specularWorkflow = workflowIt->second.UncheckedGet<int>() != 0;
+      else if (workflowIt->second.IsHolding<bool>()) specularWorkflow = workflowIt->second.UncheckedGet<bool>();
+    }
+    if (specularWorkflow) {
+      metallic = 0.0f;
+      textures.metallicPath.clear();
+      auto specIt = node.parameters.find(kSpecularColor);
+      if (specIt != node.parameters.end() && specIt->second.IsHolding<GfVec3f>()) {
+        const GfVec3f tint = specIt->second.UncheckedGet<GfVec3f>();
+        textures.specular = GfVec3f(std::clamp(tint[0], 0.0f, 1.0f),
+                                    std::clamp(tint[1], 0.0f, 1.0f),
+                                    std::clamp(tint[2], 0.0f, 1.0f));
+      }
     }
 
     auto emissiveIt = node.parameters.find(kEmissiveColor);
@@ -454,12 +519,14 @@ std::vector<SdfPath> HdAkariMaterialUsers(std::string const &materialKey)
   return it == materialUsers.end() ? std::vector<SdfPath>() : std::vector<SdfPath>(it->second.begin(), it->second.end());
 }
 
-/// Fetches the prim's raw UV primvar, remapped into its atlas cell.
+/// fetches the prim's raw uv primvar, remapped into its atlas cell.
 void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, HdMeshUtil &meshUtil,
                             HdAkariMaterialTextures const &textures, HdAkariAtlasCell const &cell,
-                            VtVec3iArray const &triangleIndices, VtVec2fArray &outUvs)
+                            VtVec3iArray const &triangleIndices, VtVec2fArray &outUvs,
+                            HdAkariRefinedPrimvars const *refined)
 {
   const size_t cornerCount = triangleIndices.size() * 3;
+
   // a constant material only needs one uv, the renderer repeats it over the corners.
   if (cell.constantIndex >= 0) {
     const float row = -float(cell.constantIndex + 1);
@@ -483,14 +550,18 @@ void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, H
     return false;
   };
 
-  // looks up one candidate UV primvar, expands it to one
-  // UV per triangle corner, and remaps it into the atlas cell.
+  // looks up one uv primvar, expands it to a uv per triangle corner and remaps it into the atlas cell
   auto tryVarname = [&](TfToken const &varname) -> bool {
     HdInterpolation interp;
     if (!findInterpolation(varname, interp)) return false;
 
     VtIntArray uvIndices;
-    VtValue uvVal = sceneDelegate->GetIndexedPrimvar(id, varname, &uvIndices);
+    VtValue uvVal;
+    if (refined) {
+      if (!refined->Get(sceneDelegate, id, varname, interp, &uvVal)) return false;
+    } else {
+      uvVal = sceneDelegate->GetIndexedPrimvar(id, varname, &uvIndices);
+    }
     if (!uvVal.IsHolding<VtVec2fArray>()) return false;
     VtVec2fArray const &uvValues = uvVal.UncheckedGet<VtVec2fArray>();
     if (uvValues.empty()) return false;
@@ -530,28 +601,32 @@ void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, H
     if (rawUvs.size() != cornerCount) return false;
 
     outUvs.resize(cornerCount);
-    for (size_t i = 0; i < cornerCount; ++i) {
-      float localU = (rawUvs[i][0] - cell.tileU0) / std::max(cell.tileUSpan, 1e-6f);
-      float localV = (rawUvs[i][1] - cell.tileV0) / std::max(cell.tileVSpan, 1e-6f);
-      // UDIM materials (tileUSpan/tileVSpan > 1) clamp.
-      bool isUdim = cell.tileUSpan > 1.0f || cell.tileVSpan > 1.0f;
-      if (isUdim) {
-        localU = std::clamp(localU, 0.0f, 1.0f);
-        localV = std::clamp(localV, 0.0f, 1.0f);
-      } else {
-        localU -= std::floor(localU);
-        localV -= std::floor(localV);
+
+    // udim materials clamp
+    const bool isUdim = cell.tileUSpan > 1.0f || cell.tileVSpan > 1.0f;
+    for (size_t t = 0; t < triangleIndices.size(); ++t) {
+      GfVec2f local[3];
+      for (int c = 0; c < 3; ++c) {
+        local[c] = GfVec2f((rawUvs[t * 3 + c][0] - cell.tileU0) / std::max(cell.tileUSpan, 1e-6f),
+                           (rawUvs[t * 3 + c][1] - cell.tileV0) / std::max(cell.tileVSpan, 1e-6f));
       }
 
-      outUvs[i] = GfVec2f(cell.u0 + localU * (cell.u1 - cell.u0),
-                          cell.v0 + localV * (cell.v1 - cell.v0));
+      // a repeating texture wraps the whole triangle by one tile, so a corner on 1.0 stays the far edge, not 0.
+      for (int a = 0; a < 2 && !isUdim; ++a) {
+        const float shift = std::floor(std::min({local[0][a], local[1][a], local[2][a]}) + 1e-5f);
+        for (int c = 0; c < 3; ++c) local[c][a] -= shift;
+      }
+
+      for (int c = 0; c < 3; ++c) {
+        const float u = std::clamp(local[c][0], 0.0f, 1.0f), v = std::clamp(local[c][1], 0.0f, 1.0f);
+        outUvs[t * 3 + c] = GfVec2f(cell.u0 + u * (cell.u1 - cell.u0), cell.v0 + v * (cell.v1 - cell.v0));
+      }
     }
 
     return true;
   };
 
-  // try the material's declared UV varname first,
-  // then fall back to the "st" primvar.
+  // tries the material's uv name first, then the st primvar
   static const TfToken kSt("st");
   if (tryVarname(textures.uvVarname)) {
     return;
@@ -562,31 +637,78 @@ void HdAkariComputeAtlasUvs(HdSceneDelegate *sceneDelegate, SdfPath const &id, H
   }
 }
 
-/// Whether a material can cut holes in a mesh's shadow.
+/// whether a material can cut holes in a mesh's shadow.
 static bool HdAkariShadowCutout(HdAkariMaterialTextures const &textures, float opacity, float opacityThreshold)
 {
   return !textures.opacityPath.empty() || !textures.ptexPath.empty() || opacityThreshold > 0.0f || opacity < 0.98f;
+}
+
+HdAkariSurface HdAkariClassifySurface(HdAkariMaterialTextures const &textures, GfVec3f const &color, float opacity,
+                                      float opacityThreshold)
+{
+  const bool constantOpacity = textures.opacityPath.empty();
+  const GfVec3f &e = textures.emissiveColor;
+  HdAkariSurface surface;
+  surface.transparent = opacityThreshold <= 0.0f && constantOpacity && opacity < 0.98f;
+  surface.hidden = opacityThreshold > 0.0f && constantOpacity && textures.ptexPath.empty() && opacity < opacityThreshold;
+  surface.shadowCutout = HdAkariShadowCutout(textures, opacity, opacityThreshold);
+
+  // a black glowing surface, or a glowing shell you see through like a blade's sheath, is light that casts no shadow.
+  const bool glowing = !textures.emissivePath.empty() || std::max({e[0], e[1], e[2]}) > 0.5f;
+  const bool black = textures.colorPath.empty() && std::max({color[0], color[1], color[2]}) < 0.02f;
+
+  // so is a surface that gives out far more than it reflects, or a blade's core would shut its own lights inside it
+  const float glow = std::max({e[0], e[1], e[2]});
+  const float albedo = std::max({color[0], color[1], color[2]});
+  const bool outshines = textures.colorPath.empty() && textures.emissivePath.empty()
+                      && glow > 1.0f && glow > 8.0f * albedo;
+  surface.emitter = glowing && (black || surface.transparent || outshines);
+  return surface;
+}
+
+bool HdAkariShowsDisplayColor(HdSceneDelegate *sceneDelegate, SdfPath const &id)
+{
+  const SdfPath materialId = sceneDelegate->GetMaterialId(id);
+  if (materialId.IsEmpty()) return false;
+
+  const VtValue resource = sceneDelegate->GetMaterialResource(materialId);
+  if (!resource.IsHolding<HdMaterialNetworkMap>()) return false;
+
+  HdMaterialNetworkMap const &networks = resource.UncheckedGet<HdMaterialNetworkMap>();
+  auto found = networks.map.find(HdMaterialTerminalTokens->surface);
+  if (found == networks.map.end()) return false;
+
+  static const TfToken kVarname("varname");
+  for (HdMaterialNode const &node : found->second.nodes) {
+    if (!IsPrimvarReader(node)) continue;
+    auto it = node.parameters.find(kVarname);
+    if (it == node.parameters.end()) continue;
+    if (it->second.IsHolding<std::string>() && it->second.UncheckedGet<std::string>() == HdTokens->displayColor.GetString()) return true;
+    if (it->second.IsHolding<TfToken>() && it->second.UncheckedGet<TfToken>() == HdTokens->displayColor) return true;
+  }
+
+  return false;
 }
 
 void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
                          HdAkariTextureAtlas *atlas, HdMeshUtil &meshUtil,
                          HdAkariMeshData &data,
                          HdMeshTopology const *topology,
-                         VtIntArray const *primitiveParams)
+                         VtIntArray const *primitiveParams,
+                         HdAkariRefinedPrimvars const *refined)
 {
   HdAkariMaterialTextures textures;
   SdfPath materialId;
   float opacityThreshold = 0.0f;
   HdAkariApplyMaterial(sceneDelegate, id, data.displayColor, data.opacity,
                        data.roughness, data.metallic, opacityThreshold, textures, materialId);
-  data.transparent = opacityThreshold <= 0.0f && textures.opacityPath.empty() && data.opacity < 0.98f;
-  data.shadowCutout = HdAkariShadowCutout(textures, data.opacity, opacityThreshold);
-  const GfVec3f &e = textures.emissiveColor;
-  data.emitter = textures.colorPath.empty()
-              && std::max({data.displayColor[0], data.displayColor[1], data.displayColor[2]}) < 0.02f
-              && (!textures.emissivePath.empty() || std::max({e[0], e[1], e[2]}) > 0.5f);
+  const HdAkariSurface surface = HdAkariClassifySurface(textures, data.displayColor, data.opacity, opacityThreshold);
+  data.transparent = surface.transparent;
+  data.shadowCutout = surface.shadowCutout;
+  data.emitter = surface.emitter;
+  if (surface.hidden) data.visible = false;
 
-  // bake/lookup this material's shared texture atlas cell.
+  // bakes or looks up this material's shared atlas cell
   if (atlas) {
     const std::string cellKey = materialId.IsEmpty() ? id.GetString() : materialId.GetString();
     noteUser(cellKey, id);
@@ -597,14 +719,15 @@ void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
                                                  opacityThreshold,
                                                  textures.colorPath, data.displayColor,
                                                  textures.normalPath,
-                                                 textures.emissivePath, textures.emissiveColor, textures.sources);
+                                                 textures.emissivePath, textures.emissiveColor, textures.sources,
+                                                 textures.specular);
     HdAkariComputeAtlasUvs(sceneDelegate, id, meshUtil, textures, cell,
-                           data.triangleIndices, data.uvs);
+                           data.triangleIndices, data.uvs, refined);
   }
 
   if (!atlas || !topology || !primitiveParams) return;
 
-  // each triangle's Ptex face, what its streamed tiles key on.
+  // each triangle's ptex face, what its streamed tiles key on.
   if (!textures.ptexPath.empty() && primitiveParams->size() == data.triangleIndices.size()) {
     VtIntArray faceRes = HdAkariPtexFaceRes(textures.ptexPath);
     VtIntArray const &counts = topology->GetFaceVertexCounts();
@@ -612,6 +735,7 @@ void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
     if (HdAkariPtexMapId(textures.ptexPath) >= 0 && faceRes.size() == counts.size()) {
       std::vector<int> starts(counts.size() + 1, 0);
       for (size_t f = 0; f < counts.size(); ++f) starts[f + 1] = starts[f] + counts[f];
+
       // the face in the low bits, each corner's place on it two bits apiece above.
       VtIntArray triangleFaces(primitiveParams->size());
       for (size_t t = 0; t < primitiveParams->size(); ++t) {
@@ -638,18 +762,24 @@ void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
 
   // material bound face subsets, their triangles take their own material's cell or constants row.
   HdGeomSubsets const &subsets = topology->GetGeomSubsets();
-  if (subsets.empty() || primitiveParams->size() != data.triangleIndices.size() ||
-      data.uvs.size() != data.triangleIndices.size() * 3) {
+  const size_t cornerCount = data.triangleIndices.size() * 3;
+  if (subsets.empty() || primitiveParams->size() != data.triangleIndices.size() || cornerCount == 0) {
     return;
   }
 
   std::vector<int> faceSubset(size_t(topology->GetNumFaces()), -1);
+  bool bound = false;
   for (size_t s = 0; s < subsets.size(); ++s) {
     if (subsets[s].type != HdGeomSubset::TypeFaceSet || subsets[s].materialId.IsEmpty()) continue;
     for (int face : subsets[s].indices) {
-      if (face >= 0 && size_t(face) < faceSubset.size()) faceSubset[size_t(face)] = int(s);
+      if (face >= 0 && size_t(face) < faceSubset.size()) { faceSubset[size_t(face)] = int(s); bound = true; }
     }
   }
+
+  // a constant mesh material spreads its one uv over every corner, so the subsets can take theirs.
+  if (!bound) return;
+  if (data.uvs.size() == 1) data.uvs = VtVec2fArray(cornerCount, data.uvs[0]);
+  if (data.uvs.size() != cornerCount) return;
 
   std::unordered_map<SdfPath, VtVec2fArray, SdfPath::Hash> subsetUvs;
   for (size_t t = 0; t < data.triangleIndices.size(); ++t) {
@@ -664,6 +794,7 @@ void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
       SdfPath resolved;
       HdAkariApplyMaterialId(sceneDelegate, materialId, color, opacity, roughness, metallic,
                              opacityThreshold, textures, resolved);
+
       // if any subset's material cuts holes, the whole mesh keeps the alpha test.
       data.shadowCutout = data.shadowCutout || HdAkariShadowCutout(textures, opacity, opacityThreshold);
       noteUser(materialId.GetString(), id);
@@ -674,16 +805,23 @@ void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
                                                    opacityThreshold,
                                                    textures.colorPath, color,
                                                    textures.normalPath,
-                                                   textures.emissivePath, textures.emissiveColor, textures.sources);
+                                                   textures.emissivePath, textures.emissiveColor, textures.sources,
+                                                   textures.specular);
       VtVec2fArray uvs;
-      HdAkariComputeAtlasUvs(sceneDelegate, id, meshUtil, textures, cell, data.triangleIndices, uvs);
+      HdAkariComputeAtlasUvs(sceneDelegate, id, meshUtil, textures, cell, data.triangleIndices, uvs, refined);
       it = subsetUvs.emplace(materialId, std::move(uvs)).first;
     }
 
     VtVec2fArray const &uvs = it->second;
-    if (uvs.size() != data.uvs.size()) continue;
+    if (uvs.size() == 1) {
+      for (size_t c = 0; c < 3; ++c) data.uvs[t * 3 + c] = uvs[0];
+      continue;
+    }
+
+    if (uvs.size() != cornerCount) continue;
     for (size_t c = 0; c < 3; ++c) data.uvs[t * 3 + c] = uvs[t * 3 + c];
   }
+
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

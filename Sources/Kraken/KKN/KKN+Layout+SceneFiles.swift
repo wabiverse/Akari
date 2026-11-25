@@ -46,10 +46,6 @@ import HdAkari
 import HydraKit
 import simd
 import protocol SwiftCrossUI.ObservableObject
-#if os(macOS)
-  import AppKit
-  import UniformTypeIdentifiers
-#endif
 import class SwiftCrossUI.Published
 
 extension Kraken.Layout
@@ -58,64 +54,52 @@ extension Kraken.Layout
 
   func askSaveAs(then done: (@MainActor () -> Void)? = nil)
   {
-    #if os(macOS)
-      let panel = NSSavePanel()
-      panel.allowedContentTypes = ["usda", "usd", "usdc"].compactMap { UTType(filenameExtension: $0) }
-      panel.nameFieldStringValue = sceneURL?.lastPathComponent ?? "untitled.usda"
-      if let folder = sceneURL?.deletingLastPathComponent() { panel.directoryURL = folder }
-      guard panel.runModal() == .OK, let url = panel.url else { return }
-      save(as: url.path, then: done)
-    #endif
+    Kraken.Dialogs.saveScene(named: sceneURL?.lastPathComponent ?? "untitled.usda", near: sceneURL?.deletingLastPathComponent())
+    { [weak self] url in
+      self?.save(as: url.path, then: done)
+    }
   }
 
-  /// File > New, a new scene only in memory until it's saved.
+  /// file new, a scene that only lives in memory until it's saved
   func newScene()
   {
     replaceStage(with: nil, asking: true)
   }
 
-  /// File > Open, any USD scene.
+  /// file open, for any usd scene
   func openScene()
   {
-    #if os(macOS)
-      let panel = NSOpenPanel()
-      panel.allowedContentTypes = ["usd", "usda", "usdc", "usdz"].compactMap { UTType(filenameExtension: $0) }
-      panel.allowsMultipleSelection = false
-      if let folder = sceneURL?.deletingLastPathComponent() { panel.directoryURL = folder }
-      guard panel.runModal() == .OK, let url = panel.url else { return }
-      replaceStage(with: url, asking: true)
-    #endif
+    Kraken.Dialogs.openScene(near: sceneURL?.deletingLastPathComponent())
+    { [weak self] url in
+      self?.replaceStage(with: url, asking: true)
+    }
   }
 
-  /// Whether to go on past unsaved edits, saving them first when asked to.
+  /// asks whether to go on past unsaved edits, saving them first when asked to
   private func confirmDiscard(then proceed: @escaping @MainActor () -> Void)
   {
     guard edited else { return proceed() }
-    #if os(macOS)
-      let alert = NSAlert()
-      alert.messageText = "Save changes to \(sceneURL?.lastPathComponent ?? "untitled.usda") before closing?"
-      alert.addButton(withTitle: "Save")
-      alert.addButton(withTitle: "Don't Save")
-      alert.addButton(withTitle: "Cancel")
-      switch alert.runModal()
+
+    Kraken.Dialogs.confirmDiscard(sceneURL?.lastPathComponent ?? "untitled.usda")
+    { [weak self] choice in
+      switch choice
       {
-        case .alertFirstButtonReturn: save(then: proceed)
-        case .alertSecondButtonReturn: proceed()
-        default: break
+        case .save: self?.save(then: proceed)
+        case .discard: proceed()
+        case .cancel: break
       }
-    #else
-      proceed()
-    #endif
+    }
   }
 
-  /// Shows the scene at `url`, or a new one, in place of this one.
-  func replaceStage(with url: URL?, asking: Bool)
+  /// shows the scene at `url` or a new one in place of this, `done` runs once it's up and `keepView` keeps the camera
+  func replaceStage(with url: URL?, asking: Bool, keepView: Bool = false, then done: (@MainActor () -> Void)? = nil)
   {
     let open = { @MainActor [weak self] in
       guard let self else { return }
       if let url, !Pixar.HdAkariLayerOpens(std.string(url.path))
       {
         self.status = "Couldn't open \(url.lastPathComponent)"
+        done?()
         return
       }
 
@@ -124,30 +108,48 @@ extension Kraken.Layout
       let hydra = self.hydra
       self.onStage
       { [self] _ in
-        let stage = url.map { UsdStage.open($0.path) } ?? AppUtils.newStage()
+        let stage = url.map { UsdStage.open($0.path) } ?? Kraken.StageManager.newStage()
+        Kraken.SceneEdit.adoptLegacyBindings(stage)
+        let view = keepView ? hydra.viewCamera : nil
+
+        // akari reads what the meshes ask for off this stage, so it has to know it before hydra syncs anything
+        Pixar.HdAkariSetSyncStage(stage)
         hydra.replaceStage(stage)
-        AppUtils.frameStartView(hydra)
-        engine.labfx.setStageUpAxis(isZUp: UsdGeom.getUpAxis(for: stage) == .z)
-        engine.labfx.setStageMetersPerUnit(UsdGeom.getMetersPerUnit(for: stage))
+        if let view { hydra.viewCamera = view } else { Kraken.StageManager.frameStartView(hydra) }
+
+        let zUp = UsdGeom.getUpAxis(for: stage) == .z
+        let metersPerUnit = UsdGeom.getMetersPerUnit(for: stage)
+        engine.labfx.setStageUpAxis(isZUp: zUp)
+        engine.labfx.setStageMetersPerUnit(metersPerUnit)
         engine.adoptColorManagement(of: stage)
         Pixar.HdAkariJournalClear()
         Kraken.Authoring.watch(stage)
+        Kraken.Modifiers.syncAll(stage, hydra.currentTimeCode)
         let probeTimes = Akari.Playback.probeBakeTimes(stage)
+
         DispatchQueue.main.async
         { [weak self] in
           guard let self else { return }
+
           self.sceneURL = url
+          self.isZUp = zUp
+          self.metersPerUnit = metersPerUnit
+
+          Kraken.Authoring.variantEdit = nil
+          self.editingVariant = nil
           self.edited = false
           self.undoStack.removeAll()
           self.redoStack.removeAll()
           self.hidden = []
           self.placements = [:]
+
           self.select([])
           self.inspector.load(nil)
           self.status = url.map { "Opened \($0.lastPathComponent)" } ?? "New scene"
           self.primsChanged()
           self.refreshLayers()
           self.adoptStage?(url, probeTimes)
+          done?()
         }
       }
     }
@@ -163,6 +165,7 @@ extension Kraken.Layout
       Kraken.Authoring.watch(stage)
       let layers = Kraken.Authoring.layers(stage)
       let department = Kraken.Authoring.identifier(Kraken.Authoring.department(stage))
+
       DispatchQueue.main.async
       { [weak self] in
         self?.layers = layers
@@ -171,7 +174,7 @@ extension Kraken.Layout
     }
   }
 
-  /// Edits from now on go to the layer `identifier` names.
+  /// sends edits from now on to the layer `identifier` names
   func work(in identifier: String)
   {
     onStage { stage in Kraken.Authoring.work(in: identifier, stage) }
@@ -179,13 +182,14 @@ extension Kraken.Layout
     refreshLayers()
   }
 
-  /// Adds a department sublayer to the shot and works in it.
+  /// adds a department sublayer to the shot and works in it
   func newDepartment(_ department: Kraken.Authoring.Department)
   {
     let name = department.rawValue
     onStage
     { [self] stage in
       let made = Kraken.Authoring.newDepartment(department, stage) != nil
+
       DispatchQueue.main.async
       { [weak self] in
         guard let self else { return }
@@ -200,7 +204,6 @@ extension Kraken.Layout
     layers.first { $0.identifier == department }?.name ?? ""
   }
 
-
   func primsChanged()
   {
     sceneRevision += 1
@@ -211,10 +214,13 @@ extension Kraken.Layout
 
   nonisolated static func readMesh(_ stage: UsdStage, _ path: String, _ time: Double) -> Kraken.EditMesh?
   {
-    let data = Kraken.SceneEdit.mesh(stage, path, time)
+    // modelling works on the mesh under the stack, the way the shot authors it, not on what it evaluates to
+    let data = Kraken.Modifiers.cage(stage, path, time)
     guard data.valid else { return nil }
+
     let flat = Array(data.points)
     let points = stride(from: 0, to: flat.count - 2, by: 3).map { SIMD3(flat[$0], flat[$0 + 1], flat[$0 + 2]) }
+
     var faces: [[Int]] = []
     var offset = 0
     let indices = Array(data.indices).map(Int.init)
@@ -225,14 +231,22 @@ extension Kraken.Layout
       offset += count
     }
 
-    return Kraken.EditMesh(path: path, points: points, faces: faces)
+    var creases: [Kraken.Edge: Float] = [:]
+    for (k, s) in data.creaseSharpness.enumerated()
+    {
+      creases[Kraken.Edge(Int(data.creases[2 * k]), Int(data.creases[2 * k + 1]))] = min(s / Kraken.EditMesh.creaseSharpness, 1)
+    }
+
+    let sharp = stride(from: 0, to: data.sharp.count - 1, by: 2).map { Kraken.Edge(Int(data.sharp[$0]), Int(data.sharp[$0 + 1])) }
+    return Kraken.EditMesh(path: path, points: points, faces: faces, creases: creases, sharp: Set(sharp))
   }
 
-  /// Reads the widgets and the selection's transforms back from the stage.
+  /// reads the widgets and the selection's transforms back from the stage
   func refresh()
   {
     guard !refreshing else { return }
     refreshing = true
+
     let rescan = rescan
     self.rescan = false
     let known = widgetPaths
@@ -261,6 +275,7 @@ extension Kraken.Layout
         self.refreshing = false
         self.widgetPaths = paths
         if self.dragging != .light { self.widgets = widgets }
+
         for (path, placement) in placements where self.dragging == nil || !self.selection.contains(path)
         {
           self.placements[path] = placement
@@ -279,7 +294,6 @@ extension Kraken.Layout
   {
     case modal, light
   }
-
 
   nonisolated static func placement(_ stage: UsdStage, _ path: String, _ time: Double) -> Placement?
   {

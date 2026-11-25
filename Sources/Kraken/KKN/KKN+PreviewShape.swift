@@ -43,8 +43,7 @@ import simd
 
 extension Kraken
 {
-  /// The primitive mesh shapes for material
-  /// previews, y up, about two units across.
+  /// the primitive shapes for material previews, y up and about two units across
   enum PreviewShape: CaseIterable, Sendable
   {
     case flat, sphere, cube, hair, teapot, cloth, fluid
@@ -67,7 +66,7 @@ extension Kraken
     {
       var points: [SIMD3<Float>] = []
       var faces: [[Int]] = []
-      /// Per face corner, in the order the faces list them.
+      /// one per face corner, in the order the faces list them
       var uvs: [SIMD2<Float>] = []
       var smooth = true
     }
@@ -77,7 +76,7 @@ extension Kraken
       var points: [SIMD3<Float>] = []
       var counts: [Int] = []
       var width: Float = 0.01
-      /// One per point when set, in place of `width`.
+      /// one per point when set, in place of `width`
       var widths: [Float] = []
     }
 
@@ -101,11 +100,7 @@ extension Kraken
       }
     }
 
-    /// Gathers quads with their corners uvs,
-    /// welding points that land on each other
-    /// so a smooth surface shades across its
-    /// seams, and dropping the corners a weld
-    /// folds onto their neighbors.
+    /// gathers quads with corner uvs, welding coincident points so smooth surfaces shade across seams
     private struct Builder
     {
       var mesh = Mesh()
@@ -122,6 +117,7 @@ extension Kraken
 
         let key = SIMD3<Int32>((p * 1e4).rounded(.toNearestOrAwayFromZero))
         if let i = index[key] { return i }
+
         mesh.points.append(p)
         index[key] = mesh.points.count - 1
         return mesh.points.count - 1
@@ -149,7 +145,7 @@ extension Kraken
         mesh.uvs += uvs
       }
 
-      /// A `columns` by `rows` grid over `at`, its uv the grid's.
+      /// a `columns` by `rows` grid over `at`, using the grid's own uvs
       mutating func grid(_ columns: Int, _ rows: Int, _ at: (Float, Float) -> SIMD3<Float>)
       {
         for j in 0 ..< rows
@@ -189,7 +185,8 @@ extension Kraken
       var b = Builder()
       b.weld = false
       b.mesh.smooth = false
-      // turned a corner toward the view and tipped forward, so its top and two sides show.
+
+      // turned a corner toward the view and tipped forward, so its top and two sides show
       let turn = simd_quatf(angle: .pi / 7, axis: SIMD3(1, 0, 0)) * simd_quatf(angle: .pi / 5, axis: SIMD3(0, 1, 0))
       for axis in 0 ..< 3
       {
@@ -209,12 +206,12 @@ extension Kraken
       return b.mesh
     }
 
-    /// A tuft of strands rooted in a patch at the bottom, rising and curling over to one side,
-    /// each one tapering to its tip.
+    /// a tuft of strands rooted in a patch, rising and curling to one side, each tapering to its tip
     private static func hair() -> Curves
     {
       var c = Curves()
       let strands = 2600, segments = 24
+
       for s in 0 ..< strands
       {
         func random(_ k: Int) -> Float
@@ -246,7 +243,7 @@ extension Kraken
       return c
     }
 
-    /// A floor curving up into a back wall behind the shapes, in checker squares split light and dark.
+    /// a floor curving up into a back wall behind the shapes, in checker squares split light and dark
     static func backdrop() -> (light: Mesh, dark: Mesh)
     {
       let floorY: Float = -1.35, front: Float = 5, bendZ: Float = -1.5, radius: Float = 1.2, top: Float = 6
@@ -255,10 +252,11 @@ extension Kraken
       let length = floorLength + bendLength + wallLength
       let square: Float = 0.8, halfWidth: Float = 6.4
 
-      /// Along the profile from the front of the floor, up the bend, to the top of the wall.
+      /// a point along the profile from the front of the floor, up the bend, to the top of the wall
       func profile(_ s: Float) -> SIMD2<Float>
       {
         if s <= floorLength { return SIMD2(floorY, front - s) }
+
         if s <= floorLength + bendLength
         {
           let a = (s - floorLength) / radius
@@ -270,6 +268,7 @@ extension Kraken
 
       var light = Builder(), dark = Builder()
       let columns = Int(halfWidth * 2 / square), rows = Int((length / square).rounded(.up)) * 4
+
       for j in 0 ..< rows
       {
         let s0 = Float(j) / Float(rows) * length, s1 = Float(j + 1) / Float(rows) * length
@@ -287,11 +286,12 @@ extension Kraken
       return (light.mesh, dark.mesh)
     }
 
-    /// Newell's patches tessellated, stood on its base about the middle.
+    /// newell's teapot patches tessellated and stood on its base about the middle
     private static func teapot() -> Mesh
     {
       var b = Builder()
       let n = 14
+
       func bernstein(_ t: Float) -> SIMD4<Float>
       {
         let s = 1 - t
@@ -313,7 +313,7 @@ extension Kraken
       return b.mesh
     }
 
-    /// A sheet dropped over a ball, falling off its sides into folds.
+    /// a sheet dropped over a ball, falling off its sides into folds
     private static func cloth() -> Mesh
     {
       grid(96, 96)
@@ -328,8 +328,7 @@ extension Kraken
       }
     }
 
-    /// A drop's splash creating a crown thrown up
-    /// off a rippling pool with the drop above it.
+    /// a drop's splash, a crown thrown up off a rippling pool with the drop above it
     private static func fluid() -> [Mesh]
     {
       let pool = grid(160, 48)

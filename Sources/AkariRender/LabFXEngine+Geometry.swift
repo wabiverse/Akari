@@ -48,49 +48,51 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// Per prim shading flags the record sorts meshes by.
+  /// per prim shading flags the record sorts meshes by.
   struct PrimFlags
   {
-    /// Prims with stylized shading or assembly, drawn through the deformer for their per corner vertices.
+    /// prims with stylized shading or assembly, drawn through the deformer for their per corner vertices.
     var styled: Set<Int32> = []
-    /// Prims the transparency pass draws, always deformer drawn.
+    /// prims the transparency pass draws, always deformer drawn.
     var transparent: Set<Int32> = []
     var emitters: Set<Int32> = []
+    /// prims seen only from the front, their back faces drop out of the view.
+    var singleSided: Set<Int32> = []
     var opacity: [Int32: Float] = [:]
-    /// Opaque prims whose materials never cut holes in their shadows.
+    /// opaque prims whose materials never cut holes in their shadows.
     var solidShadow: Set<Int32> = []
   }
 
-  /// What the captures last recorded, and when.
+  /// what the captures last recorded, and when.
   struct RecordState
   {
     var restyled = false
     var count = 0
     var at = Date.distantPast
-    /// Records that rebuilt the captures, not the deformer moving animated meshes.
+    /// records that rebuilt the captures, not the deformer moving animated meshes.
     var rebuilds = 0
     var rebuiltAt = Date.distantPast
-    /// The unique triangles the last record could hold.
+    /// the unique triangles the last record could hold.
     var budget = 0
-    /// What the static and instanced captures last recorded.
+    /// what the static and instanced captures last recorded.
     var staticKey: UInt64 = 0
     var instancedKey: UInt64 = 0
-    /// The unique triangles the static captures last recorded.
+    /// the unique triangles the static captures last recorded.
     var triangles = 0
   }
 
-  /// How the instances pick their levels.
+  /// how the instances pick their levels.
   struct InstanceLOD
   {
-    /// How much coarser than the camera's own pixels the instances pick their levels at, fit to the drawn budget.
+    /// how much coarser than the camera's own pixels the instances pick their levels at, fit to the drawn budget.
     var detail: Float = 1
-    /// The pixels a unit radius covers at unit clip w, for the camera's instance cull.
+    /// the pixels a unit radius covers at unit clip w, for the camera's instance cull.
     var pixelScale: Float = 1
-    /// Whether `detail` is a record's fit yet, rather than its starting value.
+    /// whether `detail` is a record's fit yet, rather than its starting value.
     var fitted = false
   }
 
-  /// The view the static captures were chosen for, and the viewport's eye since, to choose again once it settles somewhere new.
+  /// the view the static captures were chosen for, and the viewport's eye since, to choose again once it settles somewhere new.
   struct ViewTracking
   {
     var camera: RecordCamera?
@@ -103,40 +105,42 @@ extension Akari.LabFXEngine
     var reframing: Reframing?
   }
 
-  /// The scene split into meshes that have animated and the rest, each
-  /// in its own capture, so animated frames only rerecord what moves.
+  /// the scene split into animated meshes and the rest, each in its own capture, so animated frames only rerecord what moves
   struct SceneGeometry
   {
     var staticCapture: LabGLCaptureBuffer?
-    /// The static meshes unwelded, which the shadows and probes draw faster.
+    /// whether the gbuffer also drew the late culled static draws this frame, which the back layer then draws too
+    var lateCulled = false
+    /// what the shadows and probes draw for the static meshes, unwelded or with cages for refined meshes.
     var staticShadowCapture: LabGLCaptureBuffer?
-    /// Too many static triangles to unweld them all, the shadows draw `staticCapture`.
+    /// too many static triangles to unweld them all, the shadows draw `staticCapture`.
     var staticShadowShared = false
-    /// Static instanced prototypes, each drawn once per instance set.
+    /// static instanced prototypes, each drawn once per instance set.
     var staticInstancedCapture: LabGLCaptureBuffer?
     var dynamicCapture: LabGLCaptureBuffer?
     let staticRecorder = Akari.Geom.Recorder(keepsTopology: false)
-    /// Keeps the instanced prototypes caches apart from the static meshes.
+    /// keeps the instanced prototypes caches apart from the static meshes.
     let instancedRecorder = Akari.Geom.Recorder(keepsTopology: false)
-    /// Lays the animated meshes out once and deforms them on the GPU per frame.
+    /// builds the static shadow capture when refined meshes cast from their cages.
+    let shadowRecorder = Akari.Geom.Recorder(keepsTopology: false)
+    /// lays the animated meshes out once and deforms them on the gpu per frame.
     let deformer = Akari.Geom.Deformer()
 
-    /// Every visible mesh, by path key, kept current from the scene's drained changes.
+    /// every visible mesh, by path key, kept current from the scene's drained changes.
     var meshes: [UInt64: Akari.Geom.Recorder.RawMesh] = [:]
-    /// Instance sets by key, so the meshes of one prototype share one copy.
+    /// instance sets by key, so the meshes of one prototype share one copy.
     var instanceSets: [UInt64: Akari.Geom.Matrices] = [:]
-    /// Each cached mesh's prim id, to pick meshes out without copying them.
+    /// each cached mesh's prim id, to pick meshes out without copying them.
     var primIds: [UInt64: Int32] = [:]
-    /// Per mesh, a key of its data and transform.
+    /// per mesh, a key of its data and transform.
     var changes: [UInt64: UInt64] = [:]
-    /// Meshes that changed after they first appeared. They stay dynamic, a pause
-    /// demoting them would rerecord the static capture and rebuild them on the way back.
+    /// meshes that changed after they appeared, they stay dynamic so a pause doesn't rerecord the static capture
     var animated: Set<UInt64> = []
-    /// Animated meshes the scene took away, kept laid out but not drawn.
+    /// animated meshes the scene took away, kept laid out but not drawn.
     var hidden: Set<UInt64> = []
-    /// Mesh key to the keys of its per instance fallback copies.
+    /// mesh key to the keys of its per instance fallback copies.
     var expansions: [UInt64: [UInt64]] = [:]
-    /// Simplified meshes by content and triangle count, kept while they're drawn.
+    /// simplified meshes by content and triangle count, kept while they're drawn.
     var details: [UInt64: Detail] = [:]
     var flags = PrimFlags()
     var record = RecordState()
@@ -147,10 +151,12 @@ extension Akari.LabFXEngine
     var instancedBatch = BatchSummary()
     var dynamicBatch = BatchSummary()
     var cameraCull = CameraCull()
-    /// The instanced capture's instances were culled to the camera this frame.
+    /// this frame's deformed draws are encoded to the ones that reach into the camera
+    var dynamicCulled = false
+    /// the instanced capture's instances were culled to the camera this frame.
     var instancesCulled = false
 
-    /// The non empty captures, static first.
+    /// the non empty captures, static first.
     var captures: [LabGLCaptureBuffer]
     {
       [staticBatch.isEmpty ? nil : staticCapture,
@@ -163,6 +169,13 @@ extension Akari.LabFXEngine
       staticShadowShared ? staticCapture : staticShadowCapture
     }
 
+    /// what the light probes capture, the static scene without what animates, unless nothing stands still
+    var probeCaptures: [LabGLCaptureBuffer]
+    {
+      let still = [staticBatch.isEmpty ? nil : staticShadow, instancedBatch.isEmpty ? nil : staticInstancedCapture].compactMap(\.self)
+      return still.isEmpty ? shadowCaptures : still
+    }
+
     var shadowCaptures: [LabGLCaptureBuffer]
     {
       [staticBatch.isEmpty ? nil : staticShadow,
@@ -171,13 +184,13 @@ extension Akari.LabFXEngine
     }
   }
 
-  /// The view the static captures are chosen for.
+  /// the view the static captures are chosen for.
   struct RecordCamera
   {
     var planes: [SIMD4<Float>]
     var eye: SIMD3<Float>
     var pixelScale: Float
-    /// The viewport's view, its half angle widened by `margin`.
+    /// the viewport's view, its half angle widened by `margin`.
     var forward: SIMD3<Float>
     var cone: Float
     static let margin: Float = 20 * .pi / 180
@@ -202,7 +215,7 @@ extension Akari.LabFXEngine
       cone = frustum ? .pi : min(atan((tanX * tanX + tanY * tanY).squareRoot()) + Self.margin, .pi)
     }
 
-    /// The radius in pixels a sphere covers, zero when it's out of view or under half a pixel.
+    /// the radius in pixels a sphere covers, zero when it's out of view or under half a pixel.
     func pixels(center: SIMD3<Float>, radius: Float) -> Float
     {
       for p in planes where simd_dot(SIMD3(p.x, p.y, p.z), center) + p.w < -radius
@@ -221,17 +234,17 @@ extension Akari.LabFXEngine
     }
   }
 
-  /// A mesh simplified to the screen it covers.
+  /// a mesh simplified to the screen it covers.
   struct Detail
   {
     var points: Pixar.VtVec3fArray
     var tris: Pixar.VtVec3iArray
     var uvs: Pixar.VtVec2fArray
-    /// The original of each triangle when it was pruned, empty when clustered.
+    /// the original of each triangle when it was pruned, empty when clustered.
     var sources: Pixar.VtIntArray
   }
 
-  /// What a recorded batch leaves behind for bounds and shadow casters.
+  /// what a recorded batch leaves behind for bounds and shadow casters.
   struct BatchSummary
   {
     var bounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
@@ -253,6 +266,12 @@ extension Akari.LabFXEngine
       let dynamicCapture = labgl.captureCreate()
     else { return false }
 
+    // a capture made after another was destroyed can come back still holding that one's draws
+    for capture in [staticCapture, staticShadowCapture, staticInstancedCapture, dynamicCapture]
+    {
+      labgl.captureClear(capture)
+    }
+
     geometry.staticCapture = staticCapture
     geometry.staticShadowCapture = staticShadowCapture
     geometry.staticInstancedCapture = staticInstancedCapture
@@ -262,6 +281,10 @@ extension Akari.LabFXEngine
     runtime.setPassCallback(.drawDynamicGeometry, callback: akariDynamicGeometryCallback, userdata: userdata)
     runtime.setPassCallback(.drawStaticInstancedGeometry,
                             callback: akariStaticInstancedGeometryCallback, userdata: userdata)
+    runtime.setPassCallback(.drawStaticGeometryBack, callback: akariStaticGeometryBackCallback, userdata: userdata)
+    runtime.setPassCallback(.drawStaticInstancedGeometryBack,
+                            callback: akariStaticInstancedGeometryBackCallback, userdata: userdata)
+    runtime.setPassCallback(.drawDynamicGeometryBack, callback: akariDynamicGeometryBackCallback, userdata: userdata)
     return true
   }
 
@@ -276,10 +299,69 @@ extension Akari.LabFXEngine
     geometry = SceneGeometry()
   }
 
+  /// drops what the scene that went away cached, its meshes would otherwise stay recorded under the new stage
+  func adoptScene(_ id: UInt64)
+  {
+    // the first scene of a session has nothing cached yet, only a replacement does.
+    let previous = lastSceneId
+    lastSceneId = id
+    guard previous != 0 else { return }
+
+    destroyCaptures()
+    releaseOutline()
+    guard createCaptures(), createOutlineCapture()
+    else
+    {
+      // keeping the old id has the next frame try again instead of drawing nothing for the whole scene.
+      lastSceneId = previous
+      return
+    }
+
+    lastGeometryRevision = 0
+    sceneBounds = nil
+    probes.automaticBox = nil
+    water = nil
+    waterKeys = []
+    styles.revision = .max
+    styles.transparent = []
+    styles.emitters = []
+    styles.singleSided = []
+    styles.opacity = [:]
+    styles.solidShadow = []
+    pointLights.slots = []
+    pointLights.mains = []
+    pointLights.mainSince = [:]
+    pointLights.importance = [:]
+    pointLights.positions = [:]
+    pointLights.following = []
+    shadowAtlas.mainSlots = []
+    transparency.causticKey = 0
+    transparency.causticsTraced = false
+    transparency.causticsFull = false
+    transparency.glassMapKey = 0
+    transparency.glassMapsDrawn = false
+
+    // a new scene counts its revisions from the start again, so each sync below is made to run rather than trusted to see a change
+    forceDomeReload = true
+    atmosphere.revision = .max
+    volumes.revision = .max
+    probes.overrideRevision = .max
+    probes.overrides = []
+    probes.structuralRevision = 0
+    environment.sunSceneBounds = nil
+    environment.authoredSun = .dome("\u{0}")
+    shadowAtlas.forgetScene()
+    lightProbes.forgetScene()
+    glassCaustics.forgetRays()
+    resetHistory()
+  }
+
+  // every pass that replays the deformed draws looks through the camera, so it skips the ones wholly outside it
   fileprivate func drawDynamicGeometry()
   {
     guard !geometry.dynamicBatch.isEmpty, let dynamicCapture = geometry.dynamicCapture else { return }
-    labgl_capturePlaybackIndirect(dynamicCapture)
+    guard geometry.dynamicCulled else { return labgl_capturePlaybackIndirect(dynamicCapture) }
+    labgl.capturePlaybackIndirectCulled(dynamicCapture, slot: Self.dynamicCameraSlot)
   }
 
   fileprivate func drawStaticInstancedGeometry()
@@ -288,18 +370,76 @@ extension Akari.LabFXEngine
     if geometry.instancesCulled { labgl.capturePlaybackInstancesCulled(capture, slot: 0) }
     else { labgl.capturePlayback(capture) }
   }
+
+  // culls front faces for the back layer, then turns culling off again as every later pass expects
+
+  private func withFrontFacesCulled(_ draw: () -> Void)
+  {
+    // the gl face names, spelled out since two modules both declare the back one
+    let front = GLenum(0x0404), back = GLenum(0x0405)
+
+    gl.enable(GL_CULL_FACE)
+    gl.cullFace(front)
+    draw()
+    gl.cullFace(back)
+    gl.disable(GL_CULL_FACE)
+  }
+
+  fileprivate func drawStaticGeometryBack()
+  {
+    guard let capture = geometry.staticCapture else { return }
+    withFrontFacesCulled
+    {
+      // the same camera culled draws the gbuffer replayed, early and late, or every draw when culling failed
+      guard geometry.cameraCull.encoded else { return labgl_capturePlaybackIndirect(capture) }
+      labgl.capturePlaybackIndirectCulled(capture, slot: UInt32(Self.cameraCullSlot))
+      if geometry.lateCulled { labgl.capturePlaybackIndirectCulled(capture, slot: UInt32(Self.cameraLateCullSlot)) }
+    }
+  }
+
+  fileprivate func drawStaticInstancedGeometryBack()
+  {
+    withFrontFacesCulled { drawStaticInstancedGeometry() }
+  }
+
+  fileprivate func drawDynamicGeometryBack()
+  {
+    withFrontFacesCulled { drawDynamicGeometry() }
+  }
 }
 
-/// `Runtime.setPassCallback` takes a plain C function pointer.
+/// `Runtime.setPassCallback` takes a plain c function pointer.
 private func akariDynamicGeometryCallback(_ userdata: UnsafeMutableRawPointer?, _: Int32, _: Int32)
 {
   guard let userdata else { return }
   Unmanaged<Akari.LabFXEngine>.fromOpaque(userdata).takeUnretainedValue().drawDynamicGeometry()
 }
 
-/// `Runtime.setPassCallback` takes a plain C function pointer.
+/// `Runtime.setPassCallback` takes a plain c function pointer.
+private func akariStaticGeometryBackCallback(_ userdata: UnsafeMutableRawPointer?, _: Int32, _: Int32)
+{
+  guard let userdata else { return }
+  Unmanaged<Akari.LabFXEngine>.fromOpaque(userdata).takeUnretainedValue().drawStaticGeometryBack()
+}
+
+/// `Runtime.setPassCallback` takes a plain c function pointer.
+private func akariStaticInstancedGeometryBackCallback(_ userdata: UnsafeMutableRawPointer?, _: Int32, _: Int32)
+{
+  guard let userdata else { return }
+  Unmanaged<Akari.LabFXEngine>.fromOpaque(userdata).takeUnretainedValue().drawStaticInstancedGeometryBack()
+}
+
+/// `Runtime.setPassCallback` takes a plain c function pointer.
+private func akariDynamicGeometryBackCallback(_ userdata: UnsafeMutableRawPointer?, _: Int32, _: Int32)
+{
+  guard let userdata else { return }
+  Unmanaged<Akari.LabFXEngine>.fromOpaque(userdata).takeUnretainedValue().drawDynamicGeometryBack()
+}
+
+/// `Runtime.setPassCallback` takes a plain c function pointer.
 private func akariStaticInstancedGeometryCallback(_ userdata: UnsafeMutableRawPointer?, _: Int32, _: Int32)
 {
   guard let userdata else { return }
   Unmanaged<Akari.LabFXEngine>.fromOpaque(userdata).takeUnretainedValue().drawStaticInstancedGeometry()
 }
+

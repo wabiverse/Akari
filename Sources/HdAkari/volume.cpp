@@ -98,6 +98,7 @@ void ReadFloat(HdSceneDelegate *sceneDelegate, SdfPath const &id, TfToken const 
   const VtValue value = sceneDelegate->Get(id, name);
   double d = 0.0;
   int i = 0;
+
   if (First(value, out)) return;
   if (First(value, d)) out = float(d);
   else if (First(value, i)) out = float(i);
@@ -151,10 +152,12 @@ HdAkariVolume::Sync(HdSceneDelegate *sceneDelegate,
   }
 
   const SdfPath &id = GetId();
+
   HdAkariVolumeData data;
   data.id = id;
   data.transform = sceneDelegate->GetTransform(id);
   data.visible = sceneDelegate->GetVisible(id);
+
   for (HdVolumeFieldDescriptor const &field : sceneDelegate->GetVolumeFieldDescriptors(id)) {
     if (data.densityField.IsEmpty() || field.fieldName == _tokens->density) {
       data.densityField = field.fieldId;
@@ -165,11 +168,13 @@ HdAkariVolume::Sync(HdSceneDelegate *sceneDelegate,
   ReadFloat(sceneDelegate, id, _tokens->volumeDensityScale, data.densityScale);
   ReadFloat(sceneDelegate, id, _tokens->volumeAnisotropy, data.anisotropy);
   ReadFloat(sceneDelegate, id, _tokens->volumeMaxResolution, data.maxResolution);
+
   const VtValue albedo = sceneDelegate->Get(id, _tokens->volumeAlbedo);
   GfVec3f c;
   if (First(albedo, c)) { data.albedoR = c[0]; data.albedoG = c[1]; data.albedoB = c[2]; }
 
   scene->UpdateVolume(std::move(data));
+
   *dirtyBits = HdChangeTracker::Clean;
 }
 
@@ -203,8 +208,10 @@ HdAkariField::Sync(HdSceneDelegate *sceneDelegate,
   }
 
   const SdfPath &id = GetId();
+
   HdAkariFieldData data;
   data.id = id;
+
   const VtValue path = sceneDelegate->Get(id, HdFieldTokens->filePath);
   if (path.IsHolding<SdfAssetPath>()) {
     SdfAssetPath const &asset = path.UncheckedGet<SdfAssetPath>();
@@ -216,6 +223,7 @@ HdAkariField::Sync(HdSceneDelegate *sceneDelegate,
   else if (name.IsHolding<std::string>()) data.fieldName = name.UncheckedGet<std::string>();
 
   scene->UpdateField(std::move(data));
+
   *dirtyBits = HdField::Clean;
 }
 

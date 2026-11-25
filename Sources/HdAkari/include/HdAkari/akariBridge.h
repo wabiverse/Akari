@@ -40,7 +40,7 @@
 #ifndef HDAKARI_AKARI_BRIDGE_H
 #define HDAKARI_AKARI_BRIDGE_H
 
-/* (todo): move the C++ implementation for these into native Swift. */
+/* todo move the c++ implementation of these into swift */
 
 #include <stdint.h>
 
@@ -50,64 +50,56 @@
 extern "C" {
 #endif
 
-/**
- * Packed codes returned by `AKRenderDelegateDefaultAovDescriptor`.
- */
+/** packed codes returned by `AKRenderDelegateDefaultAovDescriptor` */
 typedef enum AK_AOV_FORMAT
 {
-  AK_AOV_FORMAT_COLOR = 0,     /* HdFormatFloat16Vec4, clear (0,0,0,1). */
-  AK_AOV_FORMAT_DEPTH = 1,     /* HdFormatFloat32, clear 1.0. */
-  AK_AOV_FORMAT_ID = 2,        /* HdFormatInt32, clear -1 (primId/instanceId/elementId). */
-  AK_AOV_FORMAT_INVALID = -1,  /* Unsupported AOV, the delegate returns an invalid descriptor. */
+  AK_AOV_FORMAT_COLOR = 0,     /* `HdFormatFloat16Vec4` cleared to opaque black */
+  AK_AOV_FORMAT_DEPTH = 1,     /* `HdFormatFloat32` cleared to 1 */
+  AK_AOV_FORMAT_ID = 2,        /* `HdFormatInt32` cleared to -1, for prim, instance and element ids */
+  AK_AOV_FORMAT_INVALID = -1,  /* an unsupported aov, the delegate returns an invalid descriptor */
 } AK_AOV_FORMAT;
 
 /**
- * Hands the Swift `Akari.RenderEngine` to the C++ render delegate.
+ * hands the swift `Akari.RenderEngine` to the c++ render delegate.
  *
- * @param engine `Unmanaged.passRetained(engine).toOpaque()`. The
- *        bridge holds the raw pointer, the caller keeps the Swift
- *        object alive.
+ * @param engine `Unmanaged.passRetained(engine).toOpaque()`, the bridge
+ *        holds the raw pointer and the caller keeps the swift object alive.
  *
- * @warning Call *before* selecting the Akari renderer, i.e.
- *          before the Hydra engine (and its render delegate)
- *          is constructed.
+ * @warning call this before selecting the akari renderer, so before the
+ *          hydra engine and its render delegate are constructed.
  */
 void AkariHydraSetRenderEngine(void *engine);
 
-/** The retained `Akari.RenderEngine`, or NULL if none was set. */
+/** the retained `Akari.RenderEngine`, or null if none was set */
 void *AkariHydraGetRenderEngine(void);
 
 /**
- * Hands the Swift `Akari.RenderDelegate` to the C++ render delegate adapter.
+ * hands the swift `Akari.RenderDelegate` to the c++ render delegate adapter.
  *
- * @param delegate `Unmanaged.passRetained(delegate).toOpaque()`. The
- *        bridge holds the raw pointer, the caller keeps the Swift
- *        object alive.
+ * @param delegate `Unmanaged.passRetained(delegate).toOpaque()`, the bridge
+ *        holds the raw pointer and the caller keeps the swift object alive.
  *
- * @warning Call *before* selecting the Akari renderer, i.e.
- *          before the Hydra engine (and its render delegate)
- *          is constructed.
+ * @warning call this before selecting the akari renderer, so before the
+ *          hydra engine and its render delegate are constructed.
  */
 void AkariHydraSetRenderDelegate(void *delegate);
 
-/** The retained Swift `Akari.RenderDelegate`, or NULL if none was set. */
+/** the retained swift `Akari.RenderDelegate`, or null if none was set */
 void *AkariHydraGetRenderDelegate(void);
 
 /**
- * Forces HdAkari's renderer plugin to be linked.
+ * forces the hdakari renderer plugin to be linked.
  *
- * HdAkari is a static library, without a reference
- * into the plugin's .o the linker drops it, taking
- * its `TF_REGISTRY_FUNCTION` with it, and Akari
- * never registers. Call this before selecting the
- * renderer.
+ * hdakari is a static library, so without a reference into the plugin's
+ * object file the linker drops it along with its `TF_REGISTRY_FUNCTION`
+ * and akari never registers. call this before selecting the renderer.
  */
 void AkariHdEnsureLinked(void);
 
-/** Number of meshes the delegate has synced (-1 if renderParam is null). */
+/** how many meshes the delegate has synced, -1 when `renderParam` is null */
 long AkariSceneMeshCount(void *renderParam);
 
-/** Total triangles across all synced meshes (-1 if renderParam is null). */
+/** the triangles across every synced mesh, -1 when `renderParam` is null */
 long AkariSceneTriangleCount(void *renderParam);
 
 #ifdef __cplusplus

@@ -60,9 +60,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 namespace {
 
-/// What arrays equal by content bin to, the first one seen holding the memory
-/// every later equal one shares. An entry not asked for in a few sync passes
-/// goes, the meshes holding its array keep it.
+/// what arrays equal by content bin to, sharing the first one's memory, an entry unasked for a few passes goes
 struct Bins
 {
   struct Entry
@@ -79,7 +77,7 @@ struct Bins
 
   std::array<Bin, 64> bins;
   std::atomic<uint64_t> pass{0};
-  /// Only a pass that synced something ages the bins, an idle frame doesn't.
+  /// only a pass that synced something ages the bins, an idle frame doesn't.
   std::atomic<bool> touched{false};
 
   template <class T>
@@ -144,6 +142,7 @@ void HdAkariInternMeshArrays(HdAkariMeshData &mesh)
   mesh.points = bins.Intern(mesh.points);
   mesh.triangleIndices = bins.Intern(mesh.triangleIndices);
   mesh.uvs = bins.Intern(mesh.uvs);
+  mesh.normals = bins.Intern(mesh.normals);
   mesh.triangleFaces = bins.Intern(mesh.triangleFaces);
   mesh.skinInfluences = bins.Intern(mesh.skinInfluences);
 }
@@ -151,7 +150,7 @@ void HdAkariInternMeshArrays(HdAkariMeshData &mesh)
 void HdAkariTriangulate(HdMeshTopology const &topology, HdMeshUtil &meshUtil, VtVec3iArray *triangles,
                         VtIntArray *params)
 {
-  // Hydra's own topology hash, what Storm shares its index buffers by.
+  // hydra's own topology hash, what storm shares its index buffers by.
   const uint64_t key = topology.ComputeHash();
   TheBins().touched.store(true, std::memory_order_relaxed);
   const uint64_t now = TheBins().pass.load(std::memory_order_relaxed);

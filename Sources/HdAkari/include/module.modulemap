@@ -8,6 +8,7 @@ module HdAkari {
   header "HdAkari/textureAtlas.h"
   header "HdAkari/stageInfo.h"
   header "HdAkari/authoring.h"
+  header "HdAkari/hierarchy.h"
   header "HdAkari/pxrSurface.h"
   header "HdAkari/domeImage.h"
   header "HdAkari/volumeGrid.h"

@@ -115,14 +115,17 @@ HdAkariMaterial::Sync(HdSceneDelegate *sceneDelegate,
                        && textures.normalPath.empty() && textures.emissivePath.empty();
   if (constant && untextured) {
     // the meshes classify on these, only a change of class needs them synced again.
-    auto emitter = [](GfVec3f const &c, GfVec3f const &e) {
-      return std::max({c[0], c[1], c[2]}) < 0.02f && std::max({e[0], e[1], e[2]}) > 0.5f;
+    auto emitter = [](GfVec3f const &c, GfVec3f const &e, float a) {
+      const float glow = std::max({e[0], e[1], e[2]});
+      const float albedo = std::max({c[0], c[1], c[2]});
+      return glow > 0.5f && (albedo < 0.02f || a < 0.98f || (glow > 1.0f && glow > 8.0f * albedo));
     };
 
     const bool sameClass = (row[3] < 0.98f) == (opacity < 0.98f)
-                        && emitter(GfVec3f(row[0], row[1], row[2]), GfVec3f(row[8], row[9], row[10]))
-                             == emitter(color, textures.emissiveColor);
-    atlas->UpdateConstantMaterial(key, color, opacity, roughness, metallic, opacityThreshold, textures.emissiveColor);
+                        && emitter(GfVec3f(row[0], row[1], row[2]), GfVec3f(row[8], row[9], row[10]), row[3])
+                             == emitter(color, textures.emissiveColor, opacity);
+    atlas->UpdateConstantMaterial(key, color, opacity, roughness, metallic, opacityThreshold, textures.emissiveColor,
+                                  textures.specular);
     if (sameClass) return;
   }
   else {

@@ -63,18 +63,7 @@ class HdAkariRenderParam;
 class HdAkariScene;
 class HdAkariTextureAtlas;
 
-/// @class HdAkariRenderDelegate
-///
-/// The Hydra render delegate for Akari.
-///
-/// A thin adapter: every virtual it overrides forwards to the Swift
-/// `Akari.RenderDelegate` registered through `AkariHydraSetRenderDelegate`.
-///
-/// The delegate logic (supported prim types, default AOVs, prim factory
-/// decisions) live in Swift (AkariRenderDelegate.swift). This class keeps
-/// only the per renderer state Hydra hands it (Hgi, resource registry, the
-/// scene/render param) and the C++ glue the prim shells still need.
-///
+/// the hydra render delegate for akari, a thin adapter forwarding to the swift `Akari.RenderDelegate` and holding hydra's per renderer state
 class HdAkariRenderDelegate final : public HdRenderDelegate
 {
 public:
@@ -85,26 +74,26 @@ public:
   HdAkariRenderDelegate(const HdAkariRenderDelegate &) = delete;
   HdAkariRenderDelegate &operator=(const HdAkariRenderDelegate &) = delete;
 
-  /// Hydra hands us the graphics interface via drivers.
+  /// hydra hands over the graphics interface through the drivers
   HDAKARI_API void SetDrivers(HdDriverVector const &drivers) override;
 
-  /// Supported prim types.
+  // supported prim types
   HDAKARI_API const TfTokenVector &GetSupportedRprimTypes() const override;
   HDAKARI_API const TfTokenVector &GetSupportedSprimTypes() const override;
   HDAKARI_API const TfTokenVector &GetSupportedBprimTypes() const override;
 
   HDAKARI_API HdResourceRegistrySharedPtr GetResourceRegistry() const override;
 
-  /// The universal context first, then Storm's `glslfx`, which is where
-  /// assets authored for usdview put their UsdPreviewSurface.
+  /// the universal context first, then glslfx where many usd assets keep their preview surface
   HDAKARI_API TfTokenVector GetMaterialRenderContexts() const override;
+
   HDAKARI_API HdRenderParam *GetRenderParam() const override;
 
-  /// Render pass.
+  // render pass
   HDAKARI_API HdRenderPassSharedPtr CreateRenderPass(HdRenderIndex *index,
                                                      HdRprimCollection const &collection) override;
 
-  /// Prim factories.
+  // prim factories
   HDAKARI_API HdInstancer *CreateInstancer(HdSceneDelegate *delegate, SdfPath const &id) override;
   HDAKARI_API void DestroyInstancer(HdInstancer *instancer) override;
 
@@ -126,22 +115,18 @@ public:
 private:
   void _Initialize();
 
-  Hgi *_hgi = nullptr;                       // shared with Hydra, not owned
-  void *_renderEngine = nullptr;             // retained Swift Akari.RenderEngine
-  void *_swiftDelegate = nullptr;            // retained Swift Akari.RenderDelegate
-  
-  // ---- shared with swift. ----
-  std::shared_ptr<HdAkariScene> _scene;      // mesh registry the Rprims fill
-  std::shared_ptr<HdAkariTextureAtlas> _textureAtlas; // shared roughness/metallic/opacity atlas
+  Hgi *_hgi = nullptr;                       // shared with hydra, not owned
+  void *_renderEngine = nullptr;             // the retained swift `Akari.RenderEngine`
+  void *_swiftDelegate = nullptr;            // the retained swift `Akari.RenderDelegate`
+
+  // shared with swift
+  std::shared_ptr<HdAkariScene> _scene;      // the mesh registry the rprims fill
+  std::shared_ptr<HdAkariTextureAtlas> _textureAtlas; // the shared roughness, metallic and opacity atlas
   std::shared_ptr<HdAkariRenderParam> _renderParam;
-  // ----------------------------
 
   HdResourceRegistrySharedPtr _resourceRegistry;
 
-  /// Cached vectors of supported prim types,
-  /// filled from the Swift delegate on first
-  /// use (the static constants below are the
-  /// fallback when no Swift delegate is set).
+  /// the supported prim types from the swift delegate on first use, the constants below stand in without one
   mutable TfTokenVector _supportedRprimTypes;
   mutable TfTokenVector _supportedSprimTypes;
   mutable TfTokenVector _supportedBprimTypes;

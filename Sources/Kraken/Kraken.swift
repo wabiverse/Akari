@@ -43,6 +43,7 @@ import AkariHydra
 import AkariRender
 import CxxStdlib
 import Foundation
+import HdAkari
 import HydraKit
 import SwiftCrossUI
 
@@ -58,10 +59,9 @@ import SwiftCrossUI
   import UIKitBackend
 #endif
 
-// Kraken, the universal realtime creation suite, rendered by Akari.
+// kraken, the universal realtime creation suite, rendered by akari.
 #if !os(macOS)
-  // only macOS currently supports headless renders
-  // TODO: figure out platform differences...
+  // only macos supports headless renders for now
   @main
 #endif
 struct Kraken: App
@@ -82,34 +82,48 @@ struct Kraken: App
 
   init()
   {
-    AppUtils.raiseOpenFileLimit()
+    StageManager.raiseOpenFileLimit()
+    StageManager.enterWorkingFolder()
 
     Pixar.Bundler.shared.setup(.resources)
 
-    AppUtils.registerAkariPlugin()
+    StageManager.registerAkariPlugin()
 
-    let render = AppUtils.renderArguments()
+    let args = Kraken.parseArgs()
+    let render = args.render
     #if os(macOS)
       isHeadlessRender = render.backgroundWorker
     #else
       isHeadlessRender = false
     #endif
 
-    engine = Akari.RenderEngine(settings: RenderSettings(quality: render.quality ?? .high))
+    var renderSettings = RenderSettings(quality: render.quality ?? .high)
+    renderSettings.subdivision = args.viewport.refineLevel
+    engine = Akari.RenderEngine(settings: renderSettings)
     registerAkariRenderer(engine: engine)
 
-    let newScene: (stage: UsdStage, fileURL: URL?) = AppUtils.openOrCreateStage()
+    let newScene: (stage: UsdStage, fileURL: URL?) = StageManager.openOrCreateStage()
 
     engine.labfx.setStageUpAxis(isZUp: UsdGeom.getUpAxis(for: newScene.stage) == .z)
     engine.labfx.setStageMetersPerUnit(UsdGeom.getMetersPerUnit(for: newScene.stage))
 
-    let lattice = AppUtils.latticeMotionFile().flatMap { LatticeBulbDriver(motionFile: $0) }
+    let lattice = args.latticeMotion.flatMap { LatticeBulbDriver(motionFile: $0) }
+
+    // akari reads what the meshes ask for off this stage, so it has to know it before hydra syncs anything
+    Pixar.HdAkariSetSyncStage(newScene.stage)
 
     hydra = Hydra.RenderEngine(stage: newScene.stage,
                                selectionColor: Pixar.GfVec4f(1.0, Float(0xA0) / 255, Float(0x28) / 255, 1.0),
                                selectionOutlineWidth: 8,
                                rendererPluginId: Tf.Token(Akari.rendererPluginId))
-    AppUtils.frameStartView(hydra)
+
+    // subdivision surfaces refine once by default, and `--refine-level` overrides it.
+    hydra.complexity = RenderSettings.complexity(subdivision: engine.settings.subdivision)
+    StageManager.frameStartView(hydra)
+
+    // a scene opened at launch skips the layouts own open, so its modifier stacks are evaluated here
+    let stageHost = hydra
+    stageHost.performOnFrameQueue { Kraken.Modifiers.syncAll(stageHost.stage, stageHost.currentTimeCode) }
     let frameDriver = Akari.FrameDriver(hydra: hydra, akari: engine)
     driver = frameDriver
 
@@ -138,14 +152,30 @@ struct Kraken: App
     if !isHeadlessRender
     {
       let probeTimes = Akari.Playback.probeBakeTimes(newScene.stage)
+      playback.planSunBakes(newScene.stage)
       Task { @MainActor in await playback.prebakeProbes(at: probeTimes) }
+      if let frame = args.viewport.frame { playback.seek(to: frame) }
+      if args.viewport.play { playback.play() }
     }
 
     settings = HUDState(engine: engine, hydra: hydra)
-    layout = Layout(engine: engine, hydra: hydra, driver: frameDriver)
+    let newLayout = Layout(engine: engine, hydra: hydra, driver: frameDriver)
+    newLayout.settings = settings
+    layout = newLayout
+
+    // scripts given with s run once the window is up
+    let scripts = args.scripts
+    if !isHeadlessRender, scripts.socket { ScriptServer.start(newLayout, shared: true) }
+    if !isHeadlessRender, !scripts.files.isEmpty
+    {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 2)
+      {
+        MainActor.assumeIsolated { ScriptHost.runLaunchScripts(scripts, layout: newLayout) }
+      }
+    }
     scene = Kraken.SceneFile(fileURL: newScene.fileURL)
 
-    print("[akari] first light - renderer = \(Akari.rendererPluginId)")
+    Console.success("first light, rendering with \(Akari.rendererPluginId)", from: .akari)
   }
 
   var body: some Scene

@@ -43,13 +43,11 @@ import Foundation
 import HdAkari
 import HydraKit
 import LabGL
+import LatticeUSD
 
 public extension Akari.Geom
 {
-  /// Deforms the animated meshes on the GPU. Their triangulation is laid out
-  /// once into buffers a capture records against, then each frame only their
-  /// points and matrices are uploaded and compute rebuilds normals and the
-  /// world space vertices in place, the same layout `Batch` writes.
+  /// deforms animated meshes on the gpu, laid out once so each frame only points and matrices upload and compute rebuilds the vertices
   final class Deformer
   {
     struct Mesh
@@ -65,14 +63,17 @@ public extension Akari.Geom
       var worldMatrix: [Float] = []
       var jointBase = 0
       var jointCount = 0
+      /// where its cage sits in the cage buffer, for a mesh refined on the gpu.
+      var cageBase = 0
+      var cageCount = 0
     }
 
-    /// The per mesh matrices, world (16), normal (9) and prim id, padded.
+    /// the per mesh world matrix, normal matrix and prim id, padded
     static let xfStride = 40
     static let ring = 3
 
     var meshes: [Mesh] = []
-    /// Every mesh the layout was built from, empty ones too, by what a rebuild keys on.
+    /// every mesh the layout was built from, empty ones too, by what a rebuild keys on.
     private var inputs: [UInt64: Input] = [:]
 
     struct Input
@@ -85,17 +86,22 @@ public extension Akari.Geom
       var skinRevision: UInt64
       var skinInfluencesPerPoint: Int
       var jointCount: Int
+      var cagePointCount: Int
+      var stencilCount: Int
+      var authoredNormals: Bool
 
       func same(as other: Input) -> Bool
       {
         topologyRevision == other.topologyRevision && flipWinding == other.flipWinding && pointCount == other.pointCount
           && skinRevision == other.skinRevision && skinInfluencesPerPoint == other.skinInfluencesPerPoint && jointCount == other.jointCount
+          && cagePointCount == other.cagePointCount && stencilCount == other.stencilCount
+          && authoredNormals == other.authoredNormals
       }
     }
 
     var topologies: [UInt64: (revision: UInt64, topology: Akari.Geom.Topology)] = [:]
 
-    /// A mesh's part of the layout, its indices from 0, kept until its triangles, winding or wire spacing change.
+    /// a mesh's part of the layout, its indices from 0, kept until its triangles, winding or wire spacing change.
     struct Block
     {
       var topologyRevision: UInt64
@@ -103,19 +109,22 @@ public extension Akari.Geom
       var spacing: Float
       var pointCount: Int
       var triCount: Int
-      /// Per triangle its three points, -1 when out of range, and a slot for the mesh index.
+      /// per triangle its three points, -1 when out of range, and a slot for the mesh index.
       var faces: [Int32]
-      /// Per corner its point and its face with the hidden edge bits.
+      /// per corner its point and its face with the hidden edge bits.
       var corners: [Int32]
       var uvs: [Float]
-      /// Each point's faces, from `starts[p]` to `starts[p + 1]`.
+      /// each point's faces, from `starts[p]` to `starts[p + 1]`.
       var starts: [Int32]
       var list: [Int32]
+      /// a polygon mesh's authored normals per corner and the smooth normal of each point under them, empty for other meshes
+      var cornerNormals: [Float] = []
+      var restNormals: [Float] = []
     }
 
     private var blocks: [UInt64: Block] = [:]
 
-    /// The layout's contents, kept to append to.
+    /// the layout's contents, kept to append to.
     struct Arrays
     {
       var faces: [Int32] = []
@@ -123,16 +132,24 @@ public extension Akari.Geom
       var uvs: [Float] = []
       var starts: [Int32] = [0]
       var list: [Int32] = []
+      /// authored normals per corner and the smooth normals they turn against per point, zero for the rest.
+      var cornerNormals: [Float] = []
+      var restNormals: [Float] = []
       var meshOfPoint: [Int32] = []
       var rest: [Float] = []
       var ranges: [Int32] = []
       var weights: [Float] = []
-      /// Per triangle its three points, for the shadow capture.
+      /// per triangle its three points, for the shadow capture.
       var shadow: [Int32] = []
+      /// refined points built from cages on the gpu, each stencil's target, its weight range and each term's cage point and weight
+      var stencilTargets: [Int32] = []
+      var stencilStarts: [Int32] = [0]
+      var stencilIndices: [Int32] = []
+      var stencilWeights: [Float] = []
     }
 
     var arrays = Arrays()
-    /// The capture the layout draws into, and the laid out meshes it leaves undrawn while they're hidden.
+    /// the capture the layout draws into, and the laid out meshes it leaves undrawn while they're hidden.
     var capture: OpaquePointer?
     var undrawn: Set<UInt64> = []
     var capacities: [GLuint: Int] = [:]
@@ -141,33 +158,35 @@ public extension Akari.Geom
     var cornerCount = 0
 
     var jointCount = 0
+    var cagePointCount = 0
     var cursor = 0
-    /// One world space vertex per point, drawn through the triangles' own indices,
-    /// for the shadows, which only need positions and so skip the per corner expansion.
+    /// one world vertex per point drawn through the triangles' own indices, for the shadows that only need positions
     public private(set) var shadowCapture: OpaquePointer?
+    /// each shown transparent mesh's world bounds as of the last update, what the glass shadow map fits.
+    public internal(set) var glassBounds: [(min: SIMD3<Float>, max: SIMD3<Float>)] = []
+    public var hasGlass: Bool { !glassBounds.isEmpty }
 
     var kernels = Akari.ComputeKernels<Kernel>()
     var buffers = Buffers()
 
-    /// Per prim id, how assembled it is and the center of the triangle it collapses to
-    /// (assemble, x, y, z), and that triangle's size, negative to center it on the mesh.
+    /// per prim id, how assembled it is, the center of the triangle it collapses to and that triangle's size, negative to center on the mesh
     public var assembly: [Int32: SIMD4<Float>] = [:]
     public var assemblySize: [Int32: Float] = [:]
-    /// Each prim's wire spacing in world units, its mesh drawing only the edges between cells that wide.
+    /// each prim's wire spacing in world units, its mesh drawing only the edges between cells that wide.
     public var wireSpacing: [Int32: Float] = [:]
-    /// Set when the wire spacing changed, or a skinned mesh's skin wasn't whole yet, the next `needsRebuild` relays out.
+    /// set when the wire spacing changed, or a skinned mesh's skin wasn't whole yet, the next `needsRebuild` relays out.
     public var relayout = false
-    /// Relayouts left for skins still arriving, so one that never completes doesn't relay out every frame.
+    /// relayouts left for skins still arriving, so one that never completes doesn't relay out every frame.
     private var skinRetries = 8
-    /// Where the camera is, the collapsed triangle faces it.
+    /// where the camera is, the collapsed triangle faces it.
     public var eye = SIMD3<Float>(repeating: 0)
     public var zUp = false
-    /// The vertices hold last frame's positions, which become this frame's previous ones.
+    /// the vertices hold last frame's positions, which become this frame's previous ones.
     var hasHistory = false
-    /// The previous positions already match the current ones.
+    /// the previous positions already match the current ones.
     var settled = true
 
-    /// The layout's GPU buffers.
+    /// the layout's gpu buffers.
     struct Buffers
     {
       var faces: GLuint = 0
@@ -178,24 +197,51 @@ public extension Akari.Geom
       var pointMesh: GLuint = 0
       var faceNormals: GLuint = 0
       var pointNormals: GLuint = 0
+      var cornerNormals: GLuint = 0
+      var restNormals: GLuint = 0
       var points: [GLuint] = []
       var transforms: [GLuint] = []
-      /// GPU skinning: bind space rest points, each point's (first, count) influence range,
-      /// the (palette joint, weight) influences, and this frame's joint palette, ringed.
+      /// gpu skinning buffers, the rest points, each point's influence range, the influences and this frame's joint palette
       var restPoints: GLuint = 0
       var skinRanges: GLuint = 0
       var skinWeights: GLuint = 0
       var palettes: [GLuint] = []
-      /// The vertex buffer compute writes, owned by the capture once recorded.
+      /// gpu subdivision: the stencils, read only once laid out, and this frame's cage points, ringed.
+      var stencilTargets: GLuint = 0
+      var stencilStarts: GLuint = 0
+      var stencilIndices: GLuint = 0
+      var stencilWeights: GLuint = 0
+      var cages: [GLuint] = []
+      /// the vertex buffer compute writes, owned by the capture once recorded.
       var vertices: GLuint = 0
-      /// One world space vertex per point, for the shadows.
+      /// one world space vertex per point, for the shadows.
       var shadowVertices: GLuint = 0
+      /// one uint per draw, nonzero for glass, so the glass maps encode only glass draws, ringed.
+      var glassDraws: [GLuint] = []
+      /// one value per draw, nonzero where its bounds reach into the camera, ringed apart from the points since the camera moves on its own
+      var cameraDraws: [GLuint] = []
     }
 
-    /// The compute kernels that deform, skin and settle the meshes, and write their vertices.
+    /// which revision of each mesh's points each ring slot holds and its bounds then, so unchanged points aren't copied or scanned again
+    var written: [UInt64] = []
+    var pointBounds: [Float] = []
+    /// this frame's glass draw mask, see `Buffers.glassDraws`.
+    public internal(set) var glassDraws: GLuint = 0
+    /// world bounds per recorded draw with hidden ones far outside every view, so shadow culling lines up with the draws, and which are glass
+    public internal(set) var drawBounds: [Float] = []
+    public internal(set) var glassDrawIndices: [Int] = []
+    /// per recorded draw, whether its bounds hold all it draws, false while assembling pulls its vertices toward a triangle outside them
+    var drawBounded: [Bool] = []
+    /// the ring slot of `Buffers.cameraDraws` written last and how many draws each slot holds room for
+    var cameraCursor = 0
+    var cameraCapacity = 0
+    /// where a draw that shouldn't land in any view is put.
+    public static let nowhere: [Float] = [1e30, 1e30, 1e30, 1e30, 1e30, 1e30]
+
+    /// the compute kernels that deform, skin and settle the meshes, and write their vertices.
     enum Kernel: Akari.ComputeKernelName
     {
-      case face, point, emit, shadow, settle, skin
+      case face, point, emit, shadow, settle, skin, subdivide
 
       static let label = "deform"
 
@@ -209,6 +255,7 @@ public extension Akari.Geom
           case .shadow: shadowGLSL
           case .settle: settleGLSL
           case .skin: skinGLSL
+          case .subdivide: subdivideGLSL
         }
       }
 
@@ -222,6 +269,7 @@ public extension Akari.Geom
           case .shadow: shadowMSL
           case .settle: settleMSL
           case .skin: skinMSL
+          case .subdivide: subdivideMSL
         }
       }
 
@@ -235,11 +283,12 @@ public extension Akari.Geom
 
     deinit
     {
+      if let shadowCapture { labgl.captureDestroy(shadowCapture) }
       releaseBuffers()
       kernels.release()
     }
 
-    /// Whether `meshes` need relaying out (other meshes, or one's triangles changed).
+    /// whether `meshes` need laying out again, other meshes or changed triangles
     public func needsRebuild(_ meshes: [Recorder.RawMesh]) -> Bool
     {
       if relayout { return true }
@@ -253,7 +302,9 @@ public extension Akari.Geom
           old.pointCount == meshes[i].points.size(),
           old.skinRevision == meshes[i].skinRevision,
           old.skinInfluencesPerPoint == meshes[i].skinInfluencesPerPoint,
-          old.jointCount == meshes[i].skinPalette.count / 12
+          old.jointCount == meshes[i].skinPalette.count / 12,
+          old.cagePointCount == Self.cagePointCount(meshes[i]),
+          old.stencilCount == Self.stencilCount(meshes[i])
         else { return true }
         guard old.topologyRevision != meshes[i].topologyRevision else { continue }
 
@@ -266,9 +317,7 @@ public extension Akari.Geom
       return seen.count != inputs.count
     }
 
-    /// Lays `meshes` out and records their draws into `capture`, one per mesh.
-    /// The meshes already laid out keep their place, so unless one of them
-    /// changed only the new ones are laid out and uploaded.
+    /// lays `meshes` out and records their draws into `capture`, keeping the place of meshes already laid out
     public func rebuild(_ meshes: [Recorder.RawMesh], into capture: OpaquePointer)
     {
       relayout = false
@@ -299,8 +348,10 @@ public extension Akari.Geom
       if shadowCapture == nil { shadowCapture = labgl.captureCreate() }
       if let shadowCapture { labgl.captureClear(shadowCapture) }
       let start = (faces: arrays.faces.count, corners: arrays.corners.count, uvs: arrays.uvs.count, starts: arrays.starts.count,
+                   cornerNormals: arrays.cornerNormals.count, restNormals: arrays.restNormals.count,
                    list: arrays.list.count, points: arrays.meshOfPoint.count, rest: arrays.rest.count, ranges: arrays.ranges.count,
-                   weights: arrays.weights.count)
+                   weights: arrays.weights.count, stencilTargets: arrays.stencilTargets.count,
+                   stencilStarts: arrays.stencilStarts.count, stencilTerms: arrays.stencilIndices.count)
       let laidOut = appending ? Set(inputs.keys) : []
       inputs = next
 
@@ -314,7 +365,8 @@ public extension Akari.Geom
            cached.topologyRevision == mesh.topologyRevision,
            cached.flipWinding == mesh.flipWinding,
            cached.spacing == spacing,
-           cached.pointCount == count
+           cached.pointCount == count,
+           cached.cornerNormals.isEmpty != Self.authoredNormals(mesh)
         {
           block = cached
         }
@@ -327,8 +379,8 @@ public extension Akari.Geom
         guard count > 0, block.triCount > 0 else { continue }
         let joints = mesh.skinPalette.count / 12
         let skinned = mesh.skinInfluencesPerPoint > 0 && joints > 0 && mesh.skinInfluences.size() == count * mesh.skinInfluencesPerPoint
-        // a skin whose palette or weights haven't caught up with its
-        // points get laid out unskinned and tried again next frame.
+
+        // a skin whose palette or weights lag its points is laid out unskinned and tried again next frame
         if mesh.skinInfluencesPerPoint > 0, !skinned, skinRetries > 0 { incomplete = true }
         append(block, mesh, skinned: skinned)
       }
@@ -340,6 +392,8 @@ public extension Akari.Geom
       store(&buffers.faces, arrays.faces, from: start.faces, usage: read)
       store(&buffers.corners, arrays.corners, from: start.corners, usage: read)
       store(&buffers.uvs, arrays.uvs, from: start.uvs, usage: read)
+      store(&buffers.cornerNormals, arrays.cornerNormals, from: start.cornerNormals, usage: read)
+      store(&buffers.restNormals, arrays.restNormals, from: start.restNormals, usage: read)
       store(&buffers.faceStart, arrays.starts, from: start.starts, usage: read)
       store(&buffers.faceList, arrays.list.isEmpty ? [0] : arrays.list, from: start.list, usage: read)
       store(&buffers.pointMesh, arrays.meshOfPoint, from: start.points, usage: read)
@@ -355,13 +409,31 @@ public extension Akari.Geom
         }
       }
 
+      if !arrays.stencilTargets.isEmpty
+      {
+        store(&buffers.stencilTargets, arrays.stencilTargets, from: start.stencilTargets, usage: read)
+        store(&buffers.stencilStarts, arrays.stencilStarts, from: start.stencilStarts, usage: read)
+        store(&buffers.stencilIndices, arrays.stencilIndices, from: start.stencilTerms, usage: read)
+        store(&buffers.stencilWeights, arrays.stencilWeights, from: start.stencilTerms, usage: read)
+        if buffers.cages.isEmpty { buffers.cages = [GLuint](repeating: 0, count: Self.ring) }
+        for i in buffers.cages.indices
+        {
+          reserve(&buffers.cages[i], bytes: cagePointCount * 12, usage: read)
+        }
+      }
+
       let scratch = LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE
       reserve(&buffers.faceNormals, bytes: faceCount * 16, usage: scratch)
       reserve(&buffers.pointNormals, bytes: pointCount * 16, usage: scratch)
       if buffers.points.isEmpty { buffers.points = [GLuint](repeating: 0, count: Self.ring) }
       if buffers.transforms.isEmpty { buffers.transforms = [GLuint](repeating: 0, count: Self.ring) }
+      if buffers.glassDraws.isEmpty { buffers.glassDraws = [GLuint](repeating: 0, count: Self.ring) }
+
+      // a relaid out ring holds no mesh's points yet.
+      written = []
       for i in 0 ..< Self.ring
       {
+        reserve(&buffers.glassDraws[i], bytes: max(self.meshes.count, 1) * 4, usage: read)
         reserve(&buffers.points[i], bytes: pointCount * 12, usage: read)
         reserve(&buffers.transforms[i], bytes: self.meshes.count * Self.xfStride * 4, usage: read)
       }
@@ -375,7 +447,7 @@ public extension Akari.Geom
       }
     }
 
-    /// Adds `block` for `mesh` to the end of the layout.
+    /// adds `block` for `mesh` to the end of the layout.
     func append(_ block: Block, _ mesh: Recorder.RawMesh, skinned: Bool)
     {
       let count = block.pointCount
@@ -403,6 +475,17 @@ public extension Akari.Geom
       }
 
       arrays.uvs.append(contentsOf: block.uvs)
+      if block.cornerNormals.count == block.triCount * 12, block.restNormals.count == count * 4
+      {
+        arrays.cornerNormals += block.cornerNormals
+        arrays.restNormals += block.restNormals
+      }
+      else
+      {
+        arrays.cornerNormals.append(contentsOf: repeatElement(0, count: block.triCount * 12))
+        arrays.restNormals.append(contentsOf: repeatElement(0, count: count * 4))
+      }
+
       let listBase = Int32(arrays.list.count)
       arrays.list.reserveCapacity(arrays.list.count + block.list.count)
       for f in block.list
@@ -441,6 +524,9 @@ public extension Akari.Geom
         arrays.ranges.append(contentsOf: repeatElement(0, count: count * 2))
       }
 
+      let cageBase = cagePointCount
+      let cageCount = mesh.refinesOnGPU ? appendStencils(mesh, pointBase: pointBase) : 0
+
       meshes.append(Mesh(key: mesh.key,
                          topologyRevision: mesh.topologyRevision,
                          flipWinding: mesh.flipWinding,
@@ -449,11 +535,45 @@ public extension Akari.Geom
                          cornerBase: cornerBase,
                          cornerCount: block.triCount * 3,
                          jointBase: k > 0 ? jointCount : 0,
-                         jointCount: k > 0 ? joints : 0))
+                         jointCount: k > 0 ? joints : 0,
+                         cageBase: cageCount > 0 ? cageBase : 0,
+                         cageCount: cageCount))
       if k > 0 { jointCount += joints }
       pointCount += count
       faceCount += block.triCount
       cornerCount += block.triCount * 3
+    }
+
+    /// adds a refined mesh's stencils, its rows writing its points from `pointBase` on. returns its cage point count.
+    private func appendStencils(_ mesh: Recorder.RawMesh, pointBase: Int32) -> Int
+    {
+      let offsets: UnsafePointer<Int32>? = Overlay.cdata(mesh.stencilOffsets)
+      let indices: UnsafePointer<Int32>? = Overlay.cdata(mesh.stencilIndices)
+      let weights: UnsafePointer<Float>? = Overlay.cdata(mesh.stencilWeights)
+      guard let offsets, let indices, let weights else { return 0 }
+
+      let rows = mesh.stencilOffsets.size() - 1
+      let terms = mesh.stencilIndices.size()
+      let cageBase = Int32(cagePointCount)
+      let termBase = Int32(arrays.stencilIndices.count)
+      arrays.stencilTargets += (0 ..< Int32(rows)).map { pointBase + $0 }
+      arrays.stencilStarts += UnsafeBufferPointer(start: offsets + 1, count: rows).map { termBase + $0 }
+      arrays.stencilIndices += UnsafeBufferPointer(start: indices, count: terms).map { cageBase + $0 }
+      arrays.stencilWeights += UnsafeBufferPointer(start: weights, count: terms)
+
+      let cageCount = mesh.cagePoints.size()
+      cagePointCount += cageCount
+      return cageCount
+    }
+
+    private static func cagePointCount(_ mesh: Recorder.RawMesh) -> Int
+    {
+      mesh.refinesOnGPU ? mesh.cagePoints.size() : 0
+    }
+
+    private static func stencilCount(_ mesh: Recorder.RawMesh) -> Int
+    {
+      mesh.refinesOnGPU ? mesh.stencilIndices.size() : 0
     }
 
     private static func input(_ mesh: Recorder.RawMesh) -> Input
@@ -465,10 +585,27 @@ public extension Akari.Geom
             uvs: mesh.uvs,
             skinRevision: mesh.skinRevision,
             skinInfluencesPerPoint: mesh.skinInfluencesPerPoint,
-            jointCount: mesh.skinPalette.count / 12)
+            jointCount: mesh.skinPalette.count / 12,
+            cagePointCount: cagePointCount(mesh),
+            stencilCount: stencilCount(mesh),
+            authoredNormals: authoredNormals(mesh))
     }
 
-    /// Writes `values` from `start` on into `buffer`, which grows by half again once they no longer fit.
+    /// whether the mesh shades with its own normals, one per triangle corner.
+    static func authoredNormals(_ mesh: Recorder.RawMesh) -> Bool
+    {
+      !mesh.smooth && !mesh.normals.empty() && mesh.normals.size() == mesh.tris.size() * 3
+    }
+
+    /// how the emit kernel shades a mesh, kept in its transform slot 38.
+    static func shading(_ mesh: Recorder.RawMesh) -> Float
+    {
+      if mesh.smooth { return 1 }
+      if authoredNormals(mesh) { return 3 }
+      return mesh.faceted ? 2 : 0
+    }
+
+    /// writes `values` from `start` on into `buffer`, which grows by half again once they no longer fit.
     private func store<T>(_ buffer: inout GLuint, _ values: [T], from start: Int, usage: GLuint)
     {
       let size = MemoryLayout<T>.stride
@@ -484,7 +621,7 @@ public extension Akari.Geom
       gl.unmapBuffer(buffer)
     }
 
-    /// Makes `buffer` hold at least `bytes`, half again more when it has to grow, its contents lost.
+    /// makes `buffer` hold at least `bytes`, half again more when it has to grow, its contents lost.
     private func reserve(_ buffer: inout GLuint, bytes: Int, usage: GLuint)
     {
       if buffer != 0, capacities[buffer, default: 0] >= bytes { return }

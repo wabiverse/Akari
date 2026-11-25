@@ -117,7 +117,7 @@ const TfTokenVector HdAkariRenderDelegate::SUPPORTED_BPRIM_TYPES = {
 
 namespace {
 
-/// Collect tokens the Swift delegate query enumerates into `out`.
+/// collects the tokens a swift delegate query enumerates into `out`
 void FillTokens(TfTokenVector &out, void *delegate,
                 void (*enumerate)(void *, AKStringCallback, void *))
 {
@@ -144,16 +144,16 @@ HdAkariRenderDelegate::HdAkariRenderDelegate(HdRenderSettingsMap const &settings
 void
 HdAkariRenderDelegate::_Initialize()
 {
-  // the swift Akari.RenderEngine + Akari.RenderDelegate,
-  // handed over before renderer selection.
+  // the swift render engine and render delegate, handed over before the renderer is selected
   _renderEngine = AkariHydraGetRenderEngine();
   _swiftDelegate = AkariHydraGetRenderDelegate();
+
   _resourceRegistry = std::make_shared<HdResourceRegistry>();
   _scene = std::make_shared<HdAkariScene>();
   _textureAtlas = std::make_shared<HdAkariTextureAtlas>();
   _renderParam = std::make_shared<HdAkariRenderParam>(_renderEngine, _hgi, _scene, _textureAtlas);
 
-  // references shared with swift.
+  // swift holds references to these too
   Tf_SharedPtrRetainReleaseHelper<HdAkariScene>::Register(_scene);
   Tf_SharedPtrRetainReleaseHelper<HdAkariTextureAtlas>::Register(_textureAtlas);
   Tf_SharedPtrRetainReleaseHelper<HdAkariRenderParam>::Register(_renderParam);
@@ -162,7 +162,7 @@ HdAkariRenderDelegate::_Initialize()
 HdAkariRenderDelegate::~HdAkariRenderDelegate()
 {
   _resourceRegistry.reset();
-  _renderParam.reset(); // references _scene/_textureAtlas, so tear down before them
+  _renderParam.reset(); // it references the scene and texture atlas so it goes first
   _scene.reset();
   _textureAtlas.reset();
 }
@@ -177,7 +177,8 @@ HdAkariRenderDelegate::SetDrivers(HdDriverVector const &drivers)
       break;
     }
   }
-  // rebuild the shared param now that Hgi is known.
+
+  // rebuild the shared param now that hgi is known
   if (_renderParam) {
     _renderParam->SetHgi(_hgi);
   }
@@ -220,7 +221,7 @@ HdResourceRegistrySharedPtr HdAkariRenderDelegate::GetResourceRegistry() const {
 
 TfTokenVector HdAkariRenderDelegate::GetMaterialRenderContexts() const
 {
-  // RenderMan's own materials first, so a look shades as RenderMan renders it.
+  // renderman materials come first so a look shades the way renderman renders it
   return {_tokens->ri, TfToken(), _tokens->glslfx};
 }
 
@@ -248,7 +249,7 @@ HdAkariRenderDelegate::CreateRprim(TfToken const &typeId, SdfPath const &rprimId
   const char *className = _swiftDelegate
       ? AKRenderDelegateRprimClassName(_swiftDelegate, typeId.GetText())
       : nullptr;
-  
+
   using RprimFactoryFunc = HdRprim*(*)(const SdfPath&);
   static const std::unordered_map<TfToken, RprimFactoryFunc, TfToken::HashFunctor> factoryMap = {
     { HdPrimTypeTokens->mesh,   [](const SdfPath& id) -> HdRprim* { return new HdAkariMesh(id);   } },
@@ -260,7 +261,7 @@ HdAkariRenderDelegate::CreateRprim(TfToken const &typeId, SdfPath const &rprimId
     { HdPrimTypeTokens->volume, [](const SdfPath& id) -> HdRprim* { return new HdAkariVolume(id); } },
     { HdPrimTypeTokens->basisCurves, [](const SdfPath& id) -> HdRprim* { return new HdAkariBasisCurves(id); } }
   };
-  
+
   const TfToken lookupToken(className);
 
   auto it = factoryMap.find(lookupToken);
@@ -284,27 +285,26 @@ HdAkariRenderDelegate::CreateSprim(TfToken const &typeId, SdfPath const &sprimId
       ? AKRenderDelegateSprimClassName(_swiftDelegate, typeId.GetText())
       : nullptr;
 
-  if (className && (strcmp(className, "sphereLight") == 0 ||
-                    strcmp(className, "cylinderLight") == 0 ||
-                    strcmp(className, "diskLight") == 0 ||
-                    strcmp(className, "rectLight") == 0 ||
-                    strcmp(className, "domeLight") == 0 ||
-                    strcmp(className, "distantLight") == 0)) {
+  auto is = [className](const char *name) { return className && strcmp(className, name) == 0; };
+
+  if (is("sphereLight") || is("cylinderLight") || is("diskLight") ||
+      is("rectLight") || is("domeLight") || is("distantLight")) {
     return new HdAkariLight(sprimId, typeId);
   }
 
-  if (className && strcmp(className, "camera") == 0) {
+  if (is("camera")) {
     return new HdCamera(sprimId);
   }
 
-  if (className && strcmp(className, "extComputation") == 0) {
+  if (is("extComputation")) {
     return new HdExtComputation(sprimId);
   }
 
-  if (className && strcmp(className, "material") == 0) {
+  if (is("material")) {
     return new HdAkariMaterial(sprimId);
   }
-  // anything else is accepted so binding works, but not consumed.
+
+  // anything else is accepted so bindings resolve, but nothing reads it
   return new HdCamera(sprimId);
 }
 
@@ -315,24 +315,22 @@ HdAkariRenderDelegate::CreateFallbackSprim(TfToken const &typeId)
       ? AKRenderDelegateSprimClassName(_swiftDelegate, typeId.GetText())
       : nullptr;
 
-  if (className && (strcmp(className, "sphereLight") == 0 ||
-                    strcmp(className, "cylinderLight") == 0 ||
-                    strcmp(className, "diskLight") == 0 ||
-                    strcmp(className, "rectLight") == 0 ||
-                    strcmp(className, "domeLight") == 0 ||
-                    strcmp(className, "distantLight") == 0)) {
+  auto is = [className](const char *name) { return className && strcmp(className, name) == 0; };
+
+  if (is("sphereLight") || is("cylinderLight") || is("diskLight") ||
+      is("rectLight") || is("domeLight") || is("distantLight")) {
     return new HdAkariLight(SdfPath::EmptyPath(), typeId);
   }
 
-  if (className && strcmp(className, "camera") == 0) {
+  if (is("camera")) {
     return new HdCamera(SdfPath::EmptyPath());
   }
 
-  if (className && strcmp(className, "extComputation") == 0) {
+  if (is("extComputation")) {
     return new HdExtComputation(SdfPath::EmptyPath());
   }
 
-  if (className && strcmp(className, "material") == 0) {
+  if (is("material")) {
     return new HdAkariMaterial(SdfPath::EmptyPath());
   }
 
@@ -348,11 +346,13 @@ HdAkariRenderDelegate::CreateBprim(TfToken const &typeId, SdfPath const &bprimId
       ? AKRenderDelegateBprimClassName(_swiftDelegate, typeId.GetText())
       : nullptr;
 
-  if (className && strcmp(className, "renderBuffer") == 0) {
+  auto is = [className](const char *name) { return className && strcmp(className, name) == 0; };
+
+  if (is("renderBuffer")) {
     return new HdAkariRenderBuffer(bprimId);
   }
 
-  if (className && strcmp(className, "openvdbAsset") == 0) {
+  if (is("openvdbAsset")) {
     return new HdAkariField(bprimId);
   }
 
@@ -366,11 +366,13 @@ HdAkariRenderDelegate::CreateFallbackBprim(TfToken const &typeId)
       ? AKRenderDelegateBprimClassName(_swiftDelegate, typeId.GetText())
       : nullptr;
 
-  if (className && strcmp(className, "renderBuffer") == 0) {
+  auto is = [className](const char *name) { return className && strcmp(className, name) == 0; };
+
+  if (is("renderBuffer")) {
     return new HdAkariRenderBuffer(SdfPath::EmptyPath());
   }
 
-  if (className && strcmp(className, "openvdbAsset") == 0) {
+  if (is("openvdbAsset")) {
     return new HdAkariField(SdfPath::EmptyPath());
   }
 
@@ -382,7 +384,7 @@ void HdAkariRenderDelegate::DestroyBprim(HdBprim *bPrim) { delete bPrim; }
 void
 HdAkariRenderDelegate::CommitResources(HdChangeTracker * /*tracker*/)
 {
-  // resource upload is driven by the engine per frame, the bins only age.
+  // the engine uploads resources each frame, here the array bins only age
   HdAkariPruneArrayBins();
 }
 

@@ -43,7 +43,7 @@ import simd
 
 extension Kraken.EditMesh
 {
-  /// Adds a shape's points and faces, its corners counting from its own first point, and returns the faces made.
+  /// adds a shape's points and faces, its corners counting from its own first point, and returns the faces made
   mutating func add(points shape: [SIMD3<Float>], faces loops: [[Int]]) -> [Int]
   {
     let base = points.count
@@ -53,8 +53,7 @@ extension Kraken.EditMesh
     return made
   }
 
-  /// Extrudes the selected faces as a region, or the selected edges into new faces,
-  /// returning the direction to move the extrusion along, `nil` for a free move.
+  /// extrudes the selected faces as a region or edges into faces, returning the direction to move along, nil for a free move
   mutating func extrude() -> SIMD3<Float>?
   {
     let region = selectedFaceList
@@ -63,7 +62,11 @@ extension Kraken.EditMesh
       let inside = Set(region)
       var copy: [Int: Int] = [:]
       for v in Set(region.flatMap { faces[$0] }).sorted() { copy[v] = addPoint(points[v]) }
-      let direction = simd_normalize(region.reduce(SIMD3<Float>.zero) { $0 + normal(faces[$1]) })
+
+      // faces facing every way, like a ring around a cylinder, have no one direction to move along
+      let sum = region.reduce(SIMD3<Float>.zero) { $0 + normal(faces[$1]) }
+      let direction = simd_length(sum) > 0.25 * Float(region.count) ? simd_normalize(sum) : SIMD3<Float>(repeating: .nan)
+
       var walls: [[Int]] = []
       for f in region
       {
@@ -89,8 +92,10 @@ extension Kraken.EditMesh
     }
 
     guard !verts.isEmpty else { return nil }
+
     var copy: [Int: Int] = [:]
     for v in verts.sorted() { copy[v] = addPoint(points[v]) }
+
     let chosen = mode == .vertex ? Set(allEdges.filter { verts.contains($0.a) && verts.contains($0.b) }) : edges
     for e in chosen
     {
@@ -105,11 +110,12 @@ extension Kraken.EditMesh
     return nil
   }
 
-  /// Insets each selected face by `amount` of the way to its middle.
+  /// insets each selected face by `amount` of the way to its middle
   mutating func inset(_ amount: Float)
   {
     let region = selectedFaceList
     guard !region.isEmpty else { return }
+
     let t = min(max(amount, 0), 0.999)
     var made: [Int?] = []
     for f in region
@@ -119,6 +125,7 @@ extension Kraken.EditMesh
       let ring = face.map { addPoint(simd_mix(points[$0], c, SIMD3(repeating: t))) }
       topology.killFace(f)
       made.append(topology.addFace(ring))
+
       for i in face.indices
       {
         let j = (i + 1) % face.count
@@ -153,11 +160,12 @@ extension Kraken.EditMesh
     compact()
   }
 
-  /// Makes a face of the selected verts, ordered around their middle.
+  /// makes a face of the selected verts, ordered around their middle
   mutating func fill() -> Bool
   {
     let list = verts.sorted()
     guard list.count >= 3 else { return false }
+
     let c = list.reduce(SIMD3<Float>.zero) { $0 + points[$1] } / Float(list.count)
     var n = SIMD3<Float>.zero
     for i in list.indices
@@ -170,6 +178,7 @@ extension Kraken.EditMesh
     }
 
     guard simd_length(n) > 0 else { return false }
+
     n = simd_normalize(n)
     let u = simd_normalize(points[list[0]] - c - n * simd_dot(points[list[0]] - c, n))
     let w = simd_cross(n, u)
@@ -180,16 +189,18 @@ extension Kraken.EditMesh
     }
 
     if face.indices.contains(where: { topology.isDirected(face[$0], face[($0 + 1) % face.count]) }) { face.reverse() }
+
     guard let made = topology.addFace(face) else { return false }
     finish(selecting: [made])
     return true
   }
 
-  /// Remakes the faces touching any vert `into` moves, with it moved.
+  /// remakes the faces touching any vert that `into` moves, with that vert moved
   private mutating func weld(_ into: [Int: Int])
   {
     var touched = Set<Int>()
     for v in into.keys { touched.formUnion(topology.facesTouching(v)) }
+
     for f in touched.sorted()
     {
       let corners = topology.corners(of: f).map { into[$0] ?? $0 }
@@ -198,12 +209,14 @@ extension Kraken.EditMesh
     }
   }
 
-  /// Welds the selected verts into one at `target`, their middle when `nil`.
+  /// welds the selected verts into one at `target`, or at their middle when `nil`
   mutating func merge(at target: SIMD3<Float>?)
   {
     guard let keep = verts.min(), let middle = median else { return }
+
     points[keep] = target ?? middle
     weld(Dictionary(uniqueKeysWithValues: verts.filter { $0 != keep }.map { ($0, keep) }))
+
     let map = rebuild()
     clearSelection()
     verts = remap([keep], map.verts)
@@ -240,10 +253,13 @@ extension Kraken.EditMesh
       }
     }
 
+    inherit(middles)
+
     let chosen = Set(region)
     var neighbors = Set<Int>()
     for e in middles.keys { if let s = side(e) { neighbors.formUnion(topology.facesAround(s)) } }
     neighbors.subtract(chosen)
+
     var made: [Int?] = []
     for f in region
     {
@@ -278,11 +294,12 @@ extension Kraken.EditMesh
     return loop
   }
 
-  /// Copies the selected faces, selecting the copy.
+  /// copies the selected faces and selects the copy
   mutating func duplicate() -> Bool
   {
     let region = selectedFaceList
     guard !region.isEmpty else { return false }
+
     var copy: [Int: Int] = [:]
     for v in Set(region.flatMap { faces[$0] }).sorted() { copy[v] = addPoint(points[v]) }
     finish(selecting: region.map { topology.addFace(faces[$0].map { copy[$0]! }) })
@@ -293,6 +310,7 @@ extension Kraken.EditMesh
   {
     let cut = ring(edge)
     guard cut.count > 1 else { return }
+
     var middles: [Kraken.Edge: Int] = [:]
     var touched = Set<Int>()
     for e in cut
@@ -301,11 +319,14 @@ extension Kraken.EditMesh
       middles[e] = addPoint(simd_mix(points[e.a], points[e.b], SIMD3(repeating: t)))
     }
 
+    inherit(middles)
+
     for f in touched.sorted()
     {
       let face = faces[f]
       topology.killFace(f)
       let hits = face.count == 4 ? (0 ..< 4).filter { middles[Kraken.Edge(face[$0], face[($0 + 1) % 4])] != nil } : []
+
       if hits.count == 2, hits[1] - hits[0] == 2
       {
         let i = hits[0]

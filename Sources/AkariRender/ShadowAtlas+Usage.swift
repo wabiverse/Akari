@@ -43,8 +43,7 @@ import LabGL
 
 extension Akari.ShadowAtlas
 {
-  /// Clears whether a tile is used everywhere and forces an
-  /// update for any dirty cube face's allocated tiles.
+  /// clears tile usage and forces an update of every dirty cube face's allocated tiles
   func dispatchBeginFrame(dirty: Int32)
   {
     kernels[.beginFrame].bind(buffers[.tiles])
@@ -98,7 +97,7 @@ extension Akari.ShadowAtlas
     kernels[.dilateUsagePunctual].dispatch(lightCount * Self.facesPerLight)
   }
 
-  /// Sets whether the volume froxels should sample a page.
+  /// sets whether the volume froxels should sample a page.
   func dispatchTagUsageVolume(_ volume: VolumeFroxels,
                               invView: Akari.Matrix4,
                               camera: Akari.Camera,
@@ -133,7 +132,7 @@ extension Akari.ShadowAtlas
     kernel.dispatch(volume.gridWidth, volume.gridHeight)
   }
 
-  /// Marks the point light tiles the moved casters boxes cover, so only those redraw.
+  /// marks the point light tiles the moved casters boxes cover, so only those redraw.
   func dispatchTagUpdatePunctual(boxCount: Int, lights: [Akari.Lux.PointLight], lightCount: Int)
   {
     let kernel = kernels[.tagUpdatePunctual]
@@ -151,7 +150,7 @@ extension Akari.ShadowAtlas
     kernel.dispatch((boxCount * lightCount * 6 + 63) / 64)
   }
 
-  /// Masks LODs covered by finer ones, then frees, defrags and allocates pages.
+  /// masks lods covered by finer ones, then frees, defrags and allocates pages.
   func dispatchPageAllocation()
   {
     kernels[.maskLod].bind(buffers[.tiles])
@@ -177,7 +176,8 @@ extension Akari.ShadowAtlas
         : SIMD4<Float>(repeating: 0)
       kernel.set(.lightPosRadius, index: slot, posRadius)
     }
-    // LabGL lays uniforms out in first set order, every position before any bias as in `U`.
+
+    // labgl lays uniforms out in first set order, every position before any bias as in `U`
     for slot in 0 ..< Self.maxPunctualLights
     {
       kernel.set(.lightLodBias, index: slot, SIMD4<Float>(lodBias(slot: slot), 0, 0, 0))

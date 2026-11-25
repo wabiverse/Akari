@@ -44,31 +44,31 @@ import simd
 
 public extension Akari
 {
-  /// One shadow tile/page pipeline shared by every shadow casting light.
+  /// the shadow tile and page pipeline every shadow casting light shares
   final class ShadowAtlas
   {
-    /// A rendered directional view, everything the deferred shader needs to sample it.
+    /// a rendered directional view, everything the deferred shader needs to sample it.
     public struct View: Sendable
     {
       /// world -> light clip space.
       public var matrix: Matrix4
-      /// View depth this cascade covers up to, or a clipmap level's own light space radius.
+      /// view depth this cascade covers up to, or a clipmap level's own light space radius.
       public var splitFar: Float
     }
 
-    /// The froxel grid the volume scatter pass lights this frame.
+    /// the froxel grid the volume scatter pass lights this frame.
     public struct VolumeFroxels: Sendable
     {
-      /// Froxels per slice, the volume atlas's 8x8 slice tiles.
+      /// froxels per slice, the volume atlas's 8x8 slice tiles.
       public var gridWidth: Int
       public var gridHeight: Int
-      /// View depth range, slices spaced across it.
+      /// view depth range, slices spaced across it.
       public var near: Float
       public var far: Float
       public var inverseProjection: Matrix4
-      /// Farthest view depth per froxel column.
+      /// farthest view depth per froxel column.
       public var depthTexture: GLuint
-      /// The sun level offset for froxels.
+      /// the sun level offset for froxels.
       public var sunLevelBias: Int
 
       public init(gridWidth: Int, gridHeight: Int, near: Float, far: Float,
@@ -84,17 +84,17 @@ public extension Akari
       }
     }
 
-    /// The directional light's fitted basis, as the deferred shader samples it.
+    /// the directional light's fitted basis, as the deferred shader samples it.
     public struct Sun: Sendable
     {
-      /// Pure light rotation basis.
+      /// pure light rotation basis.
       public var rotation: Matrix4 = .identity
       public var eyeToLightRotation: Matrix4 = .identity
       public var refOffset: SIMD3<Float> = .zero
       public var isClipmap = true
       public var lodMin: Int32 = 0
       public var lodMax: Int32 = 0
-      /// Level bias the shading pick must add.
+      /// level bias the shading pick must add.
       public var lodBias: Float = 0
     }
     
@@ -105,19 +105,18 @@ public extension Akari
     }
 
     public internal(set) var sun = Sun()
-    /// Shared page pool.
+    /// shared page pool.
     public internal(set) var atlas: GLuint = 0
-    /// Each page's depth from the static casters alone, what a page only
-    /// dynamic casters moved over is redrawn on top of.
+    /// each page's depth from static casters alone, what dynamic casters redraw on top of
     var staticAtlas: GLuint = 0
-    /// Per tilemap slot data.
+    /// per tilemap slot data.
     public internal(set) var data: GLuint = 0
     public internal(set) var pageTable: GLuint = 0
 
     var kernels = Akari.ComputeKernels<Kernel>()
     var depthShader: GLuint = 0
     var buffers = Akari.GPUBuffers<Buffer>()
-    /// Per directional view, its tilemap slot when it has tiles to render.
+    /// per directional view, its tilemap slot when it has tiles to render.
     var renderViewReadback: GLuint = 0
     var frames: [Frame] = []
     var ringCursor = 0
@@ -129,7 +128,7 @@ public extension Akari
     var culling: [DrawCulling] = []
     var casters = CasterBounds()
     var amplification = Amplification()
-    /// Transient depth test, one tilemap of texels.
+    /// transient depth test, one tilemap of texels.
     var atlasDepth: GLuint = 0
     var atlasTarget: GLuint = 0
     var dataPixels = [Float](repeating: 0, count: dataTextureWidth * 4 * maxTilemaps)
@@ -139,20 +138,24 @@ public extension Akari
     var directionalHistory = DirectionalHistory()
     var punctualHistory = PunctualHistory()
     var lastSceneRevision: UInt64 = .max
-    /// This frame's fit, made before the usage tags so they land on the tiles it draws.
+    /// this frame's fit, made before the usage tags so they land on the tiles it draws.
     var frameFit = FrameFit()
     var casterMotion = CasterMotion()
     var staticMotion = CasterMotion()
     var casterRedraw = CasterRedraw.none
     var pressure = PunctualPressure()
-    /// The slots whose lights keep full resolution until the pool runs out for them too.
+    /// the slots whose lights keep full resolution until the pool runs out for them too.
     public var mainSlots: Set<Int> = []
-    /// The material atlas, whose opacity lets light through the static casters.
+    /// the material atlas, whose opacity lets light through the static casters.
     public var materialAtlas: GLuint = 0
-    /// Untextured materials constants, what the alpha test reads for a uv of -(row + 1).
+    /// untextured materials' constants, what the alpha test reads for them
     public var materialConstants: GLuint = 0
-    /// Each prim's style texels, whose emitter flag keeps a mesh out of the maps.
+    /// each prim's style texels, whose emitter flag keeps a mesh out of the maps.
     public var styles: GLuint = 0
+    /// whether the sun's glass map shadows the glass, which keeps it out of the sun's views here.
+    public var glassSun = false
+    /// the punctual slots whose lights shadow the glass through their glass maps, a bit a slot.
+    public var glassSlots: UInt32 = 0
 
     public init()
     {}
@@ -162,8 +165,7 @@ public extension Akari
       release()
     }
 
-    /// LODs added to `punctualLodBias` for a slot's light, the main ones match the screen
-    /// and the secondary ones start one coarser, each pressure step coarsening them in turn.
+    /// lods added to the punctual bias for a slot, the main lights match the screen and the rest start a step coarser
     public func lodBias(slot: Int) -> Float
     {
       mainSlots.contains(slot)
@@ -171,7 +173,7 @@ public extension Akari
         : Float(min(1 + (pressure.level + 1) / 2, Self.lodMax))
     }
 
-    /// Raised while the page pool runs short, coarsening the secondary lights first.
+    /// raised while the page pool runs short, coarsening the secondary lights first.
     struct PunctualPressure
     {
       var level = 0
@@ -180,8 +182,7 @@ public extension Akari
       var sinceDrop = Int.max / 2
       var settle = 0
 
-      /// Raises the level a step when the pool ran short, and lowers
-      /// it once the finer levels would comfortably fit again.
+      /// steps a level coarser when the pool ran short and finer once finer levels comfortably fit
       mutating func adapt(short: Bool, fitsFiner: Bool)
       {
         sinceDrop &+= 1
@@ -192,8 +193,8 @@ public extension Akari
         }
         else if short, level < 2 * lodMax + 2
         {
-          // short again soon after stepping down, so wait longer before the next try.
-          if sinceDrop < 120 { hold = min(hold * 2, 1920) }
+          // pressed again before the next try was due, so the finer level didn't fit and waits longer.
+          if sinceDrop < hold * 4 { hold = min(hold * 2, 1920) }
           level += 1
           headroom = 0
           settle = 8
@@ -220,11 +221,14 @@ public extension Akari
     {
       withMappedBuffer(buffers[.pagesInfo], as: Int32.self)
       { info in
-        pressure.adapt(short: info[5] > 0, fitsFiner: Int(info[7]) * 2 < Self.maxPage * 4 / 5)
+        // failed pages lose their shadow for a frame, so step coarser while a tenth of the pool is free and finer only with plenty to spare
+        let used = Int(info[7])
+        pressure.adapt(short: info[5] > 0 || used > Self.maxPage * 9 / 10,
+                       fitsFiner: used * 4 < Self.maxPage * 4 / 5)
       }
     }
 
-    /// Fits this frame's views, then tags and allocates the pages it samples.
+    /// fits this frame's views, then tags and allocates the pages it samples.
     public func markPageUsage(gbufferPosition: GLuint,
                               camera: Camera,
                               screenWidth: Int,
@@ -264,6 +268,7 @@ public extension Akari
       if sceneChanged
       {
         casterRedraw = findCasterRedraw(dynamicCasters)
+
         // the static pages hold what the static captures drew, the tiles under what changed in them redraw.
         let staticRedraw = findStaticRedraw(staticCasters)
         if staticRedraw == nil { casterRedraw = .all }
@@ -319,7 +324,7 @@ public extension Akari
       dispatchPageAllocation()
     }
 
-    /// Fits every active tilemap and lays out its views, before the usage tags.
+    /// fits every active tilemap and lays out its views, before the usage tags.
     private func fitViews(camera: Camera,
                           lightDirection: SIMD3<Float>,
                           sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
@@ -393,7 +398,7 @@ public extension Akari
       directionalHistory.view = camera.view
     }
 
-    /// Draws the stale views of what `markPageUsage` fit this frame.
+    /// draws the stale views of what `markPageUsage` fit this frame.
     public func render(staticCaptures: [OpaquePointer],
                        dynamicCaptures: [OpaquePointer],
                        dynamicDrawBounds: [[Float]?],
@@ -414,6 +419,7 @@ public extension Akari
                                  castersMoved: frameFit.castersMoved,
                                  redraw: redraw,
                                  staticRedraw: frameFit.staticRedraw)
+
       // a turned sun or changed static casters redraw in one frame, so no tile ever shows the old shadow beside the new.
       let atomic = frameFit.sunChanged || frameFit.staticRedraw > 0 || redraw == .all
       dispatchSelectViews(budget: atomic ? Int(Int32.max) : Self.renderTileBudget)

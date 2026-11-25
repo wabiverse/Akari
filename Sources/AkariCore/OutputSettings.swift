@@ -40,23 +40,23 @@
 
 import Foundation
 
-/// The file each rendered frame is written as.
+/// the file each rendered frame is written as.
 public enum OutputFormat: String, Sendable, CaseIterable
 {
-  /// One image per frame, numbered.
+  /// one image per frame, numbered.
   case png
-  /// A single movie, with the stage's soundtrack.
+  /// a single movie, with the stage's soundtrack.
   case mpeg4
 }
 
-/// Bits per channel for image output.
+/// bits per channel for image output.
 public enum ColorDepth: Int, Sendable, CaseIterable
 {
   case eight = 8
   case sixteen = 16
 }
 
-/// The channels an image is written with.
+/// the channels an image is written with.
 public enum ColorMode: String, Sendable, CaseIterable
 {
   case bw
@@ -64,46 +64,43 @@ public enum ColorMode: String, Sendable, CaseIterable
   case rgba
 }
 
-/// Where and how final renders are written, the counterpart
-/// to the render settings that decide how a frame looks.
+/// where and how final renders are written, beside the render settings that decide how a frame looks
 public struct OutputSettings: Sendable, Equatable
 {
-  /// Width of the final image in pixels, before `percentage`.
+  /// width of the final image in pixels, before `percentage`.
   public var resolutionX: Int = 1920
-  /// Height of the final image in pixels, before `percentage`.
+  /// height of the final image in pixels, before `percentage`.
   public var resolutionY: Int = 1080
-  /// Scales both dimensions, 100 renders at full size.
+  /// scales both dimensions, 100 renders at full size.
   public var percentage: Int = 100
-  /// First frame, a stage time code.
+  /// first frame, a stage time code.
   public var frameStart: Int = 1
-  /// Last frame, inclusive.
+  /// last frame, inclusive.
   public var frameEnd: Int = 250
-  /// Renders every n-th frame.
+  /// renders every n-th frame.
   public var frameStep: Int = 1
-  /// Playback rate written into movies, in frames per second.
+  /// playback rate written into movies, in frames per second.
   public var frameRate: Double = 24
-  /// The camera prim rendered through, `nil` renders the viewport's view.
+  /// the camera prim rendered through, `nil` renders the viewport's view.
   public var cameraPath: String?
-  /// Output path, `#` runs are replaced with the zero padded frame number.
+  /// output path, `#` runs are replaced with the zero padded frame number.
   public var path: String = "/tmp/akari/####"
   public var format: OutputFormat = .png
   public var colorMode: ColorMode = .rgba
   public var colorDepth: ColorDepth = .eight
-  /// Appends the format's extension to the output path.
+  /// appends the format's extension to the output path.
   public var fileExtensions: Bool = true
-  /// Rerenders frames whose file already exists.
+  /// rerenders frames whose file already exists.
   public var overwrite: Bool = true
-  /// Writes an empty file before a frame renders, so other
-  /// renders of the same output skip it when `overwrite` is
-  /// off.
+  /// writes an empty file before a frame renders so other renders of the same output skip it when overwrite is off
   public var placeholders: Bool = false
-  /// Muxes the stage's spatial audio into movies.
+  /// muxes the stage's spatial audio into movies.
   public var audio: Bool = true
 
   public init()
   {}
 
-  /// The size of the image that gets written.
+  /// the size of the image that gets written.
   public var pixelSize: (width: Int, height: Int)
   {
     let scale = Double(min(max(percentage, 1), 1000)) / 100
@@ -111,15 +108,14 @@ public struct OutputSettings: Sendable, Equatable
             max(Int((Double(resolutionY) * scale).rounded()), 1))
   }
 
-  /// The frames an animation render visits, in order.
+  /// the frames an animation render visits, in order.
   public var frames: [Int]
   {
     guard frameEnd >= frameStart else { return [frameStart] }
     return Array(stride(from: frameStart, through: frameEnd, by: max(frameStep, 1)))
   }
 
-  /// The file a frame is written to, `path` with its `#` run filled in,
-  /// four digits when it has none, and the format's extension appended.
+  /// the file a frame is written to, the path's hash run filled with the frame or four digits added, with the format's extension
   public func fileURL(frame: Int) -> URL
   {
     var name = path
@@ -136,7 +132,7 @@ public struct OutputSettings: Sendable, Equatable
     return url(name)
   }
 
-  /// The movie a whole animation is written to.
+  /// the movie a whole animation is written to.
   public var movieURL: URL
   {
     var name = path
@@ -164,7 +160,7 @@ public struct OutputSettings: Sendable, Equatable
     return fileExtensions ? url.appendingPathExtension(fileExtension) : url
   }
 
-  /// Only the last path component is searched, so `#` in a directory name stays put.
+  /// only the last path component is searched, so `#` in a directory name stays put.
   private func hashSearchRange(in name: String) -> Range<String.Index>
   {
     let slash = name.lastIndex(of: "/").map { name.index(after: $0) } ?? name.startIndex
@@ -174,7 +170,7 @@ public struct OutputSettings: Sendable, Equatable
 
 extension OutputFormat: CustomStringConvertible
 {
-  /// Human label for UI (pickers, HUD).
+  /// the label pickers and the hud show
   public var description: String
   {
     switch self
@@ -200,7 +196,7 @@ extension ColorMode: CustomStringConvertible
 
 extension ColorDepth: CustomStringConvertible
 {
-  /// Human label for UI (pickers, HUD).
+  /// the label pickers and the hud show
   public var description: String
   {
     "\(rawValue)"

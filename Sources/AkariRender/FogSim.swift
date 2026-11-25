@@ -43,12 +43,10 @@ import LabGL
 
 public extension Akari
 {
-  /// A smoke simulation on the GPU with velocity and
-  /// density on a grid over the bounds authored on a
-  /// stage.
+  /// a gpu smoke simulation with velocity and density on a grid over the bounds the stage authors
   final class FogSim
   {
-    /// What a frame of the simulation sees, in world units (meters) and seconds.
+    /// what a frame of the simulation sees, in meters and seconds
     public struct Frame
     {
       public var enable = false
@@ -58,14 +56,14 @@ public extension Akari
       public var startFrame = 1.0
       public var substeps = 2
       public var pressureIterations = 24
-      /// Frames simulated toward a frame a little ahead, the rest skipped over.
+      /// how many frames are simulated toward a frame a little ahead, the rest are skipped
       public var catchUp = Int.max
       public var vorticity: Float = 2.5
       public var dissipation: Float = 0.15
       public var settle: Float = 0.12
       public var replenish: Float = 0.6
       public var damping: Float = 0.4
-      /// The deck layer's base density per meter, floor, falloff, and its noise amount and scale.
+      /// the deck layer base density per meter, its floor and falloff, and its noise amount and scale
       public var density: Float = 0.6
       public var floorHeight: Float = 0
       public var heightFalloff: Float = 0.15
@@ -77,16 +75,16 @@ public extension Akari
       public init() {}
     }
 
-    /// The simulated density, a 3D texture over `boundsMin`...`boundsMax`, 0 when not running.
+    /// the simulated density as a 3d texture from `boundsMin` to `boundsMax`, 0 when not running
     public private(set) var texture: GLuint = 0
-    /// The simulated velocity (world units per second), a 3D texture over the same bounds.
+    /// the simulated velocity in world units per second as a 3d texture over the same bounds
     public private(set) var velocityTexture: GLuint = 0
-    /// Per velocity cell, the share of the nearby lights that reaches it through the fog.
+    /// per velocity cell, the share of the nearby lights that reaches it through the fog
     public private(set) var visibilityTexture: GLuint = 0
     public private(set) var boundsMin = SIMD3<Float>(repeating: 0)
     public private(set) var boundsMax = SIMD3<Float>(repeating: 0)
     public private(set) var isActive = false
-    /// The density grid's cell size in world units.
+    /// the density grid cell size in world units
     public var densityCellSize: Float
     {
       densCell
@@ -94,7 +92,7 @@ public extension Akari
 
     private var dims = SIMD3<Int>(0, 0, 0)
     private var cellSize: Float = 0
-    /// The density grid, `detail` times finer than the velocity's.
+    /// the density grid is `detail` times finer than the velocity grid
     private var densDims = SIMD3<Int>(0, 0, 0)
     private var densCell: Float = 0
     private var hat: GLuint = 0
@@ -151,9 +149,7 @@ public extension Akari
       release()
     }
 
-    /// Brings the simulation to `target`, from its start frame when it hasn't run there yet or
-    /// was asked for an earlier frame, otherwise on from the last frame it reached. `frameAt`
-    /// gives the settings at a frame, `disturbersAt` the disturbers at a time over a window.
+    /// brings the simulation to `target`, restarting from its first frame when it hasn't run or an earlier frame is asked for, else carrying on
     public func advance(to target: Double, framesPerSecond: Double,
                         frameAt: (Double) -> Frame,
                         disturbersAt: (_ time: Double, _ window: Double) -> [Float])
@@ -170,15 +166,23 @@ public extension Akari
                  Double(first.boundsMax.x), Double(first.boundsMax.y), Double(first.boundsMax.z),
                  Double(first.resolution), first.startFrame, Double(first.substeps), first.zUp ? 1 : 0,
                  Double(first.pressureIterations)]
+
       if key != layoutKey
       {
-        guard allocate(first) else { isActive = false; return }
+        guard allocate(first)
+        else
+        {
+          isActive = false
+          return
+        }
+
         layoutKey = key
         frame = nil
       }
 
       let start = first.startFrame.rounded()
       let goal = max(target.rounded(), start)
+
       if frame == nil || goal < frame!
       {
         reset(frameAt(start), seconds: start / framesPerSecond)
@@ -187,7 +191,12 @@ public extension Akari
 
       let substeps = max(first.substeps, 1)
       let dt = Float(1 / (framesPerSecond * Double(substeps)))
-      if let at = frame, goal - at > Double(first.catchUp), goal - at <= 48 { frame = goal - Double(first.catchUp) }
+
+      if let at = frame, goal - at > Double(first.catchUp), goal - at <= 48
+      {
+        frame = goal - Double(first.catchUp)
+      }
+
       let warmUp = goal - (frame ?? start) > 1
       while let at = frame, at < goal
       {
@@ -201,8 +210,18 @@ public extension Akari
         }
 
         frame = next
-        // a warm up of hundreds of frames goes to the GPU one frame at a time.
-        if warmUp { if Int(next) % 8 == 0 { gl.finish() } else { gl.flush() } }
+
+        // a warm up of hundreds of frames goes to the gpu one frame at a time
+        guard warmUp else { continue }
+
+        if Int(next) % 8 == 0
+        {
+          gl.finish()
+        }
+        else
+        {
+          gl.flush()
+        }
       }
 
       export()
@@ -212,6 +231,7 @@ public extension Akari
     private func prepareKernels() -> Bool
     {
       if !kernels.isEmpty { return true }
+
       kernels = .precompile()
       let failed = kernels.wait()
       guard failed.isEmpty
@@ -229,16 +249,19 @@ public extension Akari
     private func allocate(_ settings: Frame) -> Bool
     {
       releaseBuffers()
+
       let extent = pointwiseMax(settings.boundsMax - settings.boundsMin, SIMD3(repeating: 0.01))
       let along = settings.zUp ? extent : SIMD3(extent.x, extent.z, extent.y)
       cellSize = along.x / Float(max(settings.resolution, 8))
       dims = SIMD3(max(Int((along.x / cellSize).rounded()), 4),
                    max(Int((along.y / cellSize).rounded()), 4),
                    max(Int((along.z / cellSize).rounded()), 4))
+
       boundsMin = settings.boundsMin
       boundsMax = settings.boundsMax
       densDims = dims &* Self.detail
       densCell = cellSize / Float(Self.detail)
+
       let cells = dims.x * dims.y * dims.z
       let densCells = densDims.x * densDims.y * densDims.z
       let usage = LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_COMPUTE_WRITE
@@ -252,6 +275,7 @@ public extension Akari
       texture = makeVolume(GLint(GL_R16F), GLenum(GL_RED), size: densDims)
       visibilityTexture = makeVolume(GLint(GL_R16F), GLenum(GL_RED), size: dims)
       velocityTexture = makeVolume(GLint(GL_RGBA16F), GL_RGBA, size: dims)
+
       print("[akari] fog sim: velocity \(dims.x)x\(dims.y)x\(dims.z) of \(cellSize) m, density \(densDims.x)x\(densDims.y)x\(densDims.z)")
       return vel.allSatisfy { $0 != 0 } && texture != 0
     }
@@ -268,6 +292,7 @@ public extension Akari
       var texture: GLuint = 0
       gl.genTextures(count: 1, textures: &texture)
       gl.bindTexture(target: GLenum(GL_TEXTURE_3D), texture: texture)
+
       for (pname, param) in [(GL_TEXTURE_MIN_FILTER, GL_LINEAR), (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
                              (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE),
                              (GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)]
@@ -305,6 +330,7 @@ public extension Akari
       k.bind(vel[0])
       k.bind(pressure[0], at: 2)
       dispatch(k)
+
       let kd = kernels[.resetDensity]
       grid(kd, zUp: s.zUp, density: true)
       kd.set(.step, SIMD4(0, Float(seconds), 0, 0))
@@ -318,9 +344,14 @@ public extension Akari
 
     private func step(_ s: Frame, dt: Float, seconds: Double, disturbers: [Float])
     {
-      let advect = kernels[.advect], curlK = kernels[.curl], confine = kernels[.confine]
-      let div = kernels[.divergence], jacobi = kernels[.jacobi], project = kernels[.project]
-      let a = current, b = 1 - current
+      let advect = kernels[.advect]
+      let curlK = kernels[.curl]
+      let confine = kernels[.confine]
+      let div = kernels[.divergence]
+      let jacobi = kernels[.jacobi]
+      let project = kernels[.project]
+      let a = current
+      let b = 1 - current
 
       grid(advect, zUp: s.zUp)
       let count = min(disturbers.count / 8, Self.maxDisturbers)
@@ -329,7 +360,8 @@ public extension Akari
       advect.set(.layer, layer(s))
       advect.set(.noise, SIMD4(s.noiseAmount, s.noiseScale, 0, 0))
       advect.set(.sim, SIMD4(s.vorticity, s.dissipation, s.settle, s.damping))
-      // uniforms pack in the order they're first set, so the sixteen slots fill `d[16]`.
+
+      // uniforms pack in the order they are first set so the sixteen slots fill `d[16]`
       for slot in 0 ..< Self.maxDisturbers * 2
       {
         let o = slot * 4
@@ -367,9 +399,12 @@ public extension Akari
       dispatch(project)
       current = b
 
-      let predict = kernels[.densityPredict], correct = kernels[.densityCorrect]
+      let predict = kernels[.densityPredict]
+      let correct = kernels[.densityCorrect]
       let vgrid = SIMD4<Float>(Float(dims.x), Float(dims.y), Float(dims.z), cellSize)
-      let da = densCurrent, db = 1 - densCurrent
+      let da = densCurrent
+      let db = 1 - densCurrent
+
       grid(predict, zUp: s.zUp, density: true)
       predict.set(.vgrid, vgrid)
       predict.set(.step, SIMD4(dt, Float(seconds), 0, 0))
@@ -396,6 +431,7 @@ public extension Akari
       k.bind(dens[densCurrent])
       k.image(texture, at: 0, format: GLenum(GL_R16F))
       dispatch(k, density: true)
+
       let kv = kernels[.exportVelocity]
       grid(kv, zUp: layoutKey.last == 1)
       kv.bind(vel[current])
@@ -403,10 +439,11 @@ public extension Akari
       dispatch(kv)
     }
 
-    /// The fog's shadowing of up to four `lights` at their positions this frame.
+    /// computes the fog shadowing of up to four `lights` at their positions this frame
     public func computeVisibility(lights: [Akari.Lux.PointLight])
     {
       guard isActive, visibilityTexture != 0 else { return }
+
       let k = kernels[.visibility]
       grid(k, zUp: layoutKey.last == 1)
       k.set(.dgrid, SIMD4(Float(densDims.x), Float(densDims.y), Float(densDims.z), densCell))
@@ -430,10 +467,30 @@ public extension Akari
         gl.deleteBuffer(buffer)
       }
 
-      vel = [0, 0]; dens = [0, 0]; pressure = [0, 0]; divergence = 0; curl = 0; hat = 0
-      if texture != 0 { gl.deleteTextures(count: 1, textures: &texture); texture = 0 }
-      if velocityTexture != 0 { gl.deleteTextures(count: 1, textures: &velocityTexture); velocityTexture = 0 }
-      if visibilityTexture != 0 { gl.deleteTextures(count: 1, textures: &visibilityTexture); visibilityTexture = 0 }
+      vel = [0, 0]
+      dens = [0, 0]
+      pressure = [0, 0]
+      divergence = 0
+      curl = 0
+      hat = 0
+
+      if texture != 0
+      {
+        gl.deleteTextures(count: 1, textures: &texture)
+        texture = 0
+      }
+
+      if velocityTexture != 0
+      {
+        gl.deleteTextures(count: 1, textures: &velocityTexture)
+        velocityTexture = 0
+      }
+
+      if visibilityTexture != 0
+      {
+        gl.deleteTextures(count: 1, textures: &visibilityTexture)
+        visibilityTexture = 0
+      }
     }
 
     public func release()

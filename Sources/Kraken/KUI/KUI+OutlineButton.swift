@@ -45,8 +45,7 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// The viewport's selection outline toggle, its
-  /// dropdown sets the line's thickness and color.
+  /// the viewport's selection outline toggle, its dropdown sets the line's thickness and color
   @MainActor
   struct OutlineButton: View
   {
@@ -172,7 +171,7 @@ extension Kraken
     }
   }
 
-  /// The outline half of the overlay glyph, lower left.
+  /// the outline half of the overlay glyph, lower left.
   struct OutlineRing: Shape
   {
     var lineWidth: Double
@@ -185,7 +184,7 @@ extension Kraken
     }
   }
 
-  /// The solid half of the's overlay glyph, upper right.
+  /// the solid half of the's overlay glyph, upper right.
   struct OutlineDisc: Shape
   {
     var inset: Double
@@ -197,7 +196,7 @@ extension Kraken
     }
   }
 
-  /// The dropdown's downward chevron.
+  /// the dropdown's downward chevron.
   struct Chevron: Shape
   {
     nonisolated func path(in bounds: Path.Rect) -> Path

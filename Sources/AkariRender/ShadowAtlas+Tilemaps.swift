@@ -111,7 +111,7 @@ extension Akari.ShadowAtlas
     o[22] = zBias
   }
 
-  /// Each directional level's light space, for tagging which tile to update.
+  /// each directional level's light space, for tagging which tile to update.
   func uploadLevelParams(directional: [Cascade], directionalSlots: [Int], inverseView: Akari.Matrix4)
   {
     guard let p = gl.mapBuffer(frame[.levelParams]) else { return }
@@ -168,7 +168,7 @@ extension Akari.ShadowAtlas
     kernels[.tilemapShift].dispatch(Self.maxDirectionalTilemaps)
   }
 
-  /// What a scene change left stale, uploading the moved casters boxes to this frame.
+  /// what a scene change left stale, uploading the moved casters boxes to this frame.
   func findCasterRedraw(_ casters: [Casters]) -> CasterRedraw
   {
     guard
@@ -185,7 +185,7 @@ extension Akari.ShadowAtlas
     return .boxes(moved.count / 6)
   }
 
-  /// The moved static caster boxes, uploaded to this frame, nil when every static page has to redraw.
+  /// the moved static caster boxes, uploaded to this frame, nil when every static page has to redraw.
   func findStaticRedraw(_ casters: [Casters]) -> Int?
   {
     guard
@@ -272,7 +272,7 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// Tags the directional tiles under `count` of `boxes`, with whichever update `kernel` sets.
+  /// tags the directional tiles under `count` of `boxes`, with whichever update `kernel` sets.
   private func tagUpdate(_ kernel: Akari.ComputeKernel, boxes: GLuint, count movedCount: Int, slotCount: Int, cameraWorld: SIMD3<Float>)
   {
     if kernel.isBuilt, movedCount > 0, slotCount > 0
@@ -288,7 +288,7 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// Picks this frame's dirty views from live tile state, `budget` static tiles of them at most.
+  /// picks this frame's dirty views from live tile state, `budget` static tiles of them at most.
   func dispatchSelectViews(budget: Int)
   {
     let kernel = kernels[.buildRenderViews]

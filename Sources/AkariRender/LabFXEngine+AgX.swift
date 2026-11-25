@@ -46,11 +46,11 @@ import LabGL
 
 extension Akari.LabFXEngine
 {
-  /// AgX view with each look.
+  /// baked lut size and log shaper for the agx view with each look.
   static let agxLutSize = 65
   static let agxLutShaper = SIMD4<Float>(-12.47393, 12.5260688117 + 12.47393, 0, 0)
 
-  /// Hands the tonemap the look's LUT, or nil for the analytic AgX curve.
+  /// hands the tonemap the lut for the look, or nil for the analytic agx curve.
   func bindAgXLook(_ look: Akari.Color.Look?)
   {
     guard let look, let lut = agxLut(look)
@@ -68,6 +68,7 @@ extension Akari.LabFXEngine
   private func agxLut(_ look: Akari.Color.Look) -> GLuint?
   {
     if let lut = agxLooks[look] { return lut }
+
     let n = Self.agxLutSize
     guard
       let url = Bundle.akari.url(forResource: "AgX_\(look.rawValue)", withExtension: "lut"),
@@ -92,12 +93,12 @@ extension Akari.LabFXEngine
 
 public extension Akari.RenderEngine
 {
-  /// Takes up the view transform, look, exposure and gamma the stage was
-  /// authored with, so that color management stays authored with the file.
+  /// adopts the view transform, look, exposure and gamma the stage was authored with.
   func adoptColorManagement(of stage: UsdStage)
   {
     let info = Pixar.HdAkariInspectStage(stage)
     guard info.hasColorManagement else { return }
+
     var settings = settings
     if let transform = Akari.Color.ViewTransform(transformName: String(info.viewTransform))
     {
@@ -107,6 +108,7 @@ public extension Akari.RenderEngine
     settings.color.look = Akari.Color.Look(lookName: String(info.look)) ?? .punchy
     settings.color.exposure = Float(info.exposure)
     settings.color.gamma = Float(info.gamma)
+
     self.settings = settings
   }
 }

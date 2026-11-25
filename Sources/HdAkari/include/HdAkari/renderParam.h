@@ -48,7 +48,8 @@
 # include <Hgi/hgiImpl.h>
 #else
 # include <pxr/pxr.h>
-# include <pxr/base/tf/sharedPtrRetainReleaseHelper.h>
+# include <HdAkari/swiftInterop.h>
+# include <HdAkari/sharedPtrRetainReleaseHelper.h>
 # include <pxr/imaging/hd/renderDelegate.h>
 # include <pxr/imaging/hgi/hgi.h>
 #endif
@@ -60,14 +61,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 class HdAkariScene;
 class HdAkariTextureAtlas;
 
-/// @class HdAkariRenderParam
-///
-/// Shared, per delegate state handed to render passes and prims.
-///
-/// The state holds the retained Swift `Akari.RenderEngine`, the
-/// Hgi Hydra handed us via drivers, and the scene registry the
-/// mesh Rprims publish into.
-///
+/// the per delegate state shared with passes and prims, the swift engine, hydra's hgi and the scene the meshes publish into
 class SWIFT_SHARED_REFERENCE(HdAkariRenderParamRetain, HdAkariRenderParamRelease)
 HdAkariRenderParam final : public HdRenderParam
 {
@@ -80,29 +74,29 @@ public:
       _textureAtlas(textureAtlas)
   {}
 
-  /// The Swift `Akari.RenderEngine` (an `Unmanaged` opaque pointer).
+  /// the swift `Akari.RenderEngine` as an `Unmanaged` opaque pointer
   void *GetRenderEngine() const { return _renderEngine; }
 
-  /// The delegate's mesh registry (owned by the delegate, not this param).
+  /// the delegate's mesh registry, owned by the delegate and not this param
   HdAkariScene SWIFT_RETURNS_UNRETAINED *GetScene() const { return _scene.get(); }
 
-  /// The delegate's shared roughness/metallic/opacity texture atlas.
+  /// the delegate's shared roughness, metallic and opacity texture atlas
   HdAkariTextureAtlas SWIFT_RETURNS_UNRETAINED *GetTextureAtlas() const { return _textureAtlas.get(); }
 
-  /// The Hgi shared with Hydra (same device, so AOV textures are shared).
+  /// the hgi shared with hydra, on the same device so aov textures are shared
   Hgi *GetHgi() const
   {
     std::lock_guard<std::mutex> lock(_hgiMutex);
     return _hgi;
   }
-  
+
   void SetHgi(Hgi *hgi)
   {
     std::lock_guard<std::mutex> lock(_hgiMutex);
     _hgi = hgi;
   }
 
-  /// The render camera's shutter interval, in frames around the frame.
+  /// the render camera's shutter interval, in frames around the current frame
   void SetShutter(double open, double close)
   {
     _shutterOpen = open;

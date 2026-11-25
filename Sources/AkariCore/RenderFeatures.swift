@@ -38,7 +38,7 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-/// The lighting / shading / post features Akari can enable per frame.
+/// the lighting, shading and post features akari can turn on per frame
 public struct RenderFeatures: OptionSet, Sendable
 {
   public let rawValue: Int
@@ -47,36 +47,32 @@ public struct RenderFeatures: OptionSet, Sendable
     self.rawValue = rawValue
   }
 
-  /// Image based lighting from an environment map
-  /// (prefiltered specular + irradiance + BRDF LUT).
+  /// image based lighting from an environment map, prefiltered specular, irradiance and the brdf table
   public static let imageBasedLighting = RenderFeatures(rawValue: 1 << 0)
-  /// Baked/streamed light probes + irradiance volumes for indirect diffuse.
+  /// baked or streamed light probes and irradiance volumes for indirect diffuse
   public static let lightProbes = RenderFeatures(rawValue: 1 << 1)
-  /// Shadow maps for punctual / area lights (cascades for sun).
+  /// shadow maps for punctual and area lights, cascades for the sun
   public static let shadowMaps = RenderFeatures(rawValue: 1 << 2)
-  /// Screen space reflections.
+  /// screen space reflections.
   public static let screenSpaceReflections = RenderFeatures(rawValue: 1 << 5)
-  /// Screen space global illumination (horizon scan GI).
+  /// screen space global illumination, a horizon scan
   public static let screenSpaceGI = RenderFeatures(rawValue: 1 << 6)
-  /// Temporal anti aliasing / reprojection (also stabilizes the SS fx).
+  /// temporal anti aliasing and reprojection, it also steadies the screen space effects
   public static let temporalAA = RenderFeatures(rawValue: 1 << 7)
-  /// Bloom.
+  /// bloom.
   public static let bloom = RenderFeatures(rawValue: 1 << 8)
-  /// Depth of field.
+  /// depth of field.
   public static let depthOfField = RenderFeatures(rawValue: 1 << 9)
-  /// Participating media volumetrics (froxel based).
+  /// participating media through froxel volumetrics
   public static let volumetrics = RenderFeatures(rawValue: 1 << 10)
-  /// Hardware ray tracing (aka "realtime ray tracing") for reflections,
-  /// shadows, and one bounce GI where screen space fails.
+  /// hardware ray tracing for reflections, shadows and one bounce of gi where screen space falls short
   public static let hardwareRayTracing = RenderFeatures(rawValue: 1 << 11)
-  /// Demo overlay with LabFX `callback:` passes and `latency:` ring buffers.
-  public static let fireflies = RenderFeatures(rawValue: 1 << 12)
-  /// Moves the scene's render resolution with whatever the GPU hardware can support.
+  /// moves the scene's render resolution with whatever the gpu hardware can support.
   public static let dynamicResolution = RenderFeatures(rawValue: 1 << 13)
-  /// Motion blur over the camera's `shutter:open` / `shutter:close`.
+  /// motion blur over the camera's shutter open and close
   public static let motionBlur = RenderFeatures(rawValue: 1 << 14)
 
-  /// The complete realtime fidelity stack (screen space, no hardware RT).
+  /// the whole realtime stack, screen space and no hardware ray tracing
   public static let fullFidelity: RenderFeatures = [
     .imageBasedLighting, .lightProbes, .shadowMaps,
     .screenSpaceReflections, .screenSpaceGI,
@@ -84,7 +80,7 @@ public struct RenderFeatures: OptionSet, Sendable
     .dynamicResolution, .motionBlur
   ]
 
-  /// A leaner set tuned to high fps in an interactive viewport.
+  /// a leaner set tuned to high fps in an interactive viewport.
   public static let game60fps: RenderFeatures = [
     .imageBasedLighting, .shadowMaps,
     .screenSpaceReflections,

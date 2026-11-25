@@ -49,30 +49,28 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// Which way an area collapses.
+  /// which way an area collapses.
   enum CollapseDirection
   {
     case up, down, left, right
   }
 
-  /// The draggable edge between two workspace areas. Drag to resize, drag past an area's
-  /// minimum to collapse it, and double click to reset both sizes.
+  /// the edge between two areas, drag to resize or past a minimum to collapse, double click to reset
   struct AreaEdge: View
   {
     enum Axis
     {
-      /// Between side by side areas, dragged left and right.
+      /// between side by side areas, dragged left and right.
       case vertical
-      /// Between stacked areas, dragged up and down.
+      /// between stacked areas, dragged up and down.
       case horizontal
     }
 
     let axis: Axis
-    /// The name of the area this edge can collapse, and which way it goes.
+    /// the name of the area this edge can collapse, and which way it goes.
     var collapses: String? = nil
     var direction = CollapseDirection.down
-    /// Called with the distance moved in points, positive right or down. Returns how close the
-    /// area is to collapsing, from 0 at its minimum to 1 when it collapses.
+    /// called with the distance moved in points, returning how close the area is to collapsing from 0 to 1
     let drag: (Double) -> Double
     let reset: () -> Void
     var ended: () -> Void = {}
@@ -250,7 +248,7 @@ extension Kraken
       }
     }
 
-    /// Rounds a workspace area's corners, and registers the area by name for the collapse arrow.
+    /// rounds a workspace area's corners, and registers the area by name for the collapse arrow.
     struct AreaChrome: NSViewRepresentable
     {
       let name: String?
@@ -277,7 +275,7 @@ extension Kraken
       static let gap = NSColor(white: 0.09, alpha: 1)
       static let radius: CGFloat = 6
 
-      /// The named areas' containers, for the collapse arrow to cover.
+      /// the named areas' containers, for the collapse arrow to cover.
       private static let areas = NSMapTable<NSString, NSView>.strongToWeakObjects()
 
       static func area(named name: String) -> NSView?
@@ -298,7 +296,7 @@ extension Kraken
         attach()
       }
 
-      /// The container shared with the area, skipping any wrappers around this view.
+      /// the container shared with the area, skipping any wrappers around this view.
       private var container: NSView?
       {
         var view: NSView = self
@@ -316,7 +314,7 @@ extension Kraken
       }
     }
 
-    /// The collapse arrow, shown over an area while its edge drags it toward collapsing.
+    /// the collapse arrow, shown over an area while its edge drags it toward collapsing.
     @MainActor
     final class CollapseArrowPanel
     {
@@ -345,7 +343,8 @@ extension Kraken
         panel.setFrame(window.convertToScreen(area.convert(area.bounds, to: nil)), display: false)
         view.direction = direction
         view.needsDisplay = true
-        // Visible as soon as the edge passes the minimum, and fully a little before the area collapses.
+
+        // visible as soon as the edge passes the minimum, and fully a little before the area collapses.
         panel.alphaValue = CGFloat(0.3 + 0.7 * min(progress / 0.85, 1))
         if panel.parent !== window { window.addChildWindow(panel, ordered: .above) }
 
@@ -402,7 +401,8 @@ extension Kraken
         guard size > 6 else { return }
 
         let c = NSPoint(x: bounds.midX, y: bounds.midY)
-        // A down arrow, rotated to `direction`.
+
+        // a down arrow, rotated to `direction`.
         let points: [(CGFloat, CGFloat)] = [(-0.18, -0.5), (0.18, -0.5), (0.18, 0.0), (0.5, 0.0), (0.0, 0.5), (-0.5, 0.0), (-0.18, 0.0)]
         let path = NSBezierPath()
         for (i, p) in points.enumerated()
@@ -428,7 +428,7 @@ extension Kraken
 
 extension View
 {
-  /// Styles a view as a workspace area with rounded corners. A `name` lets an edge show its collapse arrow over it.
+  /// styles a view as a workspace area with rounded corners. a `name` lets an edge show its collapse arrow over it.
   @MainActor
   func area(_ name: String? = nil) -> some View
   {

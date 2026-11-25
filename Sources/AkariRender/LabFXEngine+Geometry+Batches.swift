@@ -48,7 +48,7 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// What `choose` reads, snapshotted on the render thread.
+  /// what `choose` reads, snapshotted on the render thread.
   struct ChooseInputs: @unchecked Sendable
   {
     var meshes: [Akari.Geom.Recorder.RawMesh]
@@ -56,16 +56,17 @@ extension Akari.LabFXEngine
     var budget: (regular: Int, prototypes: Int)
     var details: [UInt64: Detail]
     var staticKey: UInt64
-    /// nil when there's no instanced capture yet.
+    /// nil when there is no instanced capture yet.
     var instancedKey: UInt64?
     var faces: Int
     var expands: Bool
     var staticRecorder: Akari.Geom.Recorder
     var instancedRecorder: Akari.Geom.Recorder
+    var shadowRecorder: Akari.Geom.Recorder
     var ptexFaces: Akari.Geom.PtexFaces
   }
 
-  /// What the static captures are chosen to draw and built ready to record, a capture keeping what it has nil.
+  /// what the static captures are chosen to draw, built ready to record, nil for a capture that keeps what it has.
   struct Chosen: @unchecked Sendable
   {
     var details: [UInt64: Detail]
@@ -78,16 +79,18 @@ extension Akari.LabFXEngine
     var instanceDetail: Float
     var regular: BuiltBatch?
     var instanced: BuiltBatch?
+    /// the static meshes with cages in place of refined faces, drawn by the shadows and probes.
+    var shadow: BuiltBatch?
   }
 
-  /// A reframe choosing and building off the render thread.
+  /// a reframe that chooses and builds off the render thread.
   final class Reframing: @unchecked Sendable
   {
     let done = DispatchGroup()
     var chosen: Chosen?
   }
 
-  /// A batch's chunks sealed ready to record, each between its own capture start and stop.
+  /// the chunks of a batch sealed ready to record, each between its own capture start and stop.
   struct BuiltBatch: @unchecked Sendable
   {
     var chunks: [[Akari.Geom.Batch.Flush]] = []
@@ -95,8 +98,7 @@ extension Akari.LabFXEngine
     var summary = BatchSummary()
   }
 
-  /// Chooses the static meshes and instanced prototypes the budget keeps for `camera`, and builds the
-  /// captures whose choice changed, without touching GL, so it can run on any thread.
+  /// picks the static meshes and prototypes the budget keeps for the camera and builds the captures that changed, off the gl thread
   static func choose(_ inputs: ChooseInputs) -> Chosen
   {
     let (unique, duplicates) = instanceDuplicates(inputs.meshes.filter(\.instances.isEmpty))
@@ -105,15 +107,19 @@ extension Akari.LabFXEngine
     let regular = budgetGeometry(unique, budget: budget.regular, area: screen)
     var details: [UInt64: Detail] = [:]
     let regularMeshes = applyDetail(regular, cache: inputs.details, into: &details)
+
     let instancedPrototypes = inputs.meshes.filter { !$0.instances.isEmpty } + duplicates
     let (binned, instanceDetail) = binInstances(instancedPrototypes, budget: budget.prototypes, camera: inputs.camera)
     let instancedMeshes = applyDetail(binned, cache: inputs.details, into: &details)
     let recordedTriangles = (regularMeshes + instancedMeshes).reduce(0) { $0 + $1.tris.size() }
-    // the camera moving on rarely changes what's chosen, a capture choosing the same isn't rebuilt.
-    let staticKey = recordKey(regularMeshes), instancedKey = recordKey(instancedMeshes)
+
+    // camera moves rarely change what is chosen, so a capture that chooses the same is not rebuilt.
+    let staticKey = recordKey(regularMeshes)
+    let instancedKey = recordKey(instancedMeshes)
     var recordsStatic = staticKey != inputs.staticKey
     var recordsInstanced = inputs.instancedKey.map { instancedKey != $0 } ?? true
-    // the face table only grows while one capture rebuilds alone, both rebuilding start it over.
+
+    // the face table only grows while one capture rebuilds alone, rebuilding both starts it over.
     if recordsStatic != recordsInstanced, inputs.faces > 4 * (recordedTriangles + 1)
     {
       recordsStatic = true
@@ -121,43 +127,64 @@ extension Akari.LabFXEngine
     }
 
     if recordsStatic || recordsInstanced { Akari.Geom.GeometryCache.shared.beginRecord() }
-    let staticShadowShared = recordedTriangles > unweldedShadowTriangles
+
+    // shadows and probes draw refined meshes as their limit surface cages, a fraction of the triangles.
+    let castsCoarse = castsCoarseShadows && inputs.expands && regularMeshes.contains(where: \.hasCoarse)
+    let staticShadowShared = !castsCoarse && recordedTriangles > unweldedShadowTriangles
+    let shadow = recordsStatic && castsCoarse
+      ? buildBatch(regularMeshes.map { $0.coarse ?? $0 }, recorder: inputs.shadowRecorder, ptexFaces: nil)
+      : nil
+
     return Chosen(details: details, recordBudget: budget.regular + budget.prototypes,
                   recordedTriangles: recordedTriangles, staticKey: staticKey, instancedKey: instancedKey,
                   resetsFaces: recordsStatic && recordsInstanced, staticShadowShared: staticShadowShared,
                   instanceDetail: instanceDetail,
                   regular: !recordsStatic ? nil : buildBatch(regularMeshes, recorder: inputs.staticRecorder,
-                                                             expands: inputs.expands && !staticShadowShared,
+                                                             expands: inputs.expands && !staticShadowShared && !castsCoarse,
                                                              ptexFaces: inputs.ptexFaces),
                   instanced: !recordsInstanced ? nil : buildBatch(instancedMeshes, recorder: inputs.instancedRecorder,
-                                                                  instanced: true, ptexFaces: inputs.ptexFaces))
+                                                                  instanced: true, ptexFaces: inputs.ptexFaces),
+                  shadow: shadow)
   }
 
-  /// Records what `choose` built into the static captures.
+  /// records what `choose` built into the static captures.
   func apply(_ chosen: Chosen)
   {
     guard let staticCapture = geometry.staticCapture else { return }
+
     geometry.record.rebuilds += 1
     geometry.record.rebuiltAt = Date()
     geometry.details = chosen.details
     geometry.record.budget = chosen.recordBudget
     geometry.record.triangles = chosen.recordedTriangles
     if chosen.resetsFaces { ptex.faces.reset() }
+
     if let regular = chosen.regular
     {
       geometry.record.staticKey = chosen.staticKey
       geometry.staticShadowShared = chosen.staticShadowShared
       if geometry.staticShadowShared, let shadow = geometry.staticShadowCapture { labgl.captureClear(shadow) }
-      geometry.staticBatch = emitBatch(regular, into: staticCapture,
-                                       expandedInto: geometry.staticShadowShared ? nil : geometry.staticShadowCapture)
+
+      if let shadow = chosen.shadow, let shadowCapture = geometry.staticShadowCapture
+      {
+        geometry.staticBatch = emitBatch(regular, into: staticCapture)
+        _ = emitBatch(shadow, into: shadowCapture, streamsPtex: false)
+      }
+      else
+      {
+        geometry.staticBatch = emitBatch(regular, into: staticCapture,
+                                         expandedInto: geometry.staticShadowShared ? nil : geometry.staticShadowCapture)
+      }
     }
 
     if let instanced = chosen.instanced, let capture = geometry.staticInstancedCapture
     {
       geometry.record.instancedKey = chosen.instancedKey
-      // a record's fit only moves the base the frame budget's scale works from, the detail drawn stays put.
+
+      // a record fit only moves the base the frame budget scale works from, the drawn detail stays put.
       let previous = geometry.instanceLOD.detail
       geometry.instanceLOD.detail = chosen.instanceDetail
+
       if geometry.instanceLOD.fitted, previous > 0, chosen.instanceDetail > 0
       {
         dynamicResolution.geometryTarget *= previous / chosen.instanceDetail
@@ -178,18 +205,19 @@ extension Akari.LabFXEngine
   {
     let built = Self.buildBatch(meshes, recorder: recorder, reusing: others, expands: expanded != nil,
                                 instanced: instanced, ptexFaces: ptex.faces)
+
     return emitBatch(built, into: capture, expandedInto: expanded, instanced: instanced)
   }
 
-  /// Builds and seals a batch's chunks, without touching GL.
+  /// builds and seals the chunks of a batch without touching gl.
   private static func buildBatch(_ meshes: [Akari.Geom.Recorder.RawMesh],
                                  recorder: Akari.Geom.Recorder,
                                  reusing others: [Akari.Geom.Recorder] = [],
                                  expands: Bool = false,
                                  instanced: Bool = false,
-                                 ptexFaces: Akari.Geom.PtexFaces) -> BuiltBatch
+                                 ptexFaces: Akari.Geom.PtexFaces?) -> BuiltBatch
   {
-    // instanced prototypes sharing a set sit next to each other, so their draws merge into one per run of the set.
+    // instanced prototypes in the same set sit next to each other so their draws merge into one per run.
     let keyed: [(mesh: Akari.Geom.Recorder.RawMesh, set: UInt64, level: Float, cluster: UInt64, morton: UInt64)] = meshes.map
     { mesh in
       let draw = mesh.instanceDraws.first
@@ -201,13 +229,16 @@ extension Akari.LabFXEngine
       $0.set != $1.set ? $0.set < $1.set : $0.level != $1.level ? $0.level > $1.level
         : $0.cluster != $1.cluster ? $0.cluster < $1.cluster : $0.morton < $1.morton
     }.map(\.mesh)
+
     var built = BuiltBatch()
     recorder.record(sorted, reusing: others)
     { items in
-      // instanced captures keep the prototypes object space vertices, the matrices move them, so they can't be unwelded like the static ones.
+      // instanced captures keep vertices in object space for their matrices, so they can't be unwelded like static ones
       if expands { built.expanded.append(build(items, expands: !instanced, instanced: instanced).flushes) }
+
       let chunk = build(items, expands: false, instanced: instanced, ptexFaces: ptexFaces)
       built.chunks.append(chunk.flushes)
+
       if let next = chunk.summary.bounds
       {
         built.summary.bounds = built.summary.bounds.map { (min: pointwiseMin($0.min, next.min), max: pointwiseMax($0.max, next.max)) } ?? next
@@ -220,12 +251,14 @@ extension Akari.LabFXEngine
     return built
   }
 
-  /// Records a built batch into `capture`, and its unwelded copy into `expanded`.
+  /// records a built batch into `capture` and its unwelded copy into `expanded`.
   private func emitBatch(_ built: BuiltBatch, into capture: LabGLCaptureBuffer,
-                         expandedInto expanded: LabGLCaptureBuffer? = nil, instanced: Bool = false) -> BatchSummary
+                         expandedInto expanded: LabGLCaptureBuffer? = nil, instanced: Bool = false,
+                         streamsPtex: Bool = true) -> BatchSummary
   {
     labgl.captureClear(capture)
     if let expanded { labgl.captureClear(expanded) }
+
     for (index, flushes) in built.chunks.enumerated()
     {
       if let expanded, index < built.expanded.count
@@ -233,13 +266,13 @@ extension Akari.LabFXEngine
         emit(built.expanded[index], into: expanded, instanced: instanced, preamble: index == 0, ptexFaces: nil)
       }
 
-      emit(flushes, into: capture, instanced: instanced, preamble: index == 0, ptexFaces: ptex.faces)
+      emit(flushes, into: capture, instanced: instanced, preamble: index == 0, ptexFaces: streamsPtex ? ptex.faces : nil)
     }
 
     return built.summary
   }
 
-  /// Builds one chunk of a batch into sealed flushes.
+  /// builds one chunk of a batch into sealed flushes.
   private static func build(_ items: [Akari.Geom.Recorder.Item], expands: Bool, instanced: Bool = false,
                             ptexFaces: Akari.Geom.PtexFaces? = nil) -> (flushes: [Akari.Geom.Batch.Flush], summary: BatchSummary)
   {
@@ -251,6 +284,7 @@ extension Akari.LabFXEngine
                                  largestIndexCount: largestIndices,
                                  expands: expands, instanced: instanced, ptexFaces: ptexFaces)
     batch.deferDraws()
+
     for item in items
     {
       if instanced
@@ -272,11 +306,11 @@ extension Akari.LabFXEngine
     }
 
     batch.draw()
+
     return (batch.flushes, BatchSummary(bounds: batch.worldBounds, casterBounds: batch.casterBounds, casterKeys: batch.casterKeys))
   }
 
-  /// Records one chunk of a batch, its draw state only ahead of the first,
-  /// so the capture stays a run of draws the indirect playback can replay.
+  /// records one chunk of a batch, with draw state only before the first, so the capture stays a run of draws to replay
   private func emit(_ flushes: [Akari.Geom.Batch.Flush], into capture: LabGLCaptureBuffer,
                     instanced: Bool, preamble: Bool, ptexFaces: Akari.Geom.PtexFaces?)
   {

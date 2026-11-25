@@ -47,7 +47,7 @@ import class SwiftCrossUI.Published
 
 extension Kraken
 {
-  /// Akari's procedural sky and planet primvars, `primvars:akari:atmosphere:*` and `:planet:*`, and the sphere's radius.
+  /// akari's procedural sky and planet primvars, `primvars:akari:atmosphere:*` and `:planet:*`, and the sphere's radius.
   enum PlanetPrimvar: String, CaseIterable, Sendable
   {
     case radius, atmosphere, planet
@@ -78,7 +78,7 @@ extension Kraken
     }
   }
 
-  /// Edits the procedural atmosphere and planet primvars on the Hydra frame queue.
+  /// edits the procedural atmosphere and planet primvars on the hydra frame queue.
   @MainActor
   final class PlanetPropertiesState: ObservableObject
   {
@@ -419,7 +419,7 @@ extension Kraken
     }
   }
 
-  /// The scene-authored atmosphere and procedural planet controls.
+  /// the scene-authored atmosphere and procedural planet controls.
   @MainActor
   struct PlanetProperties: View
   {

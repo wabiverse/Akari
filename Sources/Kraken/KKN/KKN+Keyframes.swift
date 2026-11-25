@@ -53,7 +53,7 @@ import class SwiftCrossUI.Published
 
 extension Kraken
 {
-  /// Something that can be keyed, either a prim attribute or a prim's whole transform.
+  /// something that can be keyed, either a prim attribute or a prim's whole transform
   struct KeyTarget: Hashable, Sendable
   {
     static let transform = "~transform"
@@ -72,29 +72,28 @@ extension Kraken
     }
   }
 
-  /// Whether a property is animated, and whether it has a key on the current frame.
+  /// whether a property is animated and whether it has a key on the current frame
   enum KeyState: Comparable
   {
     case none, animated, keyed
   }
 
-  /// Keyframe editing. With the pointer over a property, I inserts a key at the current frame,
-  /// Alt-I deletes it and Shift-Alt-I clears all of them. Right click shows the same in a menu.
-  ///
-  /// Editing an animated property without keying it only lasts until the frame changes,
-  /// unless Auto Keying is on.
+  /// keyframe editing, i inserts a key under the pointer, alt i deletes it and shift alt i clears them all
   @MainActor
   final class Keyframes: ObservableObject
   {
     @Published var autoKey = false
-    /// Bumped after every key edit so views showing keys reload them.
+
+    /// bumped after every key edit so views showing keys reload them
     @Published var revision = 0
-    /// The keyable field under the pointer, set by the native number and color fields on hover.
+
+    /// the keyable field under the pointer, set by the native number and color fields on hover
     static var hovered: KeyTarget?
 
     weak var layout: Layout?
     weak var timeline: Timeline?
-    /// Unkeyed edits to animated properties, held in the session layer until the frame changes.
+
+    /// unkeyed edits to animated properties, held in the session layer until the frame changes
     private var held = Set<KeyTarget>()
     private var frame = Double.nan
     private var lastReload = Date.distantPast
@@ -115,7 +114,7 @@ extension Kraken
       layout?.hydra.currentTimeCode ?? 0
     }
 
-    // MARK: Keys
+    // MARK: keys
 
     func insert(_ target: KeyTarget)
     {
@@ -147,16 +146,17 @@ extension Kraken
       }
     }
 
-    /// Inserts a key on the current frame, or deletes the one already there.
+    /// inserts a key on the current frame, or deletes the one already there
     func toggle(_ target: KeyTarget, keyed: Bool)
     {
       keyed ? delete(target) : insert(target)
     }
 
-    /// Keys the transforms of `paths` (I in the viewport).
+    /// keys the transforms of `paths`, the i key in the viewport
     func insertTransforms(_ paths: [String])
     {
       guard !paths.isEmpty else { return }
+
       for path in paths { held.remove(KeyTarget(path: path, name: KeyTarget.transform)) }
       edit("Inserted Keyframe")
       { stage, time in
@@ -164,7 +164,7 @@ extension Kraken
       }
     }
 
-    /// Deletes the transform keys of `paths` on the current frame (Alt-I in the viewport).
+    /// deletes the transform keys of `paths` on the current frame, alt i in the viewport
     func deleteTransforms(_ paths: [String])
     {
       guard !paths.isEmpty else { return }
@@ -174,15 +174,17 @@ extension Kraken
       }
     }
 
-    /// Runs an undoable key edit on the frame queue, then refreshes everything that shows keys.
+    /// runs an undoable key edit on the frame queue, then refreshes everything that shows keys
     func edit(_ status: String, _ work: @escaping @Sendable (UsdStage, Double) -> Bool)
     {
       guard let layout else { return }
+
       layout.checkpoint()
       let time = time
       layout.onStage
       { [weak self] stage in
         let done = work(stage, time)
+
         DispatchQueue.main.async
         { [weak self] in
           guard let self else { return }
@@ -199,36 +201,40 @@ extension Kraken
       layout?.refresh()
     }
 
-    // MARK: Edits
+    // MARK: edits
 
-    /// Handles an inspector edit to an animated property, or any property while Auto Keying is on.
-    /// Returns false when the inspector should write the value itself.
+    /// handles an inspector edit to an animated property or any property under auto keying, false when the inspector writes it
     func write(_ path: String, _ name: Tf.Token, _ numbers: [Double], type: Sdf.ValueTypeNameType, animated: Bool) -> Bool
     {
       guard animated || autoKey, let layout else { return false }
+
       let auto = autoKey, time = time
       if !auto { held.insert(KeyTarget(path: path, name: name.string)) }
+
       layout.onStage
       { [weak self] stage in
         if animated { SceneEdit.setSessionValue(stage, path, name, numbers) }
         else { SceneEdit.setValue(stage, path, name, numbers, type: Sdf.getValueType(for: type)) }
         if auto { SceneEdit.insertKey(stage, path, name.string, time) }
+
         DispatchQueue.main.async { [weak self] in self?.changed(reload: auto) }
       }
 
       return true
     }
 
-    /// Drops unkeyed edits when the frame changes and reloads the inspector, only its animated values while playing.
+    /// drops unkeyed edits when the frame changes and reloads the inspector, only its animated values while playing
     func frameChanged(playing: Bool)
     {
       let now = time
       guard now != frame else { return }
       frame = now
+
       let releases = !held.isEmpty
       let attributes = held.filter { !$0.isTransform }
       held.removeAll()
-      // While playing, only the animated values are reread, for the keyed fields to show live.
+
+      // while playing only the animated values are reread, so the keyed fields show live
       if playing, !releases
       {
         layout?.inspector.reloadAnimated()
@@ -240,6 +246,7 @@ extension Kraken
       { [weak self] stage in
         for target in attributes { SceneEdit.clearSessionValue(stage, target.path, target.name) }
         let moved = SceneEdit.releaseTransforms(stage)
+
         DispatchQueue.main.async
         { [weak self] in
           self?.layout?.inspector.reload()
@@ -248,25 +255,32 @@ extension Kraken
       }
     }
 
-    /// Moves to the selection's next or previous keyed frame.
+    /// moves to the selection's next or previous keyed frame
     func jumpToKey(forward: Bool)
     {
       guard let layout else { return }
+
       let paths = layout.selection, now = time
       layout.onStage
       { [weak self] stage in
         let times = Set(SceneEdit.channels(stage, paths).flatMap(\.times)).sorted()
         let next = forward ? times.first { $0 > now + 1e-6 } : times.last { $0 < now - 1e-6 }
+
         DispatchQueue.main.async
         { [weak self] in
-          guard let next else { self?.layout?.status = "No more keyframes"; return }
+          guard let next else
+          {
+            self?.layout?.status = "No more keyframes"
+            return
+          }
+
           self?.timeline?.seek(to: Int(next.rounded()))
         }
       }
     }
 
     #if os(macOS)
-      // MARK: Hotkeys
+      // MARK: hotkeys
 
       private func install()
       {
@@ -280,7 +294,8 @@ extension Kraken
       private func handle(_ event: NSEvent) -> Bool
       {
         guard !(event.window?.firstResponder is NSText) else { return false }
-        // Left and right step one frame, up and down jump between keys.
+
+        // left and right step one frame, up and down jump between keys
         if event.type == .keyDown, event.modifierFlags.intersection([.shift, .option, .command, .control]).isEmpty,
            (123 ... 126).contains(event.keyCode)
         {
@@ -316,43 +331,20 @@ extension Kraken
         let menu = NSMenu()
         func item(_ title: String, _ key: String, _ modifiers: NSEvent.ModifierFlags, _ run: @escaping @MainActor () -> Void)
         {
-          let action = MenuAction(run)
-          let entry = NSMenuItem(title: title, action: #selector(MenuAction.fire), keyEquivalent: key)
-          entry.keyEquivalentModifierMask = modifiers
-          entry.target = action
-          entry.representedObject = action
-          menu.addItem(entry)
+          menu.addItem(MenuAction(title, key, modifiers) { MainActor.assumeIsolated { run() } })
         }
 
         item("Insert Keyframe", "i", []) { [weak self] in self?.insert(target) }
         item("Delete Keyframe", "i", .option) { [weak self] in self?.delete(target) }
         item("Clear Keyframes", "i", [.option, .shift]) { [weak self] in self?.clear(target) }
+
         guard let view = event.window?.contentView else { return }
         NSMenu.popUpContextMenu(menu, with: event, for: view)
       }
     #endif
   }
 
-  #if os(macOS)
-    /// The target of a menu item, retained by the item.
-    @MainActor
-    final class MenuAction: NSObject
-    {
-      let run: @MainActor () -> Void
-
-      init(_ run: @escaping @MainActor () -> Void)
-      {
-        self.run = run
-      }
-
-      @objc func fire()
-      {
-        run()
-      }
-    }
-  #endif
-
-  /// The key decorator shape, a diamond or a dot for properties that aren't animated.
+  /// the key decorator shape, a diamond or a dot for properties that aren't animated
   struct KeyDiamond: Shape
   {
     var dot = false
@@ -370,8 +362,7 @@ extension Kraken
     }
   }
 
-  /// A property row with a key decorator. The decorator is yellow on a keyed frame, green between keys,
-  /// and a dot when the property isn't animated. Clicking it inserts or deletes the key.
+  /// a property row with a key decorator, yellow on a key, green between keys and a dot when not animated, clicking it toggles the key
   @MainActor
   struct KeyedRow<Control: View>: View
   {
@@ -394,6 +385,7 @@ extension Kraken
     var body: some View
     {
       let state = target.map { inspector.keyState($0) } ?? .none
+
       HStack(spacing: 4)
       {
         Properties.row(label) { control }
@@ -414,5 +406,4 @@ extension Kraken
       }
     }
   }
-
 }

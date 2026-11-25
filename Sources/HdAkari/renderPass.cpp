@@ -87,13 +87,14 @@ HdAkariRenderPass::_Execute(HdRenderPassStateSharedPtr const &renderPassState,
   const GfMatrix4d view = renderPassState->GetWorldToViewMatrix();
   const GfMatrix4d proj = renderPassState->GetProjectionMatrix();
 
-  // resolve the color, depth and id AOV render buffers.
+  // find the color, depth and id aov render buffers
   void *colorBuffer = nullptr;
   void *depthBuffer = nullptr;
   void *primIdBuffer = nullptr;
   void *instanceIdBuffer = nullptr;
   int width = 0;
   int height = 0;
+
   for (const HdRenderPassAovBinding &aov : renderPassState->GetAovBindings()) {
     auto *rb = dynamic_cast<HdAkariRenderBuffer *>(aov.renderBuffer);
     if (!rb) {

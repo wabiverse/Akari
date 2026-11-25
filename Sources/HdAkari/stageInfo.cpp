@@ -74,7 +74,9 @@
 #include "HdAkari/stageInfo.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <mutex>
 #include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -126,6 +128,7 @@ HdAkariInspectStage(UsdStage *stage)
   if (cm != layerData.end() && cm->second.IsHolding<VtDictionary>()) {
     const VtDictionary &d = cm->second.UncheckedGet<VtDictionary>();
     info.hasColorManagement = true;
+
     auto text = [&](char const *key, std::string &out) {
       auto it = d.find(key);
       if (it != d.end() && it->second.IsHolding<std::string>()) out = it->second.UncheckedGet<std::string>();
@@ -165,7 +168,7 @@ HdAkariInspectStage(UsdStage *stage)
     SdfAssetPath file;
     if (!audio.GetFilePathAttr().Get(&file) || file.GetAssetPath().empty()) continue;
 
-    // an unresolved relative path is anchored to the layer that authored it.
+    // an unresolved relative path is anchored to the layer that authored it
     std::string path = file.GetResolvedPath();
     if (path.empty()) {
       const SdfLayerHandle layer = stage->GetRootLayer();
@@ -178,6 +181,7 @@ HdAkariInspectStage(UsdStage *stage)
 
     SdfTimeCode start;
     if (audio.GetStartTimeAttr().Get(&start)) info.soundtrackStartTimeCode = start.GetValue();
+
     audio.GetMediaOffsetAttr().Get(&info.soundtrackMediaOffset);
     audio.GetGainAttr().Get(&info.soundtrackGain);
   }
@@ -196,14 +200,17 @@ HdAkariCameraLensAt(UsdStage *stage, std::string const &path, double timeCode)
 {
   HdAkariCameraLens lens;
   if (!stage || !SdfPath::IsValidPathString(path)) return lens;
+
   UsdGeomCamera camera(stage->GetPrimAtPath(SdfPath(path)));
   if (!camera) return lens;
+
   const UsdTimeCode t(timeCode);
   float f = 0.0f;
   if (camera.GetFStopAttr().Get(&f, t)) lens.fStop = f;
   if (camera.GetFocusDistanceAttr().Get(&f, t)) lens.focusDistance = f;
   if (camera.GetFocalLengthAttr().Get(&f, t)) lens.focalLength = f;
   if (camera.GetHorizontalApertureAttr().Get(&f, t)) lens.horizontalAperture = f;
+
   auto custom = [&](TfToken const &name, double &out) {
     if (UsdAttribute attr = camera.GetPrim().GetAttribute(name)) {
       float v = 0.0f;
@@ -216,6 +223,7 @@ HdAkariCameraLensAt(UsdStage *stage, std::string const &path, double timeCode)
   custom(_tokens->bloom, lens.bloom);
   custom(_tokens->streak, lens.streak);
   custom(_tokens->flare, lens.flare);
+
   return lens;
 }
 
@@ -229,11 +237,14 @@ bool
 HdAkariPrimTransformPoint(UsdStage *stage, std::string const &path, double timeCode, bool toLocal, double *xyz)
 {
   if (!stage || !xyz || !SdfPath::IsValidPathString(path)) return false;
+
   const UsdPrim prim = stage->GetPrimAtPath(SdfPath(path));
   if (!prim) return false;
+
   UsdGeomXformCache cache{UsdTimeCode(timeCode)};
   GfMatrix4d m = cache.GetLocalToWorldTransform(prim);
   if (toLocal) m = m.GetInverse();
+
   const GfVec3d p = m.Transform(GfVec3d(xyz[0], xyz[1], xyz[2]));
   xyz[0] = p[0];
   xyz[1] = p[1];
@@ -245,11 +256,14 @@ bool
 HdAkariPrimLocalCenter(UsdStage *stage, std::string const &path, double timeCode, double *xyz)
 {
   if (!stage || !xyz || !SdfPath::IsValidPathString(path)) return false;
+
   const UsdPrim prim = stage->GetPrimAtPath(SdfPath(path));
   if (!prim) return false;
+
   UsdGeomBBoxCache cache(UsdTimeCode(timeCode), {UsdGeomTokens->default_, UsdGeomTokens->render, UsdGeomTokens->proxy});
   const GfRange3d range = cache.ComputeUntransformedBound(prim).ComputeAlignedRange();
   if (range.IsEmpty()) return false;
+
   const GfVec3d mid = range.GetMidpoint();
   xyz[0] = mid[0];
   xyz[1] = mid[1];
@@ -262,8 +276,10 @@ HdAkariStageVolumeAt(UsdStage *stage, double timeCode)
 {
   HdAkariStageVolume volume;
   if (!stage) return volume;
+
   UsdPrim prim = stage->GetPrimAtPath(SdfPath("/World/RenderSettings"));
   if (!prim) return volume;
+
   const UsdTimeCode t(timeCode);
   auto number = [&](TfToken const &name, bool &has, double &out) {
     if (UsdAttribute attr = prim.GetAttribute(name)) {
@@ -277,6 +293,7 @@ HdAkariStageVolumeAt(UsdStage *stage, double timeCode)
   number(_tokens->volumeDensity, volume.hasDensity, volume.density);
   number(_tokens->volumeAnisotropy, volume.hasAnisotropy, volume.anisotropy);
   number(_tokens->volumeMaxDistance, volume.hasMaxDistance, volume.maxDistance);
+
   bool has = false;
   number(_tokens->volumeNoiseAmount, has, volume.noiseAmount);
   number(_tokens->volumeNoiseScale, has, volume.noiseScale);
@@ -287,6 +304,7 @@ HdAkariStageVolumeAt(UsdStage *stage, double timeCode)
   number(_tokens->volumeHazeDensity, has, volume.hazeDensity);
   number(_tokens->volumeAmbient, has, volume.ambient);
   number(_tokens->volumeSunScatter, has, volume.sunScatter);
+
   if (UsdAttribute attr = prim.GetAttribute(_tokens->volumeWind)) {
     GfVec3f w(0.0f);
     GfVec3d wd(0.0);
@@ -296,6 +314,7 @@ HdAkariStageVolumeAt(UsdStage *stage, double timeCode)
 
   const double tps = stage->GetTimeCodesPerSecond();
   volume.seconds = timeCode / (tps > 0.0 ? tps : 24.0);
+
   if (UsdAttribute attr = prim.GetAttribute(_tokens->volumetrics)) {
     bool on = true;
     if (attr.Get(&on, t)) { volume.enabled = on; volume.hasEnabled = true; }
@@ -309,8 +328,10 @@ HdAkariFogSimAt(UsdStage *stage, double timeCode)
 {
   HdAkariFogSim sim;
   if (!stage) return sim;
+
   UsdPrim prim = stage->GetPrimAtPath(SdfPath("/World/RenderSettings"));
   if (!prim) return sim;
+
   const UsdTimeCode t(timeCode);
   auto number = [&](TfToken const &name, double &out) {
     if (UsdAttribute attr = prim.GetAttribute(name)) {
@@ -341,6 +362,7 @@ HdAkariFogSimAt(UsdStage *stage, double timeCode)
 
   vector(_tokens->fogSimBoundsMin, sim.minX, sim.minY, sim.minZ);
   vector(_tokens->fogSimBoundsMax, sim.maxX, sim.maxY, sim.maxZ);
+
   if (UsdAttribute attr = prim.GetAttribute(_tokens->fogSimResolution)) {
     int r = 0;
     float rf = 0.0f;
@@ -360,6 +382,7 @@ HdAkariFogSimAt(UsdStage *stage, double timeCode)
   number(_tokens->fogSimSettle, sim.settle);
   number(_tokens->fogSimReplenish, sim.replenish);
   number(_tokens->fogSimDamping, sim.damping);
+
   sim.substeps = std::max(1, int(substeps));
   return sim;
 }
@@ -368,7 +391,8 @@ int
 HdAkariFogDisturbersAt(UsdStage *stage, double timeCode, float *out, int capacity, double window)
 {
   if (!stage || !out || capacity <= 0) return 0;
-  // the disturbers are found once per stage, then only their transforms are read.
+
+  // the disturbers are found once per stage, after that only their transforms are read
   static UsdStage *cachedStage = nullptr;
   static std::vector<SdfPath> cached;
   if (cachedStage != stage) {
@@ -378,7 +402,8 @@ HdAkariFogDisturbersAt(UsdStage *stage, double timeCode, float *out, int capacit
       UsdAttribute flag = prim.GetAttribute(_tokens->primvarsFogDisturber);
       bool on = false;
       int onInt = 0;
-      if (flag && ((flag.Get(&on) && on) || (flag.Get(&onInt) && onInt != 0))) cached.push_back(prim.GetPath());
+      const bool flagged = flag && ((flag.Get(&on) && on) || (flag.Get(&onInt) && onInt != 0));
+      if (flagged) cached.push_back(prim.GetPath());
     }
   }
 
@@ -386,21 +411,25 @@ HdAkariFogDisturbersAt(UsdStage *stage, double timeCode, float *out, int capacit
   int count = 0;
   for (SdfPath const &path : cached) {
     if (count >= capacity) break;
+
     UsdPrim prim = stage->GetPrimAtPath(path);
     UsdGeomXformable xf(prim);
     if (!xf) continue;
+
     UsdGeomImageable image(prim);
     if (image && image.ComputeVisibility(UsdTimeCode(timeCode)) == UsdGeomTokens->invisible) continue;
+
     const GfVec3d now = xf.ComputeLocalToWorldTransform(UsdTimeCode(timeCode)).ExtractTranslation();
     const double span = window > 0.0 ? window : 1.0;
     const GfVec3d before = xf.ComputeLocalToWorldTransform(UsdTimeCode(timeCode - span)).ExtractTranslation();
+    const GfVec3d v = (now - before) * (tps / span);
+
     float radius = 0.5f;
     if (UsdAttribute r = prim.GetAttribute(_tokens->primvarsFogDisturberRadius)) {
       double rd = 0.0;
       if (!r.Get(&radius, UsdTimeCode(timeCode)) && r.Get(&rd, UsdTimeCode(timeCode))) radius = float(rd);
     }
 
-    const GfVec3d v = (now - before) * (tps / span);
     float lift = 1.0f;
     if (UsdAttribute l = prim.GetAttribute(_tokens->primvarsFogDisturberLift)) {
       double ld = 0.0;
@@ -421,11 +450,14 @@ HdAkariCameraShutter(UsdStage *stage, std::string const &path, double timeCode)
 {
   HdAkariShutter shutter;
   if (!stage || !SdfPath::IsValidPathString(path)) return shutter;
+
   UsdGeomCamera camera(stage->GetPrimAtPath(SdfPath(path)));
   if (!camera) return shutter;
+
   camera.GetShutterOpenAttr().Get(&shutter.open, UsdTimeCode(timeCode));
   camera.GetShutterCloseAttr().Get(&shutter.close, UsdTimeCode(timeCode));
-  // a cut's first frame doesn't look back across it.
+
+  // a cut's first frame doesn't look back across it
   if (UsdAttribute attr = camera.GetPrim().GetAttribute(_tokens->cut)) {
     bool cut = false, next = false;
     attr.Get(&cut, UsdTimeCode(timeCode));
@@ -441,11 +473,14 @@ int
 HdAkariProbeBakeTimes(UsdStage *stage, double *out, int capacity)
 {
   if (!stage || !out || capacity <= 0) return 0;
+
   std::vector<double> times;
   for (UsdPrim const &prim : stage->Traverse()) {
     if (!prim.HasAttribute(_tokens->primvarsLightProbe)) continue;
+
     UsdGeomImageable image(prim);
     if (!image) continue;
+
     std::vector<double> candidates = {stage->GetStartTimeCode()};
     for (UsdPrim p = prim; p && !p.IsPseudoRoot(); p = p.GetParent()) {
       std::vector<double> samples;
@@ -465,9 +500,149 @@ HdAkariProbeBakeTimes(UsdStage *stage, double *out, int capacity)
 
   std::sort(times.begin(), times.end());
   times.erase(std::unique(times.begin(), times.end()), times.end());
+
   const int count = std::min(int(times.size()), capacity);
   std::copy(times.begin(), times.begin() + count, out);
   return count;
+}
+
+namespace {
+
+/// the brightest visible distant light at `time`, invalid when the stage has none
+UsdPrim BrightestDistantLight(UsdStage *stage, UsdTimeCode time)
+{
+  static const TfToken distantLight("DistantLight");
+  static const TfToken intensityName("inputs:intensity");
+  static const TfToken exposureName("inputs:exposure");
+
+  UsdPrim brightest;
+  double brightestPower = 0.0;
+  for (UsdPrim const &prim : stage->Traverse()) {
+    if (prim.GetTypeName() != distantLight) continue;
+    if (UsdGeomImageable(prim).ComputeVisibility(time) == UsdGeomTokens->invisible) continue;
+
+    float intensity = 1.0f, exposure = 0.0f;
+    if (UsdAttribute attr = prim.GetAttribute(intensityName)) attr.Get(&intensity, time);
+    if (UsdAttribute attr = prim.GetAttribute(exposureName)) attr.Get(&exposure, time);
+
+    const double power = double(intensity) * std::exp2(double(exposure));
+    if (!brightest || power > brightestPower) {
+      brightest = prim;
+      brightestPower = power;
+    }
+  }
+
+  return brightest;
+}
+
+} // namespace
+
+int
+HdAkariSunDirections(UsdStage *stage, float *out, int capacity, double spacingDegrees)
+{
+  if (!stage || !out || capacity <= 0) return 0;
+
+  const double start = stage->GetStartTimeCode(), end = stage->GetEndTimeCode();
+  const UsdPrim sun = BrightestDistantLight(stage, UsdTimeCode(start));
+  if (!sun) return 0;
+
+  const double minDot = std::cos(spacingDegrees * M_PI / 180.0);
+
+  std::vector<GfVec3d> kept;
+  for (double t = start; t <= end && int(kept.size()) < capacity; t += 1.0) {
+    const GfMatrix4d m = UsdGeomXformCache(UsdTimeCode(t)).GetLocalToWorldTransform(sun);
+    GfVec3d axis(m[2][0], m[2][1], m[2][2]);
+    if (axis.GetLength() < 1e-9) continue;
+
+    axis.Normalize();
+    const bool near = std::any_of(kept.begin(), kept.end(),
+                                  [&](GfVec3d const &k) { return GfDot(k, axis) > minDot; });
+    if (!near) kept.push_back(axis);
+  }
+
+  for (size_t i = 0; i < kept.size(); ++i) {
+    out[i * 3 + 0] = float(kept[i][0]);
+    out[i * 3 + 1] = float(kept[i][1]);
+    out[i * 3 + 2] = float(kept[i][2]);
+  }
+
+  return int(kept.size());
+}
+
+namespace {
+
+std::mutex syncStageLock;
+UsdStageWeakPtr syncStage;
+
+}
+
+void
+HdAkariSetSyncStage(UsdStage *stage)
+{
+  std::lock_guard<std::mutex> lock(syncStageLock);
+  syncStage = UsdStageWeakPtr(stage);
+}
+
+namespace {
+
+TF_DEFINE_PRIVATE_TOKENS(subdivisionLevelTokens,
+  ((viewportLevel, "akari:subdivision:viewportLevel"))
+  ((renderLevel, "akari:subdivision:renderLevel"))
+);
+
+std::atomic<bool> subdivisionRender{false};
+
+/// meshes that asked for their own level, synced again when a final render starts or ends
+std::mutex leveledMeshesLock;
+SdfPathSet leveledMeshes;
+
+}
+
+void
+HdAkariSetSubdivisionRender(bool render)
+{
+  if (subdivisionRender.exchange(render) == render) return;
+
+  SdfPathSet meshes;
+  {
+    std::lock_guard<std::mutex> lock(leveledMeshesLock);
+    meshes = leveledMeshes;
+  }
+
+  for (SdfPath const &path : meshes) HdAkariMarkMeshDirty(path.GetString());
+}
+
+bool
+HdAkariPrimSubdivisionLevel(SdfPath const &path, int *level)
+{
+  UsdStageWeakPtr stage;
+  {
+    std::lock_guard<std::mutex> lock(syncStageLock);
+    stage = syncStage;
+  }
+
+  if (!stage) return false;
+  const UsdPrim prim = stage->GetPrimAtPath(path);
+  if (!prim) return false;
+
+  const bool render = subdivisionRender.load();
+  const UsdAttribute own = prim.GetAttribute(render ? subdivisionLevelTokens->renderLevel
+                                                    : subdivisionLevelTokens->viewportLevel);
+  const UsdAttribute other = prim.GetAttribute(render ? subdivisionLevelTokens->viewportLevel
+                                                      : subdivisionLevelTokens->renderLevel);
+  const bool owns = own && own.HasAuthoredValue();
+  if (owns || (other && other.HasAuthoredValue())) {
+    std::lock_guard<std::mutex> lock(leveledMeshesLock);
+    leveledMeshes.insert(path);
+  }
+
+  if (!owns) return false;
+
+  int value = 0;
+  if (!own.Get(&value)) return false;
+
+  *level = std::clamp(value, 0, 8);
+  return true;
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

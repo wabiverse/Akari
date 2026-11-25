@@ -47,14 +47,10 @@ import simd
 
 public extension Akari
 {
-  /// The core Akari render engine. Owns the resolved frame graph and
-  /// executes it each frame. Created once by the app, retained by the
-  /// `HdAkariRenderDelegate`, and driven by `HdAkariRenderPass` every
-  /// frame.
+  /// the akari render engine, it owns the frame graph and runs it each frame for the render delegate and render pass
   final class RenderEngine
   {
-    /// Live configuration, safe to set from any thread. The frame
-    /// graph rebuilds at the start of the next `renderFrame`.
+    /// live settings, safe from any thread, the graph rebuilds at the start of the next frame
     public var settings: RenderSettings
     {
       get { settingsLock.withLock { _settings } }
@@ -68,32 +64,28 @@ public extension Akari
       }
     }
 
-    /// What the viewport outlines, safe to set from any thread.
+    /// what the viewport outlines, safe to set from any thread
     public var selection: Akari.Selection?
     {
       get { settingsLock.withLock { _selection } }
       set { settingsLock.withLock { _selection = newValue } }
     }
 
-    /// The viewport overlay toggle for the selection outline, safe
-    /// to set from any thread. Never drawn into a final render.
+    /// the viewport's selection outline toggle, safe from any thread and never drawn into a final render
     public var showsSelectionOutline: Bool
     {
       get { settingsLock.withLock { _showsSelectionOutline } }
       set { settingsLock.withLock { _showsSelectionOutline = newValue } }
     }
 
-    /// The sample a final render is accumulating, safe to set from any thread.
-    /// While set, frames render as final with every sample on its own jitter,
-    /// at the render sample count, at a fixed resolution, with no viewport
-    /// overlays.
+    /// the sample a final render is on, safe from any thread, frames then render final with no overlays and their own jitter
     public var finalRenderSample: Int?
     {
       get { settingsLock.withLock { _finalRenderSample } }
       set { settingsLock.withLock { _finalRenderSample = newValue } }
     }
 
-    /// The size the viewport last drew at, read on the frame queue.
+    /// the size the viewport last drew at, read on the frame queue
     public private(set) var viewportSize = (width: 0, height: 0)
 
     private let settingsLock = NSLock()
@@ -104,19 +96,19 @@ public extension Akari
     private var settingsPendingRebuild = false
     private var pipeline: RenderPipeline
     private var graph: [any Akari.GPU.RenderPassNode]
-    /// The features `graph` was built for, the settings' own or the stage's say over volumetrics.
+    /// the features `graph` was built for, including any stage override of volumetrics
     private var graphFeatures: RenderFeatures
     private var gpu: Akari.GPU.HydraContext?
     public let labfx = Akari.LabFXEngine()
     private var frameIndex: UInt64 = 0
-    /// Viewport frames rendered so far.
+    /// viewport frames rendered so far
     public private(set) var viewportFrames = 0
     private var lastStatsRevision: UInt64 = 0
     private var lastCamera: (view: [Float], projection: [Float])?
     private let viewportCameraLock = NSLock()
     private var _viewportCamera: (view: simd_float4x4, projection: simd_float4x4)?
 
-    /// The viewport's last frame world -> view and view -> clip, safe to read from any thread.
+    /// the last viewport frame's world to view and view to clip matrices, safe to read from any thread
     public var viewportCamera: (view: simd_float4x4, projection: simd_float4x4)?
     {
       viewportCameraLock.withLock { _viewportCamera }
@@ -130,13 +122,13 @@ public extension Akari
       graphFeatures = settings.features
     }
 
-    /// The passes the latest settings run, in order.
+    /// the passes the latest settings run, in order
     public var activePasses: [RenderPassID]
     {
       RenderPipeline(settings: settings).activePasses
     }
 
-    /// Rebuilds the graph if the settings changed, returning the snapshot this frame runs with.
+    /// rebuilds the graph if the settings changed and returns the snapshot this frame runs with
     private func applyPendingSettings() -> RenderSettings
     {
       let (stored, pending) = settingsLock.withLock
@@ -146,10 +138,18 @@ public extension Akari
       }
 
       var settings = stored
-      // the stage's `/World/RenderSettings` turns the fog on or off over the settings.
+
+      // the stage's `/World/RenderSettings` can turn the fog on or off over the settings
       if let stage = labfx.usdVolume, stage.hasEnabled
       {
-        if stage.enabled { settings.features.insert(.volumetrics) } else { settings.features.remove(.volumetrics) }
+        if stage.enabled
+        {
+          settings.features.insert(.volumetrics)
+        }
+        else
+        {
+          settings.features.remove(.volumetrics)
+        }
       }
 
       if pending || settings.features != graphFeatures
@@ -162,7 +162,7 @@ public extension Akari
       return settings
     }
 
-    /// Per frame entry point. Called by the Hydra render pass.
+    /// per frame entry point called by the hydra render pass
     public func renderFrame(hgi: Pixar.HgiMetal,
                             renderParam: Pixar.HdAkariRenderParam,
                             color: Pixar.HdAkariRenderBuffer?,
@@ -175,8 +175,7 @@ public extension Akari
                             height: Int,
                             isFinalRender: Bool = false)
     {
-      // Hydra's frame queue doesn't drain an autorelease pool between frames, so drain one per frame here
-      // instead of letting Metal and MetalFX objects pile up until the queue goes idle.
+      // the hydra frame queue never drains an autorelease pool, so one drains here before metal objects pile up
       autoreleasepool
       {
         drawFrame(hgi: hgi, renderParam: renderParam, color: color, depth: depth, primId: primId,
@@ -198,15 +197,14 @@ public extension Akari
                            isFinalRender: Bool)
     {
       labfx.makeCurrent()
+
       var settings = applyPendingSettings()
       let finalSample = finalRenderSample
       let isFinalRender = isFinalRender || finalSample != nil
-      if finalSample != nil
-      {
-        settings.features.remove(.dynamicResolution)
-        settings.samples = max(settings.renderSamples, 1)
-      }
 
+      // the viewport accumulates over the render sample count too, not only a final render
+      settings.samples = max(settings.renderSamples, 1)
+      if finalSample != nil { settings.features.remove(.dynamicResolution) }
       if isFinalRender { settings.shading = .rendered }
       settings.features.formIntersection(settings.shading.features)
 
@@ -225,14 +223,14 @@ public extension Akari
       labfx.loadsInBackground = !isFinalRender
       logSceneStats(renderParam)
 
-      // detect camera motion so the TAA resolve can skip accumulation
-      // while the view changes to prevent ghosting.
+      // taa skips accumulation while the camera moves to avoid ghosting
       let cameraMoved = lastCamera.map
       {
         !matrixNear($0.view, view) || !matrixNear($0.projection, projection)
       } ?? true
 
       lastCamera = (view: view, projection: projection)
+
       if !isFinalRender
       {
         viewportCameraLock.withLock { _viewportCamera = (Matrix4(view).simd, Matrix4(projection).simd) }
@@ -241,15 +239,19 @@ public extension Akari
       let unjitteredCamera = Akari.Camera(view: Matrix4(view), projection: Matrix4(projection),
                                           metersPerUnit: labfx.stageMetersPerUnit)
       var camera = unjitteredCamera
+
       labfx.cameraShutter = SIMD2(Float(renderParam.GetShutterOpen()), Float(renderParam.GetShutterClose()))
       labfx.updateRenderScale(settings: settings)
       labfx.configureUpscale(settings: settings, width: width, height: height)
       labfx.taaJitter = .zero
+
       if settings.features.contains(.temporalAA)
       {
+        // the jitter walks the whole sample sequence instead of wrapping early
         let index = finalSample.map { UInt64($0 % settings.samples) + 1 }
-          ?? frameIndex % UInt64(min(max(settings.samples, 1), 16)) + 1
+          ?? frameIndex % UInt64(max(settings.samples, 1)) + 1
         let jitter = SIMD2(Self.halton(index, 2), Self.halton(index, 3)) - 0.5
+
         let renderWidth = Float(max(Int(Float(width) * labfx.renderScale), 1))
         let renderHeight = Float(max(Int(Float(height) * labfx.renderScale), 1))
         camera.projection = Matrix4.translation(SIMD3(2 * jitter.x / renderWidth,
@@ -277,6 +279,7 @@ public extension Akari
                                        renderParam: renderParam)
 
       var state = Akari.GPU.FrameState(target: target)
+
       for node in graph
       {
         node.execute(&state, ctx)
@@ -291,6 +294,7 @@ public extension Akari
       var result: Float = 0
       var fraction: Float = 1
       var i = index
+
       while i > 0
       {
         fraction /= Float(base)
@@ -301,13 +305,13 @@ public extension Akari
       return result
     }
 
-    /// Returns `true` when two camera matrices are identical within a small epsilon.
+    /// whether two camera matrices match within a small epsilon
     private func matrixNear(_ a: [Float], _ b: [Float]) -> Bool
     {
       a.count == b.count && zip(a, b).allSatisfy { abs($0 - $1) <= 1e-6 }
     }
 
-    /// Debug output that geometry sync is feeding the engine.
+    /// logs scene totals so it is clear geometry sync is feeding the engine
     private func logSceneStats(_ renderParam: Pixar.HdAkariRenderParam)
     {
       guard let scene = renderParam.GetScene() else { return }
@@ -321,7 +325,7 @@ public extension Akari
       print("[akari] scene: \(meshes) mesh(es), \(tris) triangle(s)")
     }
 
-    /// Map the resolved pass order onto concrete graph nodes.
+    /// maps the resolved pass order onto concrete graph nodes
     private static func buildGraph(for settings: RenderSettings) -> [any Akari.GPU.RenderPassNode]
     {
       RenderPipeline(settings: settings).activePasses.compactMap(node(for:))

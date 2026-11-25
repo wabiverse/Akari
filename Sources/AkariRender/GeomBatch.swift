@@ -44,9 +44,7 @@ import LabGL
 
 public extension Akari.Geom
 {
-  /// Accumulates packed interleaved vertex/index data across meshes and
-  /// flushes to a GPU buffer pair + draw call whenever either buffer would
-  /// overflow, or on an explicit final `draw()`.
+  /// gathers meshes into one vertex and index buffer pair and draws it whenever either would overflow or on the last `draw`
   final class Batch
   {
     public static let vertexFloats = 14
@@ -54,59 +52,55 @@ public extension Akari.Geom
 
     private let maxVerts: Int
     private let maxIndices: Int
-    /// Keeps one mapped buffer pair from growing to gigabytes when a scene
-    /// records hundreds of thousands of meshes in a single batch. Appending
-    /// past either cap flushes first, the capture then replays every chunk.
+    /// caps one mapped buffer pair so a batch of hundreds of thousands of meshes doesn't grow to gigabytes, appending past it flushes first
     private static let batchVertexCap = 1 << 20
     private static let batchIndexCap = 3 << 20
-    /// Where appending writes, which `draw()` hands the recording capture
-    /// as a buffer pair mapped from a file, in memory when the disk is full.
+    /// where appending writes, the buffers `draw` hands the capture, mapped from a file or in memory when the disk is full
     private var vertBuf: UnsafeMutablePointer<Float>?
     private var idxBuf: UnsafeMutablePointer<Int32>?
     private var vOff = 0
     private var iOff = 0
-    /// Index ranges drawn separately so the shadow pass can cull by chunk.
+    /// index ranges drawn separately so the shadow pass can cull by chunk.
     private static let chunkIndices = 6000
     private var chunkStarts: [Int] = [0]
-    /// World bounds per chunk, min then max.
+    /// world bounds per chunk, min then max.
     private var chunkBounds: [Float] = Batch.emptyBounds
     private static let emptyBounds: [Float] = [.greatestFiniteMagnitude, .greatestFiniteMagnitude,
                                                .greatestFiniteMagnitude, -.greatestFiniteMagnitude,
                                                -.greatestFiniteMagnitude, -.greatestFiniteMagnitude]
     private var boundsMin = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
     private var boundsMax = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
-    /// One world AABB per appended mesh, min then max, six floats each.
+    /// one world aabb per appended mesh, min then max, six floats each.
     public private(set) var casterBounds: [Float] = []
-    /// Per caster, a key that changes whenever it moves or deforms.
+    /// per caster, a key that changes whenever it moves or deforms.
     public private(set) var casterKeys: [UInt64] = []
 
-    /// One prototype's index range, the instance set it draws with and how many of it.
+    /// one prototype's index range, the instance set it draws with and how many of it.
     fileprivate struct InstanceGroup
     {
       var indexStart: Int
       var indexCount: Int
       var set: UInt64
       var count: Int
-      /// Before each instance's transform, the culls.
+      /// before each instance's transform, the culls.
       var bounds: [Float]
       var lod: SIMD2<Float>
     }
 
     private var instanceGroups: [InstanceGroup] = []
-    /// How many of a prototype's own size across an instance caster cell is.
+    /// how many of a prototype's own size across an instance caster cell is.
     private static let instancesPerCasterCell: Float = 8
-    /// The sets this flush's groups draw with, each uploaded
-    /// once, as far as the most of it any group draws.
+    /// the instance sets this flush draws with, each uploaded once up to the most any group draws
     private var instanceSets: [UInt64: Akari.Geom.Matrices] = [:]
     private var liveSets: [UInt64: String] = [:]
     private var drawnInstances: [UInt64: Int] = [:]
-    /// Each set's group still open to the next prototype's indices, per level of detail.
+    /// each set's group still open to the next prototype's indices, per level of detail.
     private var openRuns: [SIMD4<UInt64>: Int] = [:]
 
     private let expands: Bool
-    /// Prototype vertices stay in object space and each group draws once per transform.
+    /// prototype vertices stay in object space and each group draws once per transform.
     private let instanced: Bool
-    /// Where each draw's triangles' Ptex faces go, and this flush's, a triangle each.
+    /// where each draw's triangles' ptex faces go, and this flush's, a triangle each.
     private let ptexFaces: PtexFaces?
     private var triangleFaces: [UInt32] = []
 
@@ -117,6 +111,7 @@ public extension Akari.Geom
       self.expands = expands
       self.instanced = instanced
       self.ptexFaces = ptexFaces
+
       // a single mesh larger than the cap still has to fit in its batch.
       maxVerts = min(max(expands ? indexCount : vertexCount, largestVertexCount, 1),
                      max(Self.batchVertexCap, largestVertexCount, 1),
@@ -142,8 +137,7 @@ public extension Akari.Geom
       iOff
     }
 
-    /// World space bounds of everything appended so far,
-    /// `nil` until the first vertex lands.
+    /// the world bounds of everything appended so far, nil until the first vertex
     public var worldBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
     {
       boundsMin.x <= boundsMax.x ? (boundsMin, boundsMax) : nil
@@ -157,9 +151,7 @@ public extension Akari.Geom
       return true
     }
 
-    /// Appends one mesh's local-space vertex/index data,
-    /// transforming positions/normals into world space
-    /// as it writes straight into the GPU buffers.
+    /// appends one mesh's vertices and indices, moving positions and normals into world space as it writes into the gpu buffers
     public func append(localVerts: UnsafeBufferPointer<Float>, localIndices: UnsafeBufferPointer<Int32>,
                        worldMatrix m: UnsafePointer<Float>,
                        normalMatrix n: [Float],
@@ -179,6 +171,7 @@ public extension Akari.Geom
       let (m0, m1, m2, m4, m5, m6) = (m[0], m[1], m[2], m[4], m[5], m[6])
       let (m8, m9, m10, m12, m13, m14) = (m[8], m[9], m[10], m[12], m[13], m[14])
       let (n0, n1, n2, n3, n4, n5, n6, n7, n8) = (n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8])
+
       // materials come from the atlas, so the color slot carries the prim id.
       let id = Float(primId)
 
@@ -266,9 +259,7 @@ public extension Akari.Geom
       iOff += localIndices.count
     }
 
-    /// Appends one instanced prototype's vertices, moved by its own `worldMatrix` into its instancer's space,
-    /// and the instance sets it draws with. The vertices are written once, each set becomes one GPU instanced
-    /// draw of the same index range.
+    /// appends an instanced prototype's vertices once in its instancer's space with the instance sets that each draw it once
     public func appendInstanced(localVerts: UnsafeBufferPointer<Float>, localIndices: UnsafeBufferPointer<Int32>,
                                 worldMatrix m: [Float], normalMatrix n: [Float],
                                 draws: [Akari.Geom.Recorder.InstanceDraw],
@@ -301,12 +292,12 @@ public extension Akari.Geom
         }
       }
 
-      // world bounds of each draw, from the prototype's bounds under each of its matrices, as casters a
-      // cell of instances each, so a set keeping more or fewer of them only redraws the shadows around those.
+      // each draw's world bounds over its instances, a cell of instances apiece, so changing how many a set keeps only redraws shadows nearby
       var protoMin = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
       var protoMax = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
       let cellSize = max(maxX - minX, maxY - minY, maxZ - minZ, 1e-6) * Self.instancesPerCasterCell
       var cells: [SIMD3<Int32>: (min: SIMD3<Float>, max: SIMD3<Float>, key: UInt64)] = [:]
+
       // a coarser level casts where its finest does.
       let casts = draws.contains { $0.lod.y == .infinity }
       for draw in draws
@@ -339,7 +330,7 @@ public extension Akari.Geom
       iOff += localIndices.count
     }
 
-    /// Writes a prototype's vertices moved into its instancer's space, returning their bounds there.
+    /// writes a prototype's vertices moved into its instancer's space, returning their bounds there.
     private func writeInstancedVertices(_ localVerts: UnsafeBufferPointer<Float>, count vertCount: Int,
                                         worldMatrix m: [Float], normalMatrix n: [Float], primId: Int32,
                                         into destination: UnsafeMutablePointer<Float>) -> (SIMD3<Float>, SIMD3<Float>)
@@ -393,7 +384,7 @@ public extension Akari.Geom
       return (SIMD3(minX, minY, minZ), SIMD3(maxX, maxY, maxZ))
     }
 
-    /// Bins each instance's bounds into caster cells, keyed by the sum of the instances' matrix hashes.
+    /// bins each instance's bounds into caster cells, keyed by the sum of the instances' matrix hashes.
     private func addCasterCells(_ draw: Akari.Geom.Recorder.InstanceDraw, lo: SIMD3<Float>, hi: SIMD3<Float>, cellSize: Float,
                                 into cells: inout [SIMD3<Int32>: (min: SIMD3<Float>, max: SIMD3<Float>, key: UInt64)],
                                 protoMin: inout SIMD3<Float>, protoMax: inout SIMD3<Float>)
@@ -432,6 +423,7 @@ public extension Akari.Geom
             ? SIMD3<Int32>(pointwiseMax(pointwiseMin(center, SIMD3(repeating: 1e9)), SIMD3(repeating: -1e9)))
             : .zero
           let entry = cells[cell] ?? (instanceMin, instanceMax, 0)
+
           // summed, the order a set keeps its instances in doesn't change the key.
           cells[cell] = (pointwiseMin(entry.min, instanceMin), pointwiseMax(entry.max, instanceMax), entry.key &+ instanceKey)
           protoMin = pointwiseMin(protoMin, instanceMin)
@@ -440,13 +432,14 @@ public extension Akari.Geom
       }
     }
 
-    /// Records the draw's instance set, extending the open run it continues or starting a new one.
+    /// records the draw's instance set, extending the open run it continues or starting a new one.
     private func addInstanceGroup(_ draw: Akari.Geom.Recorder.InstanceDraw, indexCount: Int, lo: SIMD3<Float>, hi: SIMD3<Float>)
     {
       let (minX, minY, minZ, maxX, maxY, maxZ) = (lo.x, lo.y, lo.z, hi.x, hi.y, hi.z)
       if instanceSets[draw.key] == nil { instanceSets[draw.key] = draw.transforms }
       if let live = draw.livePrototype { liveSets[draw.key] = live }
       drawnInstances[draw.key] = max(drawnInstances[draw.key] ?? 0, draw.count)
+
       // a run of prototypes drawing the same instances at the same level is one draw.
       let run = SIMD4(draw.key, UInt64(draw.lod.x.bitPattern), UInt64(draw.lod.y.bitPattern),
                       draw.bounds.map { $0.reduce(14_695_981_039_346_656_037) { ($0 ^ UInt64($1.bitPattern)) &* 1_099_511_628_211 } } ?? 0)
@@ -477,7 +470,7 @@ public extension Akari.Geom
       if faces.count == triangles { triangleFaces += faces } else { triangleFaces += repeatElement(.max, count: triangles) }
     }
 
-    /// A flush's bytes, written to the geometry cache where it has room, else kept in memory.
+    /// a flush's bytes, written to the geometry cache where it has room, else kept in memory.
     fileprivate enum Bytes
     {
       case packed(Akari.Geom.GeometryCache.Slice)
@@ -502,7 +495,7 @@ public extension Akari.Geom
       }
     }
 
-    /// One filled buffer pair and its draws, sealed on any thread and recorded on the render thread.
+    /// one filled buffer pair and its draws, sealed on any thread and recorded on the render thread.
     public struct Flush: @unchecked Sendable
     {
       fileprivate var vertices: Bytes
@@ -513,25 +506,24 @@ public extension Akari.Geom
       fileprivate var triangleFaces: [UInt32]
     }
 
-    /// What a batch made with `defers` set leaves for `record`, rather than drawing as it fills.
+    /// what a batch made with `defers` set leaves for `record`, rather than drawing as it fills.
     public private(set) var flushes: [Flush] = []
     private var defers = false
 
-    /// Keeps each flush in `flushes` for a later `record`, so filling the batch makes no GL calls.
+    /// keeps each flush in `flushes` for a later `record`, so filling the batch makes no gl calls.
     public func deferDraws()
     {
       defers = true
     }
 
-    /// Hands the filled buffer pair to the recording capture and issues
-    /// one draw per chunk, then resets for the next batch.
+    /// hands the filled buffers to the capture with one draw per chunk and resets for the next batch
     public func draw()
     {
       guard let flush = seal() else { return }
       if defers { flushes.append(flush) } else { Self.record(flush, instanced: instanced, ptexFaces: ptexFaces) }
     }
 
-    /// Takes the filled buffers and their draws, writing the bytes out, and resets for the next batch.
+    /// takes the filled buffers and their draws, writing the bytes out, and resets for the next batch.
     private func seal() -> Flush?
     {
       guard vOff > 0, let vertBuf, let idxBuf else { return nil }
@@ -570,7 +562,7 @@ public extension Akari.Geom
       return flush
     }
 
-    /// Points the next draw at its triangles faces, when any of them stream.
+    /// points the next draw at its triangles faces, when any of them stream.
     private static func drawFaces(_ indices: Range<Int>, _ flush: Flush, _ ptexFaces: PtexFaces?)
     {
       guard let ptexFaces, indices.upperBound / 3 <= flush.triangleFaces.count else { return }
@@ -579,11 +571,12 @@ public extension Akari.Geom
       labgl.captureNextDrawBase(ptexFaces.add(faces))
     }
 
-    /// Records a sealed flush's buffers and draws into the recording capture.
+    /// records a sealed flush's buffers and draws into the recording capture.
     public static func record(_ flush: Flush, instanced: Bool, ptexFaces: PtexFaces?)
     {
       let vb = flush.vertices.buffer(LGL_BUFFER_VERTEX)
       let ib = flush.indices.buffer(LGL_BUFFER_INDEX)
+
       // unmapping is where the recording capture takes the buffers over.
       gl.unmapBuffer(vb)
       gl.unmapBuffer(ib)

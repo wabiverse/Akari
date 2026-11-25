@@ -58,22 +58,22 @@ public extension Akari
 
   final class FrameDriver: HydraFrameDriver
   {
-    /// weak: the app owns the hydra render engine.
+    /// weak since the app owns the hydra render engine.
     public weak var engine: Hydra.RenderEngine?
     public weak var akari: Akari.RenderEngine?
     public var cameraView: Akari.CameraView?
     public var playback: Akari.Playback?
-    /// Off for a view nothing is picked in, such as a material preview.
+    /// off for views where nothing gets picked, like a material preview.
     public var outlinesSelection = true
 
-    /// Start of the current one second average, and the frames pulled in it.
+    /// start of the current one second average and the frames pulled in it.
     private var windowStart: CFAbsoluteTime = 0
     private var windowFrames = 0
 
     private let statsLock = NSLock()
     private var stats = Akari.RenderStats()
 
-    /// Hydra's selection the outline labels were last built for.
+    /// the hydra selection the outline labels were last built for.
     private var selectionKey: SelectionKey?
     private var selectionLabels: (labels: [Int32], all: Bool)?
 
@@ -89,7 +89,7 @@ public extension Akari
     private var primPaths: [(id: Int32, path: String)]?
     private var unresolved = (version: 0, tries: 0, frame: 0)
 
-    /// Outlines these objects in place of Hydra's pick, each on its own, `nil` hands the outline back.
+    /// outlines these objects instead of the hydra pick, passing `nil` hands the outline back.
     public func select(objects paths: [String]?)
     {
       statsLock.lock()
@@ -99,14 +99,14 @@ public extension Akari
 
     private var missing = false
 
-    /// A just added prim gets its id a frame or so after it's selected, so a selection
-    /// with paths the ids don't reach yet looks again for a little while.
+    /// a newly added prim gets its id a frame or so after being selected, so unresolved paths keep looking for a while
     private func retryUnresolved()
     {
       statsLock.lock()
       let resyncs = resyncFrames > 0
       if resyncs { resyncFrames -= 1 }
       statsLock.unlock()
+
       if resyncs
       {
         primPaths = nil
@@ -115,18 +115,19 @@ public extension Akari
       }
 
       guard missing, objectSelection != nil, unresolved.tries < 12 else { return }
+
       unresolved.frame += 1
       guard unresolved.frame % 8 == 0 else { return }
+
       unresolved.tries += 1
       primPaths = nil
       selectionKey = nil
     }
 
-    /// The frames still to look the ids up again, a prim made again under its path
-    /// gets its new id only once Hydra syncs, after the frame's selection.
+    /// frames left to look ids up again, a prim recreated at the same path only gets its new id once hydra syncs
     private var resyncFrames = 0
 
-    /// Forgets the prim ids' paths after prims come or go.
+    /// forgets the cached prim paths after prims are added or removed.
     public func primsChanged()
     {
       statsLock.lock()
@@ -140,7 +141,12 @@ public extension Akari
     {
       if primPaths == nil
       {
-        let imaging = engine.getEngine()
+        #if canImport(UsdImagingGL)
+          let imaging = engine.getEngine()
+        #else
+          var imaging = engine.getEngine()
+        #endif
+
         var found: [(id: Int32, path: String)] = []
         var misses = 0
         var id: Int32 = 0
@@ -159,9 +165,11 @@ public extension Akari
       }
 
       guard let cache = primPaths, let top = cache.last?.id, !paths.isEmpty else { return [] }
+
       var labels = [Int32](repeating: 0, count: Int(top) + 1)
-      let index = Dictionary(paths.enumerated().map { ($1, Int32($0 + 1)) }, uniquingKeysWith: { a, _ in a })
+      let index = Dictionary(paths.enumerated().map { ($1, Int32($0 + 1)) }, uniquingKeysWith: { first, _ in first })
       var found = Set<Int32>()
+
       for entry in cache
       {
         var path = Substring(entry.path)
@@ -180,6 +188,7 @@ public extension Akari
       }
 
       missing = found.count < index.count
+
       return labels
     }
 
@@ -189,6 +198,7 @@ public extension Akari
       self.akari = akari
 
       engine?.frameDelegate = self
+
       // akari outlines the selection in its own graph.
       engine?.drawsSelectionOutline = false
     }
@@ -203,6 +213,7 @@ public extension Akari
     public func hydraWillPull(deltaTime _: Double)
     {
       framePool = autoreleasePoolPush()
+
       let pullStart = CFAbsoluteTimeGetCurrent()
       if windowStart == 0 { windowStart = pullStart }
       else { windowFrames += 1 }
@@ -217,16 +228,17 @@ public extension Akari
         windowFrames = 0
       }
 
+      if let engine { Pixar.HdAkariSetSyncStage(engine.stage) }
       playback?.advance()
       cameraView?.update()
-      retryUnresolved()
-      syncSelection()
     }
 
-    /// Hydra's frame queue runs frames back to back without draining, so every frame's command
-    /// buffers, and the textures and buffers they hold, go with the frame.
+    /// the hydra frame queue runs frames back to back, so each frame drains its own command buffers
     public func hydraDidPull()
     {
+      // ids are looked up after the render syncs the stage, before it hydra still maps them to prims a drop just changed
+      retryUnresolved()
+      syncSelection()
       if let pool = framePool
       {
         framePool = nil
@@ -236,8 +248,7 @@ public extension Akari
 
     private var framePool: UnsafeMutableRawPointer?
 
-    /// Hands Hydra's selection to Akari's outline,
-    /// rebuilding the labels only when it changed.
+    /// hands the hydra selection to the akari outline, rebuilding labels only when it changed.
     private func syncSelection()
     {
       guard outlinesSelection, let engine, let akari else { return }
@@ -245,10 +256,12 @@ public extension Akari
       statsLock.lock()
       let objects = objectSelection
       statsLock.unlock()
+
       let key = objects.map { SelectionKey(primId: -1, objects: $0.version) }
         ?? SelectionKey(primId: engine.selectedPrimId,
                         groupVersion: engine.selectionUsesGroup ? engine.selectionGroupVersion : nil,
                         modelsVersion: engine.selectionSelectAll ? engine.selectionModelLUTVersion : nil)
+
       if key != selectionKey
       {
         selectionKey = key
@@ -288,7 +301,7 @@ public extension Akari
         }
       }
 
-      // display sRGB in, akari composites before hydra's color correction.
+      // the color comes in as display srgb but akari composites before the hydra color correction.
       let c = engine.selectionOutlineColor
       let rgb = transformColor(to: namedColorSpace("lin_rec709_scene")!,
                                from: namedColorSpace("srgb_rec709_scene")!,

@@ -44,8 +44,7 @@ import simd
 
 extension Akari.LightProbes
 {
-  /// Rasterizes `views` (probe * 6 + face) into the capture atlas,
-  /// a run of amplified faces per replay of the scene capture.
+  /// rasterizes the views into the capture atlas, a run of amplified faces per replay of the scene capture
   func drawCapture(_ captures: [OpaquePointer], views range: Range<Int>,
                    materials: (material: GLuint, color: GLuint, emissive: GLuint, constants: GLuint))
   {
@@ -84,7 +83,7 @@ extension Akari.LightProbes
     endPass()
   }
 
-  /// An orthographic sun depth map over the whole scene.
+  /// an orthographic sun depth map over the whole scene.
   func drawSunMap(_ captures: [OpaquePointer],
                   sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>),
                   direction: SIMD3<Float>,
@@ -120,38 +119,63 @@ extension Akari.LightProbes
     endPass()
   }
 
-  /// One bounce: projects the volume probes to SH (reading last bounce's
-  /// SH for their indirect), then rebuilds and filters the sphere probes.
-  func relight(_ lighting: Lighting, environment: GLuint)
+  /// shades each sphere probe lit by `lights` alone with bounce light from `sh`, so the baked layers sum to the probes lit by everything
+  func bakeSpheres(_ lighting: Lighting, lights: LightLayers, environment: GLuint, sh: GLuint, into atlas: GLuint)
   {
-    let next = 1 - shIndex
-
-    let project = kernels[.project]
-    setUniforms(project, lighting, param: 0)
-    project.image(sh[next], at: 0, format: GLenum(GL_RGBA16F))
-    project.image(sphereInfo, at: 1, format: GL_RGBA32F)
-    bindScene(project, environment: environment, sh: sh[shIndex])
-    project.dispatch(layout.probeCount)
-    shIndex = next
-
-    guard !layout.spheres.isEmpty else { return }
-
+    guard !layout.spheres.isEmpty, atlas != 0 else { return }
     let base = kernels[.sphereBase]
-    let baseGroups = (Self.octResolution + 2 + 15) / 16
-    setUniforms(base, lighting, param: 0)
-    base.image(sphereAtlas, at: 0, format: GLenum(GL_RGBA16F))
+    let groups = (Self.octResolution + 2 + 15) / 16
+    setUniforms(base, lighting, param: 0, lights: lights)
+    base.image(atlas, at: 0, format: GLenum(GL_RGBA16F))
     base.sample(sphereInfo, at: 1)
-    bindScene(base, environment: environment, sh: sh[shIndex])
-    base.dispatch(baseGroups, baseGroups, layout.spheres.count)
+    bindScene(base, environment: environment, sh: sh)
+    base.dispatch(groups, groups, layout.spheres.count)
 
+    // the filter is a fixed weighted sum, so filtering layers then summing equals filtering the sum and a color change never refilters
     let filter = kernels[.sphereFilter]
     for level in 1 ..< Self.octLevels
     {
-      let groups = ((Self.octResolution >> level) + 2 + 15) / 16
+      let levelGroups = ((Self.octResolution >> level) + 2 + 15) / 16
       setUniforms(filter, lighting, param: Float(level))
-      filter.image(sphereAtlas, at: 0, format: GLenum(GL_RGBA16F))
-      filter.dispatch(groups, groups, layout.spheres.count)
+      filter.image(atlas, at: 0, format: GLenum(GL_RGBA16F))
+      filter.dispatch(levelGroups, levelGroups, layout.spheres.count)
     }
+  }
+
+  /// bakes every bounce of the probes lit by `lights` alone into `target`.
+  func bakeLayer(_ lighting: Lighting, lights: LightLayers, environment: GLuint, bounces: Int, into target: GLuint)
+  {
+    clear(bounceScratch[1], width: Self.shTextureSize.x, height: Self.shTextureSize.y)
+    let project = kernels[.project]
+    let passes = max(bounces, 0) + 1
+    var source = bounceScratch[1]
+    for pass in 0 ..< passes
+    {
+      let output = pass == passes - 1 ? target : bounceScratch[pass % 2]
+      setUniforms(project, lighting, param: 0, lights: lights)
+      project.image(output, at: 0, format: GLenum(GL_RGBA16F))
+      project.image(sphereInfo, at: 1, format: GL_RGBA32F)
+      bindScene(project, environment: environment, sh: source)
+      project.dispatch(layout.probeCount)
+      source = output
+    }
+  }
+
+  /// combines the baked layers into the probes the resolve samples.
+  func combineLayers(sunA: GLuint, sunB: GLuint, blend: Float, sunScale: SIMD3<Float>, skyTint: SIMD3<Float>, into target: GLuint,
+                     sky: GLuint? = nil, local: GLuint? = nil, size: SIMD2<Int>? = nil)
+  {
+    let size = size ?? Self.shTextureSize
+    let kernel = kernels[.combine]
+    kernel.set(.skyTint, SIMD4(skyTint, 1))
+    kernel.set(.sunColor, SIMD4(sunScale, 1))
+    kernel.set(.value, SIMD4(blend, 0, 0, 0))
+    kernel.image(target, at: 0, format: GLenum(GL_RGBA16F))
+    kernel.sample(sky ?? skyLayer, at: 1)
+    kernel.sample(sunA, at: 2)
+    kernel.sample(sunB, at: 3)
+    kernel.sample(local ?? localLayer, at: 4)
+    kernel.dispatch((size.x + 15) / 16, (size.y + 15) / 16)
   }
 
   func clear(_ texture: GLuint, width: Int, height: Int, format: GLenum = GLenum(GL_RGBA16F))
@@ -172,8 +196,8 @@ extension Akari.LightProbes
     kernel.sample(sh, at: 7)
   }
 
-  /// Every relight kernel shares `U` fields set in declaration order.
-  private func setUniforms(_ kernel: Akari.ComputeKernel, _ lighting: Lighting, param: Float)
+  /// every relight kernel shares `U` fields set in declaration order.
+  private func setUniforms(_ kernel: Akari.ComputeKernel, _ lighting: Lighting, param: Float, lights: LightLayers = .all)
   {
     kernel.set(.sunMatrix, sunMatrix)
     kernel.set(.sun, SIMD4(lighting.sunDirection, lighting.sunHeight))
@@ -194,12 +218,11 @@ extension Akari.LightProbes
       kernel.set(.lightColor, index: i, i < lightCount ? lighting.lights[i * 2 + 1] : .zero)
     }
 
-    kernel.set(.params, SIMD4(Float(lightCount), param, 0, 0))
+    kernel.set(.params, SIMD4(Float(lightCount), param, Float(lights.rawValue), 0))
     kernel.set(.skyTint, SIMD4(lighting.skyTint, 1))
   }
 
-  /// Uploads the run's projection matrices for the combined instanced entry
-  /// point, whose buffer(1) carries the draw's instance transforms.
+  /// uploads the run's projections for the combined instanced entry point
   private func setCaptureViews(_ transforms: [Float])
   {
     guard

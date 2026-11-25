@@ -43,7 +43,7 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// The UI's icons, drawn in a unit square as layers of shapes.
+  /// the UI's icons, drawn in a unit square as layers of shapes.
   struct IconPart: Shape
   {
     enum Kind
@@ -61,6 +61,8 @@ extension Kraken
       case earth, continents, orbit
       case objectCorners, objectSquare
       case materialRing, materialQuarters
+      case sliderTracks, sliderKnobs
+      case stackBars
     }
 
     let kind: Kind
@@ -205,6 +207,18 @@ extension Kraken
           return path
         case .objectSquare:
           return Path().addRectangle(r(0.22, 0.28, 0.56, 0.5))
+        case .sliderTracks:
+          return [0.2, 0.5, 0.8].reduce(Path()) { path, y in path.move(to: p(0.06, y)).addLine(to: p(0.94, y)) }
+        case .sliderKnobs:
+          return [(0.68, 0.2), (0.3, 0.5), (0.58, 0.8)].reduce(Path())
+          { path, knob in
+            path.addCircle(center: p(knob.0, knob.1), radius: 0.13 * s)
+          }
+        case .stackBars:
+          return [(0.10, 0.14, 0.80), (0.10, 0.42, 0.62), (0.10, 0.70, 0.44)].reduce(Path())
+          { path, bar in
+            path.addRectangle(r(bar.0, bar.1, bar.2, 0.16))
+          }
         case .materialRing:
           return Path().addCircle(center: p(0.5, 0.5), radius: 0.42 * s)
         case .materialQuarters:
@@ -246,7 +260,7 @@ extension Kraken
     }
   }
 
-  /// The icon colors.
+  /// the icon colors.
   enum IconColor
   {
     static let grey = Color(white: 0.753)
@@ -256,24 +270,26 @@ extension Kraken
     static let objectDim = Color(red: 0.655, green: 0.471, blue: 0.322)
     static let data = Color(red: 0.035, green: 0.69, blue: 0.537)
     static let material = Color(red: 0.765, green: 0.4, blue: 0.435)
+    static let modifier = Color(red: 0.353, green: 0.557, blue: 0.796)
   }
 
-  /// A properties tab's icon.
+  /// a properties tab's icon.
   @MainActor
   struct TabIcon: View
   {
     enum Kind
     {
-      case render, output, scene, world, object, camera, light, material
+      case render, output, scene, world, object, modifiers, camera, light, material, properties
     }
 
     let kind: Kind
     let background: Double
+    var size = 14.0
 
     var body: some View
     {
       let gap = Color(white: background)
-      let line = StrokeStyle(width: 1.1, cap: .round, join: .round)
+      let line = StrokeStyle(width: 1.1 * size / 14, cap: .round, join: .round)
       return ZStack
       {
         switch kind
@@ -306,6 +322,8 @@ extension Kraken
           case .object:
             IconPart(kind: .objectCorners).stroke(IconColor.objectDim, style: StrokeStyle(width: 1.1))
             IconPart(kind: .objectSquare).fill(IconColor.object)
+          case .modifiers:
+            IconPart(kind: .stackBars).fill(IconColor.modifier)
           case .camera:
             IconPart(kind: .videoBody).fill(IconColor.data)
             IconPart(kind: .videoLens).fill(IconColor.data)
@@ -315,13 +333,17 @@ extension Kraken
           case .material:
             IconPart(kind: .materialQuarters).fill(IconColor.material)
             IconPart(kind: .materialRing).stroke(IconColor.material, style: line)
+          case .properties:
+            IconPart(kind: .sliderTracks).stroke(IconColor.greyDim, style: line)
+            IconPart(kind: .sliderKnobs).fill(gap)
+            IconPart(kind: .sliderKnobs).stroke(IconColor.grey, style: line)
         }
       }
-      .frame(width: 14, height: 14)
+      .frame(width: size, height: size)
     }
   }
 
-  /// The viewport's tool icons, all one size.
+  /// the viewport's tool icons, all one size.
   @MainActor
   struct ToolIcon: View
   {
@@ -358,11 +380,13 @@ extension Kraken
             IconPart(kind: .moveHeads).fill(ink)
         }
       }
-      .frame(width: 16, height: 16)
+      .frame(width: Double(Self.size), height: Double(Self.size))
     }
+
+    static let size = FormFactor.isTouch ? 20 : 16
   }
 
-  /// The toolbar down the viewport's left side.
+  /// the toolbar down the viewport's left side.
   @MainActor
   struct LayoutToolbar: View
   {
@@ -382,8 +406,8 @@ extension Kraken
           ForEach(Layout.Tool.allCases, id: \.self)
           { tool in
             ToolIcon(tool: tool)
-              .frame(width: 28, height: 28)
-              .background(RoundedRectangle(cornerRadius: 4)
+              .frame(width: Self.cell, height: Self.cell)
+              .background(RoundedRectangle(cornerRadius: FormFactor.isTouch ? 10 : 4)
                 .fill(layout.tool == tool ? Properties.accent : Color(white: 0.16, opacity: 0.92)))
               .onTapGesture { layout.tool = tool }
           }
@@ -391,5 +415,8 @@ extension Kraken
       }
       .padding(8)
     }
+
+    /// the side of a tool's square.
+    static let cell = FormFactor.isTouch ? 38.0 : 28.0
   }
 }

@@ -48,25 +48,22 @@ import simd
 
 extension Akari.LabFXEngine
 {
-  /// The unique triangles this machine can hold, at about 150 bytes each
-  /// once built, uploaded and drawn, against 65% of its memory less what
-  /// the process already holds besides the geometry recorded last time,
-  /// and the size the frame itself takes after recording.
-  ///
-  /// Where buffers map files the triangles live on the disk instead, held
-  /// to what it or memory can fit, and on a discrete GPU to its memory.
+  /// the unique triangles this machine can hold at about 150 bytes each, from free memory, disk when buffers map files, or gpu memory
   func uniqueTriangleBudget() -> (regular: Int, prototypes: Int)
   {
-    var gpuBudget: UInt64 = 0, gpuAllocated: UInt64 = 0
+    var gpuBudget: UInt64 = 0
+    var gpuAllocated: UInt64 = 0
     gl.gpuMemory(budget: &gpuBudget, allocated: &gpuAllocated)
+
     let mapsFiles = gl.buffersMapFiles() != 0
     if !mapsFiles, gpuBudget > 0
     {
       return split((Int(gpuBudget) * 9 / 10 - Int(gpuAllocated)) / 150 + geometry.record.triangles)
     }
 
-    // a disk short of room holds its copies in memory instead, so it never holds fewer than memory would.
+    // a disk short on room keeps its copies in memory, so it never holds fewer than memory would.
     let disk = mapsFiles ? Akari.Geom.GeometryCache.shared.freeDisk.map { Int($0) / 256 } ?? 0 : 0
+
     var info = task_vm_info_data_t()
     var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
     let result = withUnsafeMutablePointer(to: &info)
@@ -76,13 +73,15 @@ extension Akari.LabFXEngine
         task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
       }
     }
-    // the Ptex cache is a fixed size on top of the scene, the triangles don't make room for it.
+
+    // the ptex cache is a fixed size on top of the scene, so the triangles do not make room for it.
     let footprint = (result == KERN_SUCCESS ? Int(info.phys_footprint) : 0) - ptex.allocated
     let target = Int(Double(ProcessInfo.processInfo.physicalMemory) * 0.65) - 1536 << 20
+
     return split(max((target - footprint) / 150, disk) + geometry.record.triangles)
   }
 
-  /// Order independent, a reframe ranks the same meshes differently.
+  /// order independent since a reframe can rank the same meshes differently.
   static func recordKey(_ meshes: [Akari.Geom.Recorder.RawMesh]) -> UInt64
   {
     meshes.reduce(UInt64(meshes.count))
@@ -90,6 +89,7 @@ extension Akari.LabFXEngine
       var key: UInt64 = 14_695_981_039_346_656_037
       let values = [mesh.key, mesh.dataRevision, UInt64(mesh.tris.size()), mesh.instancesKey]
         + mesh.instanceDraws.flatMap { [$0.key, UInt64($0.count), UInt64($0.lod.x.bitPattern) << 32 | UInt64($0.lod.y.bitPattern)] }
+
       for value in values
       {
         key = (key ^ value) &* 1_099_511_628_211
@@ -102,53 +102,57 @@ extension Akari.LabFXEngine
   private func split(_ triangles: Int) -> (regular: Int, prototypes: Int)
   {
     let triangles = max(1_000_000, triangles)
+
     return (Self.environmentBudget("AKARI_REGULAR_TRIANGLE_BUDGET", triangles / 3),
             Self.environmentBudget("AKARI_PROTOTYPE_TRIANGLE_BUDGET", triangles - triangles / 3))
   }
 
-  /// Whether memory has freed up well past what the last record was held to
-  /// from its initial load is gone. A budget held to the disk or GPU memory
-  /// never counted the initial load.
+  /// whether memory freed up well past what the last record was held to, once its initial load is gone
   func triangleBudgetGrew() -> Bool
   {
-    var gpuBudget: UInt64 = 0, gpuAllocated: UInt64 = 0
+    var gpuBudget: UInt64 = 0
+    var gpuAllocated: UInt64 = 0
     gl.gpuMemory(budget: &gpuBudget, allocated: &gpuAllocated)
+
     let mapsFiles = gl.buffersMapFiles() != 0
     if mapsFiles ? Akari.Geom.GeometryCache.shared.freeDisk != nil : gpuBudget > 0 { return false }
+
     let budget = uniqueTriangleBudget()
     return Double(budget.regular + budget.prototypes) > Double(geometry.record.budget) * 1.25
   }
 
-  /// Recorded triangles past which the shadows stop drawing an
-  /// unwelded copy of the static meshes.
+  /// recorded triangles past which the shadows stop drawing an unwelded copy of the static meshes.
   static var unweldedShadowTriangles: Int
   {
     environmentBudget("AKARI_UNWELDED_SHADOW_TRIANGLES", 1_000_000)
   }
 
-  /// The most triangles one transparent mesh brings to the transparency pass.
+  /// whether refined meshes cast shadows from their cages, turned off with `AKARI_COARSE_SHADOWS=0`.
+  static var castsCoarseShadows: Bool
+  {
+    ProcessInfo.processInfo.environment["AKARI_COARSE_SHADOWS"] != "0"
+  }
+
+  /// the most triangles one transparent mesh brings to the transparency pass.
   static let maxTransparentTriangles = 524_288
 
-  /// Triangles a set of identical static meshes would duplicate before they draw as instances.
+  /// triangles a set of identical static meshes would duplicate before they draw as instances.
   static var duplicateTriangles: Int
   {
     environmentBudget("AKARI_DUPLICATE_TRIANGLES", 262_144)
   }
 
-  /// One triangle per this many pixels a mesh covers is as fine as the screen shows it.
+  /// one triangle per this many covered pixels is as fine as the screen can show.
   private static let pixelsPerTriangle = 2.0
-  /// An instance's level is measured against its bounding disk, which its visible triangles cover a
-  /// fraction of, so it takes more of the disk per triangle to keep them from going sub pixel.
+
+  /// an instance level is measured against its bounding disk, which its triangles only partly cover, so it needs more pixels a triangle
   static let instancePixelsPerTriangle = 12.0
-  /// The coarse level a large shape keeps first, enough for its silhouette, and how much
-  /// screen it covers to be one.
+
+  /// the coarse level a large shape keeps first for its silhouette, and how much screen makes it large
   private static let silhouettePixelsPerTriangle = 16.0
   private static let silhouetteMinimumPixels = 16384.0
 
-  /// Every large shape in view keeps the coarse level its outline needs, past `budget` if it
-  /// has to, what's left then goes to the meshes covering the most screen per triangle, as
-  /// many as the screen shows. Levels are powers of two, so they're reused. Ties go to the stable
-  /// path hash, so the same scene records the same subset.
+  /// every large shape in view keeps its outline level, the rest of the budget goes to the meshes covering the most screen per triangle
   static func budgetGeometry(_ meshes: [Akari.Geom.Recorder.RawMesh], budget: Int,
                                      area: [(total: Double, largest: Double?)])
     -> [(mesh: Akari.Geom.Recorder.RawMesh, triangles: Int)]
@@ -156,10 +160,18 @@ extension Akari.LabFXEngine
     func level(_ mesh: Akari.Geom.Recorder.RawMesh, _ area: (total: Double, largest: Double?), _ pixels: Double) -> Int
     {
       let full = mesh.tris.size()
-      guard let largest = area.largest, mesh.uvs.size() <= 1 || mesh.uvs.size() == full * 3 || mesh.uvs.size() == mesh.points.size() else { return full }
+      let uvCount = mesh.uvs.size()
+      guard let largest = area.largest, uvCount <= 1 || uvCount == full * 3 || uvCount == mesh.points.size() else { return full }
+
       let wanted = max(64, Int(min(largest / pixels, Double(Int32.max))))
-      return min(full, 1 << (Int.bitWidth - (wanted - 1).leadingZeroBitCount))
+      let picked = min(full, 1 << (Int.bitWidth - (wanted - 1).leadingZeroBitCount))
+
+      // a refined mesh draws in full only when the screen can show at least half its triangles.
+      guard mesh.hasCoarse else { return picked }
+
+      return wanted * 2 >= full ? full : min(picked, mesh.coarseTris.size())
     }
+
     // a shape with a significant silhouette on screen draws in full, only the rest take levels.
     let triangles = zip(meshes, area).map
     { mesh, area in
@@ -180,6 +192,7 @@ extension Akari.LabFXEngine
 
     var chosen = silhouettes
     var keptTriangles = silhouettes.reduce(0, +)
+
     for index in ranked where keptTriangles + triangles[index] - chosen[index] <= budget
     {
       keptTriangles += triangles[index] - chosen[index]
@@ -189,8 +202,7 @@ extension Akari.LabFXEngine
     return ranked.filter { chosen[$0] > 0 }.map { (meshes[$0], chosen[$0]) }
   }
 
-  /// Simplifies each mesh to its triangle count, reusing what `cache`
-  /// holds, in parallel, and gathers every level drawn into `details`.
+  /// simplifies each mesh to its triangle count in parallel, reusing the cache, and gathers every drawn level into `details`
   static func applyDetail(_ meshes: [(mesh: Akari.Geom.Recorder.RawMesh, triangles: Int)],
                                   cache: [UInt64: Detail], into details: inout [UInt64: Detail])
     -> [Akari.Geom.Recorder.RawMesh]
@@ -200,11 +212,28 @@ extension Akari.LabFXEngine
       ((mesh.contentKey == 0 ? mesh.key : mesh.contentKey) ^ UInt64(triangles)) &* 1_099_511_628_211
     }
 
+    // a refined mesh limited to the triangle count of its cage or fewer draws the cage instead.
+    let meshes = meshes.map
+    { entry in
+      guard entry.triangles < entry.mesh.tris.size(), entry.triangles <= entry.mesh.coarseTris.size(),
+            let coarse = entry.mesh.coarse
+      else { return entry }
+
+      return (mesh: coarse, triangles: min(entry.triangles, coarse.tris.size()))
+    }
+
     var pending: [(index: Int, key: UInt64)] = []
     for (index, entry) in meshes.enumerated() where entry.triangles < entry.mesh.tris.size()
     {
       let key = detailKey(entry.mesh, entry.triangles)
-      if let found = cache[key] ?? details[key] { details[key] = found } else { pending.append((index, key)) }
+      if let found = cache[key] ?? details[key]
+      {
+        details[key] = found
+      }
+      else
+      {
+        pending.append((index, key))
+      }
     }
 
     var built = [Detail?](repeating: nil, count: pending.count)
@@ -214,8 +243,11 @@ extension Akari.LabFXEngine
       DispatchQueue.concurrentPerform(iterations: pending.count)
       { i in
         let entry = box.meshes[box.pending[i].index]
-        var points = Pixar.VtVec3fArray(), tris = Pixar.VtVec3iArray(), uvs = Pixar.VtVec2fArray()
+        var points = Pixar.VtVec3fArray()
+        var tris = Pixar.VtVec3iArray()
+        var uvs = Pixar.VtVec2fArray()
         var sources = Pixar.VtIntArray()
+
         if Pixar.HdAkariDecimate(entry.mesh.points, entry.mesh.tris, entry.mesh.uvs, entry.triangles,
                                  &points, &tris, &uvs, &sources)
         {
@@ -233,11 +265,13 @@ extension Akari.LabFXEngine
     { entry in
       var mesh = entry.mesh
       guard entry.triangles < mesh.tris.size(), let detail = details[detailKey(mesh, entry.triangles)] else { return mesh }
+
       let level = UInt64(entry.triangles) &* 0x9E37_79B9_7F4A_7C15
       mesh.points = detail.points
       mesh.tris = detail.tris
       mesh.uvs = detail.uvs
-      // a pruned mesh's triangles are some of its own, a clustered one's aren't its faces, it draws in its map's average color.
+
+      // a pruned mesh keeps some of its own triangles and its face mapping, a clustered one draws in its map's average color
       if !detail.sources.empty(), mesh.triangleFaces.size() == entry.mesh.tris.size()
       {
         mesh.triangleFaces = Pixar.HdAkariSubsetInts(mesh.triangleFaces, detail.sources)
@@ -251,11 +285,12 @@ extension Akari.LabFXEngine
       if mesh.contentKey != 0 { mesh.contentKey = (mesh.contentKey ^ level) &* 1_099_511_628_211 }
       mesh.dataRevision ^= level
       mesh.topologyRevision ^= level
+
       return mesh
     }
   }
 
-  /// Passes the meshes and results into `concurrentPerform`'s closure.
+  /// carries the meshes and results into the `concurrentPerform` closure.
   private struct DetailBox: @unchecked Sendable
   {
     let buffer: UnsafeMutableBufferPointer<Detail?>

@@ -100,7 +100,7 @@ double ImplicitDouble(HdSceneDelegate *sceneDelegate, SdfPath const &id, TfToken
   return fallback;
 }
 
-// The frame turning the generators' +z spine onto the prim's axis.
+// the frame turning the generators' +z spine onto the prim's axis.
 GfMatrix4d ImplicitBasis(TfToken const &axis)
 {
   if (axis == _tokens->x) return GfMatrix4d(0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1);
@@ -177,8 +177,7 @@ HdAkariImplicit::Sync(HdSceneDelegate *sceneDelegate,
   data.primId = GetPrimId();
   HdAkariSyncStyle(sceneDelegate, id, data.primId, scene);
 
-  // a point instancer's prototype publishes one matrix per instance, the
-  // renderer draws it with GPU instancing instead of copying the mesh.
+  // a point instancer's prototype publishes a matrix per instance and the renderer instances it instead of copying the mesh
   _UpdateInstancer(sceneDelegate, dirtyBits);
   const SdfPath instancerId = GetInstancerId();
   const bool instanced = !instancerId.IsEmpty();
@@ -233,6 +232,7 @@ HdAkariImplicit::Sync(HdSceneDelegate *sceneDelegate,
     HdAkariInstanceSet set = HdAkariInstances(sceneDelegate->GetRenderIndex(), instancerId, id);
     data.instances = std::move(set.transforms);
     data.instancesKey = set.key;
+
     // nothing to draw without instances.
     if (data.instances.empty()) {
       scene->RemoveMesh(id);

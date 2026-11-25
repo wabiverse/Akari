@@ -40,25 +40,20 @@
 
 public extension Akari
 {
-  /// Scalar math shared by the engine and the settings it renders.
-  ///
-  /// This is required because unfortunatley, simd.h is not available
-  /// outside of Apple platforms, so we provide all the simd shading
-  /// math utility functions that Akari needs here so all platforms
-  /// use the same unified shading math.
+  /// scalar math shared by the engine and its settings, simd isn't on every platform so the shading math lives here for all of them
   enum Math {}
 }
 
 public extension Akari.Math
 {
-  /// Computes the element-wise minimum of two SIMD3 vectors.
+  /// computes the element-wise minimum of two SIMD3 vectors.
   @inlinable
   static func min<T: SIMDScalar & Comparable>(_ a: SIMD3<T>, _ b: SIMD3<T>) -> SIMD3<T>
   {
     pointwiseMin(a, b)
   }
 
-  /// Computes the element-wise maximum of two SIMD3 vectors.
+  /// computes the element-wise maximum of two SIMD3 vectors.
   @inlinable
   static func max<T: SIMDScalar & Comparable>(_ a: SIMD3<T>, _ b: SIMD3<T>) -> SIMD3<T>
   {
@@ -93,14 +88,14 @@ public extension Akari.Math
     clamp(value, 0, 1)
   }
 
-  /// Linear interpolation from `a` to `b` by `t`.
+  /// linear interpolation from `a` to `b` by `t`.
   @inlinable
   static func mix(_ a: Float, _ b: Float, _ t: Float) -> Float
   {
     a + (b - a) * t
   }
 
-  /// Hermite interpolation of `x` between `edge0` and `edge1`.
+  /// hermite interpolation of `x` between `edge0` and `edge1`.
   @inlinable
   static func smoothstep(_ edge0: Float, _ edge1: Float, _ x: Float) -> Float
   {
@@ -123,21 +118,21 @@ public extension Akari.Math
     radians * 180 / .pi
   }
 
-  /// The squared length of `v`.
+  /// the squared length of `v`.
   @inlinable
   static func lengthSquared<T: FloatingPoint & SIMDScalar>(_ v: SIMD3<T>) -> T
   {
     (v * v).sum()
   }
 
-  /// The length of `v`.
+  /// the length of `v`.
   @inlinable
   static func length<T: FloatingPoint & SIMDScalar>(_ v: SIMD3<T>) -> T
   {
     lengthSquared(v).squareRoot()
   }
 
-  /// `v` scaled to unit length, or unchanged when it is (nearly) zero.
+  /// `v` scaled to unit length, or unchanged when it is nearly zero
   @inlinable
   static func normalize<T: FloatingPoint & SIMDScalar>(_ v: SIMD3<T>) -> SIMD3<T>
   {
@@ -147,14 +142,14 @@ public extension Akari.Math
     return length > epsilon ? v / length : v
   }
 
-  /// The dot product of `a` and `b`.
+  /// the dot product of `a` and `b`.
   @inlinable
   static func dot<T: FloatingPoint & SIMDScalar>(_ a: SIMD3<T>, _ b: SIMD3<T>) -> T
   {
     (a * b).sum()
   }
 
-  /// The cross product of `a` and `b`.
+  /// the cross product of `a` and `b`.
   @inlinable
   static func cross<T: FloatingPoint & SIMDScalar>(_ a: SIMD3<T>, _ b: SIMD3<T>) -> SIMD3<T>
   {
@@ -163,7 +158,7 @@ public extension Akari.Math
           a.x * b.y - a.y * b.x)
   }
 
-  /// The `index`th value of the Halton sequence in `base`, in `0 ..< 1`.
+  /// the `index`th value of the halton sequence in `base`, in `0 ..< 1`.
   static func halton(_ index: UInt64, base: UInt64) -> Float
   {
     guard base > 1 else { return 0 }

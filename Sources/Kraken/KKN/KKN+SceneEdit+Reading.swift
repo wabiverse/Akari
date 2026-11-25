@@ -99,7 +99,7 @@ extension Kraken.SceneEdit
     || (prim.typeName == .xform && !prim.isInstance && !hasAnyChild(prim))
   }
 
-  /// Cameras, lights and empties, drawn as viewport widgets.
+  /// cameras, lights and empties, drawn as viewport widgets.
   nonisolated static func widgetPaths(_ stage: UsdStage) -> [String]
   {
     var paths: [String] = []
@@ -189,7 +189,7 @@ extension Kraken.SceneEdit
     return Pixar.UsdGeomBBoxCache(t, purposes, false, false)
   }
 
-  /// What a click can select, with their centers.
+  /// what a click can select, with their centers.
   nonisolated static func selectable(_ stage: UsdStage, _ time: Double) -> [Object]
   {
     let t = Pixar.UsdTimeCode(time)
@@ -226,7 +226,7 @@ extension Kraken.SceneEdit
     return objects
   }
 
-  /// The object a click on `path` selects, its model, outside any instance.
+  /// the object a click on `path` selects, its model, outside any instance.
   nonisolated static func object(for path: String, _ stage: UsdStage) -> String
   {
     guard var p = prim(stage, path) else { return path }
@@ -243,7 +243,7 @@ extension Kraken.SceneEdit
     return (model ?? p).GetPath().string
   }
 
-  /// The prim a click on `path` hit, outside any instance.
+  /// the prim a click on `path` hit, outside any instance.
   nonisolated static func hit(for path: String, _ stage: UsdStage) -> String
   {
     guard var p = prim(stage, path) else { return path }
@@ -251,7 +251,7 @@ extension Kraken.SceneEdit
     return p.isValid ? p.GetPath().string : path
   }
 
-  /// Whether `path` is `ancestor` or a descendant of it.
+  /// whether `path` is `ancestor` or a descendant of it.
   nonisolated static func within(_ path: String, _ ancestor: String) -> Bool
   {
     path == ancestor || ancestor == "/" || path.hasPrefix(ancestor + "/")
@@ -274,7 +274,8 @@ extension Kraken.SceneEdit
     var cache = bboxCache(Pixar.UsdTimeCode(time))
     let range = cache.ComputeWorldBound(prim).ComputeAlignedRange()
     guard !range.IsEmpty() else { return nil }
-    #if compiler(>=6.4)
+
+    #if compiler(>=6.4) && canImport(Usd)
       return numbers(range.GetMinConsuming()) + numbers(range.GetMaxConsuming())
     #else
       return numbers(range.GetMin()) + numbers(range.GetMax())
@@ -300,7 +301,52 @@ extension Kraken.SceneEdit
 
     out.counts = Array(UnsafeBufferPointer(start: faceCounts, count: counts.size()))
     out.indices = Array(UnsafeBufferPointer(start: faceIndices, count: indices.size()))
+    (out.creases, out.creaseSharpness) = creases(mesh, t)
+    var sharp = Pixar.VtIntArray()
+    if let attribute = prim.attribute(named: sharpEdgesName), attribute.Get(&sharp, t)
+    {
+      let pairs: UnsafePointer<Int32>? = Overlay.cdata(sharp)
+      out.sharp = Array(UnsafeBufferPointer(start: pairs, count: sharp.size() - sharp.size() % 2))
+    }
+
     return out
+  }
+
+  /// where akari keeps the edges marked sharp, each as its two verts, which usd has no schema for.
+  nonisolated static let sharpEdgesName = Tf.Token("akari:sharpEdges")
+
+  /// each creased edge's two verts and sharpness, read off the mesh's crease chains
+  nonisolated static func creases(_ mesh: Pixar.UsdGeomMesh, _ t: Pixar.UsdTimeCode) -> (pairs: [Int32], sharpness: [Float])
+  {
+    var chainArray = Pixar.VtIntArray(), lengthArray = Pixar.VtIntArray(), sharpnessArray = Pixar.VtFloatArray()
+    guard
+      mesh.GetCreaseIndicesAttr().Get(&chainArray, t), mesh.GetCreaseLengthsAttr().Get(&lengthArray, t),
+      mesh.GetCreaseSharpnessesAttr().Get(&sharpnessArray, t)
+    else { return ([], []) }
+    let chainData: UnsafePointer<Int32>? = Overlay.cdata(chainArray)
+    let lengthData: UnsafePointer<Int32>? = Overlay.cdata(lengthArray)
+    let sharpnessData: UnsafePointer<Float>? = Overlay.cdata(sharpnessArray)
+    let chain = Array(UnsafeBufferPointer(start: chainData, count: chainArray.size()))
+    let lengths = Array(UnsafeBufferPointer(start: lengthData, count: lengthArray.size())).map(Int.init)
+    let sharpness = Array(UnsafeBufferPointer(start: sharpnessData, count: sharpnessArray.size()))
+    let perEdge = sharpness.count == lengths.reduce(0) { $0 + max($1 - 1, 0) }
+    var pairs: [Int32] = [], values: [Float] = []
+    var at = 0, edge = 0
+    for (k, length) in lengths.enumerated()
+    {
+      guard at + length <= chain.count else { break }
+      for i in 0 ..< max(length - 1, 0)
+      {
+        let s = perEdge ? sharpness[edge] : k < sharpness.count ? sharpness[k] : 0
+        pairs += [chain[at + i], chain[at + i + 1]]
+        values.append(s)
+        edge += 1
+      }
+
+      at += length
+    }
+
+    return (pairs, values)
   }
 
   nonisolated static func units(_ stage: UsdStage) -> Float
@@ -320,10 +366,11 @@ extension Kraken.SceneEdit
     return yUp ? SIMD3(q.x, q.z, -q.y) : q
   }
 
-  /// A primitive's mesh as Add would author it, for the edit mode preview.
-  nonisolated static func primitive(_ stage: UsdStage, _ kind: Kraken.AddKind) -> Mesh
+  /// a primitive's mesh as add would author it, for the edit mode preview.
+  nonisolated static func primitive(_ stage: UsdStage, _ kind: Kraken.AddKind,
+                                    _ options: Kraken.AddOptions = .standard) -> Mesh
   {
-    let shape = Kraken.PrimitiveShape.named(kind)
+    let shape = Kraken.PrimitiveShape.named(kind, options)
     let unit = units(stage), up = yUp(stage)
     return Mesh(valid: !shape.faces.isEmpty,
                 points: shape.points.flatMap { p -> [Float] in let q = toStage(p, unit: unit, yUp: up); return [q.x, q.y, q.z] },

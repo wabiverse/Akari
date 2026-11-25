@@ -93,7 +93,7 @@ extension Akari.ShadowAtlas
     }
     """
 
-  /// One thread per caster.
+  /// one thread per caster.
   static let tilemapBoundsBody = """
       int caster = int(gid);
       if (caster >= u_casterCount) return;
@@ -202,7 +202,7 @@ extension Akari.ShadowAtlas
       int base = (\(directionalTilemapBase) + level) * \(tilesPerTilemap);
     """
 
-  /// Tags the tiles under the moved casters boxes with `flag`.
+  /// tags the tiles under the moved casters boxes with `flag`.
   static func tagUpdateGLSL(_ flag: UInt32) -> String
   {
     """
@@ -271,8 +271,7 @@ extension Akari.ShadowAtlas
     """
   }
 
-  /// Marks the point light tiles a moved box covers in every LOD, one thread
-  /// per box, light and cube face. A box straddling a face's plane covers all of it.
+  /// marks the point light tiles a moved box covers in every lod, a thread per box, light and face
   static let tagUpdatePunctualBody = """
       if (int(gid) >= u_boxCount * u_lightCount * 6) return;
       int face = int(gid) % 6;
@@ -363,7 +362,7 @@ extension Akari.ShadowAtlas
     }
     """
 
-  /// LOD update tag pushed down the mip chain.
+  /// lod update tag pushed down the mip chain.
   static let tagPropagateBody = """
       int slot = int(gid_z);
       int x = int(gid_x);
@@ -414,7 +413,7 @@ extension Akari.ShadowAtlas
     }
     """
 
-  /// The tilemap slot, first tile and side of one render view's tiles.
+  /// the tilemap slot, first tile and side of one render view's tiles.
   static let viewTilesBody = """
       int slot, base, side;
       if (view < \(maxDirectionalTilemaps))
@@ -480,8 +479,7 @@ extension Akari.ShadowAtlas
     }
     """
 
-  /// Hands the frame's tile budget out coarsest level
-  /// first, directional then punctual per level.
+  /// hands the frame's tile budget out coarsest level first, directional then punctual
   static let allotBudgetBody = """
       if (gid != 0u) return;
       int directional = 0;

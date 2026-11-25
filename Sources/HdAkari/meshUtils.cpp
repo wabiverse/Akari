@@ -49,18 +49,14 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 namespace {
 
-/// Keeps a stable random subset of an aggregate's disconnected parts (blades,
-/// leaves) to about `targetTriangles`, each grown about its center to hold the
-/// coverage of the ones dropped, after Cook et al., "Stochastic Simplification
-/// of Aggregate Detail" (2007). Clustering their points would fuse them into a
-/// solid sheet. `outSources` names each kept triangle's original. False when
-/// the mesh is one surface rather than many parts.
+/// keeps a stable random subset of an aggregate's loose parts like leaves, each kept part grown to cover the dropped ones, after cook et al 2007
 bool HdAkariPruneParts(VtVec3fArray const &points, VtVec3iArray const &tris, VtVec2fArray const &uvs,
                        size_t targetTriangles, VtVec3fArray &outPoints, VtVec3iArray &outTris,
                        VtVec2fArray &outUvs, VtIntArray &outSources)
 {
   std::vector<int32_t> parent(points.size());
-  for (size_t i = 0; i < parent.size(); ++i) parent[i] = int32_t(i);
+  std::iota(parent.begin(), parent.end(), int32_t(0));
+
   auto find = [&](int32_t i) {
     while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; }
     return i;
@@ -86,7 +82,8 @@ bool HdAkariPruneParts(VtVec3fArray const &points, VtVec3iArray const &tris, VtV
 
   size_t largest = 0;
   for (auto const &part : parts) largest = std::max(largest, part.size());
-  // a few big parts are surfaces, which clustering simplifies better.
+
+  // a few big parts are surfaces, which clustering simplifies better
   if (parts.size() < 16 || largest * 4 > tris.size()) return false;
 
   std::vector<std::pair<uint64_t, int32_t>> order(parts.size());
@@ -97,6 +94,7 @@ bool HdAkariPruneParts(VtVec3fArray const &points, VtVec3iArray const &tris, VtV
   }
 
   std::sort(order.begin(), order.end());
+
   std::vector<int32_t> kept;
   size_t keptTriangles = 0;
   for (auto const &[hash, p] : order) {
@@ -106,12 +104,13 @@ bool HdAkariPruneParts(VtVec3fArray const &points, VtVec3iArray const &tris, VtV
   }
 
   if (keptTriangles >= tris.size()) return false;
-  // growing each part by the area it now stands for, so the kept parts still cover what all of them
-  // did, capped so a very sparse level doesn't turn into giants.
+
+  // each part grows by the area it now stands for, capped so a sparse level doesn't turn into giants
   const float grow = float(std::min(std::sqrt(double(tris.size()) / double(keptTriangles)), 3.0));
 
   const bool cornerUvs = uvs.size() == tris.size() * 3;
   const bool pointUvs = !cornerUvs && uvs.size() == points.size();
+
   std::vector<int32_t> remap(points.size(), -1);
   VtVec3fArray keptPoints;
   VtVec3iArray keptTris;
@@ -119,6 +118,7 @@ bool HdAkariPruneParts(VtVec3fArray const &points, VtVec3iArray const &tris, VtV
   VtIntArray sources;
   keptTris.reserve(keptTriangles);
   sources.reserve(keptTriangles);
+
   for (int32_t p : kept) {
     GfVec3d center(0.0);
     size_t corners = 0;
@@ -165,9 +165,11 @@ bool HdAkariDecimate(VtVec3fArray const &points, VtVec3iArray const &tris, VtVec
   const bool cornerUvs = uvs.size() == tris.size() * 3;
   const bool pointUvs = !cornerUvs && uvs.size() == points.size();
   if (tris.size() <= targetTriangles || points.empty()) return false;
+
   outSources = VtIntArray();
   if (HdAkariPruneParts(points, tris, uvs, targetTriangles, outPoints, outTris, outUvs, outSources)) return true;
   outSources = VtIntArray();
+
   GfVec3f lo(3.4e38f), hi(-3.4e38f);
   for (GfVec3f const &p : points) {
     for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], p[k]); hi[k] = std::max(hi[k], p[k]); }
@@ -179,8 +181,8 @@ bool HdAkariDecimate(VtVec3fArray const &points, VtVec3iArray const &tris, VtVec
     if (t[0] < 0 || t[1] < 0 || t[2] < 0 || size_t(std::max({t[0], t[1], t[2]})) >= points.size()) continue;
     area += 0.5 * double(GfCross(points[t[1]] - points[t[0]], points[t[2]] - points[t[0]]).GetLength());
   }
-  // a surface's points fill a grid's cells by area, so the cell edge goes with the square root of
-  // what each kept vertex covers, its relief counted, never coarser than the bounds would make it.
+
+  // the cell edge follows the square root of what each kept vertex covers, never coarser than the bounds allow
   const double vertices = std::max<double>(double(targetTriangles) * 0.5, 1.0);
   double cell = std::max(std::min(std::sqrt(area / vertices), double(size.GetLength()) / std::sqrt(vertices)), 1e-12);
 
@@ -191,6 +193,7 @@ bool HdAkariDecimate(VtVec3fArray const &points, VtVec3iArray const &tris, VtVec
     std::vector<GfVec3d> sums;
     std::vector<GfVec2d> uvSums;
     std::vector<int32_t> counts;
+
     for (size_t i = 0; i < points.size(); ++i) {
       uint64_t key = 0;
       for (int k = 0; k < 3; ++k) {
@@ -198,16 +201,23 @@ bool HdAkariDecimate(VtVec3fArray const &points, VtVec3iArray const &tris, VtVec
       }
 
       auto [it, inserted] = cells.try_emplace(key, int32_t(sums.size()));
-      if (inserted) { sums.emplace_back(0.0); counts.push_back(0); if (pointUvs) uvSums.emplace_back(0.0); }
-      sums[it->second] += GfVec3d(points[i]);
-      if (pointUvs) uvSums[it->second] += GfVec2d(uvs[i]);
-      counts[it->second] += 1;
-      remap[i] = it->second;
+      if (inserted) {
+        sums.emplace_back(0.0);
+        counts.push_back(0);
+        if (pointUvs) uvSums.emplace_back(0.0);
+      }
+
+      const int32_t slot = it->second;
+      sums[slot] += GfVec3d(points[i]);
+      if (pointUvs) uvSums[slot] += GfVec2d(uvs[i]);
+      counts[slot] += 1;
+      remap[i] = slot;
     }
 
     VtVec3iArray merged;
     VtVec2fArray mergedUvs;
     merged.reserve(std::min(tris.size(), targetTriangles * 2));
+
     for (size_t i = 0; i < tris.size(); ++i) {
       GfVec3i const &t = tris[i];
       if (t[0] < 0 || t[1] < 0 || t[2] < 0 || size_t(std::max({t[0], t[1], t[2]})) >= points.size()) continue;
@@ -220,6 +230,7 @@ bool HdAkariDecimate(VtVec3fArray const &points, VtVec3iArray const &tris, VtVec
     }
 
     if (merged.size() > targetTriangles * 3 / 2 && attempt < 5) continue;
+
     VtVec3fArray centers(sums.size());
     for (size_t c = 0; c < sums.size(); ++c) centers[c] = GfVec3f(sums[c] / double(counts[c]));
     if (pointUvs) {

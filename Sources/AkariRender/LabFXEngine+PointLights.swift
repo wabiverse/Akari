@@ -43,33 +43,39 @@ import LabGL
 
 extension Akari.LabFXEngine
 {
-  /// A light's Hydra path key.
+  /// a light's hydra path key
   typealias LightKey = UInt64
 
-  /// The point lights shading the view, and how their shadow maps are handed out.
+  /// the point lights shading the view and how their shadow maps are handed out
   struct PointLights
   {
-    /// The lights that shade, `shadowed` are the front of them.
+    /// the lights that shade, `shadowed` are the first ones of them
     var lit: [Akari.Lux.PointLight] = []
     var shadowed: [Akari.Lux.PointLight] = []
-    /// Each shadowed light, by the slot its shadow maps stay in.
+
+    /// each shadowed light by the slot its shadow maps stay in
     var slots: [LightKey] = []
-    /// The shadowed lights kept at full resolution, swapped only for one lighting the view far more.
+
+    /// shadowed lights kept at full resolution, only swapped for one that lights the view far more
     var mains: Set<LightKey> = []
-    /// The sync each main light took its place, its hold on it fading from then.
+
+    /// the sync when each main light took its place, its hold on the place fades from then on
     var mainSince: [LightKey: UInt64] = [:]
     var syncs: UInt64 = 0
-    /// Each shadowed light's visible, shadowed light on screen, smoothed over frames.
+
+    /// how much visible shadowed light each shadowed light puts on screen, smoothed over frames
     var importance: [LightKey: Float] = [:]
     var positions: [LightKey: SIMD3<Float>] = [:]
-    /// Lights seen moving, the ones that follow a character.
+
+    /// lights seen moving, usually the ones that follow a character
     var following: Set<LightKey> = []
-    /// The lights packed for the deferred pass.
+
+    /// the lights packed for the deferred pass
     var texture: GLuint = 0
     var onScreen = OnScreen()
   }
 
-  /// The GPU pass measuring each shadowed light on screen, read back a few frames late.
+  /// the gpu pass that measures each shadowed light on screen, read back a few frames late
   struct OnScreen
   {
     var kernel = Akari.ComputeKernel()

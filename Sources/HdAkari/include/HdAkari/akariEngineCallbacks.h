@@ -40,26 +40,26 @@
 #ifndef HDAKARI_ENGINE_CALLBACKS_H
 #define HDAKARI_ENGINE_CALLBACKS_H
 
-/* Declarations of the Swift exported (@_cdecl) engine entry points. */
+/* the engine entry points swift exports with `@_cdecl` */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
- * Renders one frame with the Swift `Akari.RenderEngine`.
+ * renders one frame with the swift `Akari.RenderEngine`.
  *
- * @param engine        retained `Akari.RenderEngine` (opaque).
- * @param hgi           `Hgi` shared with Hydra.
- * @param renderParam   `HdAkariRenderParam` (reaches the mesh scene).
- * @param colorBuffer   `HdAkariRenderBuffer` for the color AOV (may be null).
- * @param depthBuffer   `HdAkariRenderBuffer` for the depth AOV (may be null).
- * @param primIdBuffer  `HdAkariRenderBuffer` for the primId AOV (may be null).
- * @param instanceIdBuffer `HdAkariRenderBuffer` for the instanceId AOV (may be null).
- * @param viewMatrix    16 doubles, GfMatrix4d row-major (world->view).
- * @param projMatrix    16 doubles, GfMatrix4d row-major (view->clip).
- * @param width         target width dimension in pixels.
- * @param height        target height dimension in pixels.
+ * @param engine           the retained `Akari.RenderEngine` as an opaque pointer.
+ * @param hgi              the `Hgi` shared with hydra.
+ * @param renderParam      the `HdAkariRenderParam`, which reaches the mesh scene.
+ * @param colorBuffer      the `HdAkariRenderBuffer` for the color aov, may be null.
+ * @param depthBuffer      the `HdAkariRenderBuffer` for the depth aov, may be null.
+ * @param primIdBuffer     the `HdAkariRenderBuffer` for the prim id aov, may be null.
+ * @param instanceIdBuffer the `HdAkariRenderBuffer` for the instance id aov, may be null.
+ * @param viewMatrix       16 doubles, a row major `GfMatrix4d` from world to view.
+ * @param projMatrix       16 doubles, a row major `GfMatrix4d` from view to clip.
+ * @param width            the target width in pixels.
+ * @param height           the target height in pixels.
  */
 void AkariEngineRenderFrame(void *engine, void *hgi, void *renderParam,
                             void *colorBuffer, void *depthBuffer,

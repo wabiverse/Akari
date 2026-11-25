@@ -45,27 +45,14 @@ import SwiftCrossUI
 #if os(macOS)
   import AppKit
   import AppKitBackend
-
-  private typealias PlatformFont = NSFont
-  private typealias PlatformColor = NSColor
 #else
   import UIKit
   import UIKitBackend
-
-  private typealias PlatformFont = UIFont
-  private typealias PlatformColor = UIColor
 #endif
 
 extension Kraken
 {
-  #if os(macOS)
-    typealias PlatformView = NSView
-  #else
-    typealias PlatformView = UIView
-  #endif
-
-  /// The fps readout, drawn by its own native view at a fixed size,
-  /// so a new value only redraws it and never relays out the HUD.
+  /// the fps readout in its own native view at a fixed size, so a new value never relays out the hud
   struct FPSCounter
   {
     let driver: any Akari.HydraFrameDriver

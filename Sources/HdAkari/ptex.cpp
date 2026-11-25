@@ -75,8 +75,7 @@ float Linear(float c)
   return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
 }
 
-/// Max texture files the cache can hold open. Capped at 256 (or 25% of the system limit)
-/// to leave room for background threads and prevent "too many open files" crashes.
+/// how many texture files the cache may hold open, a quarter of the process limit up to 256
 int PtexOpenFiles()
 {
   struct rlimit limit{};
@@ -89,8 +88,7 @@ int PtexOpenFiles()
   return int(std::clamp<long long>(soft / 4, 16, 256));
 }
 
-/// The face averages and the streamed tiles share it, the files open at
-/// once and their decoded data, a small share of the machine's memory.
+/// one cache shared by face averages and streamed tiles, held to a small share of memory
 PtexCache *Cache()
 {
   static PtexCache *cache = [] {
@@ -104,6 +102,7 @@ PtexCache *Cache()
         files,
         size_t(std::max<long long>((long long)sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGE_SIZE) / 64, 128ll << 20)));
   }();
+
   return cache;
 }
 
@@ -114,10 +113,11 @@ struct Map
   int id = -1;
 };
 
-/// Releases a Ptex texture when the scope ends, however it ends.
+/// releases a ptex texture when the scope ends, however it ends
 struct TextureHold
 {
   PtexTexture *texture;
+
   explicit TextureHold(PtexTexture *texture) : texture(texture) {}
   ~TextureHold()
   {
@@ -132,9 +132,7 @@ std::mutex mapMutex;
 std::unordered_map<std::string, Map> maps;
 std::vector<std::string> mapPaths;
 
-/// Lock the cache lookup so threads check one at a time to prevent
-/// duplicate file counts that break the cache's tracking and cause
-/// file limit crashes.
+/// cache lookups go one thread at a time, concurrent ones count a file twice and run out of file handles
 std::mutex cacheMutex;
 
 Map const &LoadMap(std::string const &path)
@@ -148,20 +146,20 @@ Map const &LoadMap(std::string const &path)
   Map map;
   bool streams = false;
   Ptex::String error;
-  // use a standalone reader to load and immediately close metadata files,
-  // which avoids clogging the streaming cache with thousands of open file
-  // handles.
+
+  // a standalone reader opens and closes the file right away so the streaming cache isn't clogged with handles
   if (PtexTexture *texture = PtexTexture::open(path.c_str(), error)) {
     TextureHold hold(texture);
     const int channels = std::min(texture->numChannels(), 3);
     const int faces = std::max(texture->numFaces(), 0);
+
     map.res = VtIntArray(size_t(faces));
     for (int f = 0; f < faces; ++f) {
       Ptex::Res const &stored = texture->getFaceInfo(f).res;
       map.res[size_t(f)] = stored.ulog2 | stored.vlog2 << 4;
     }
-    // the faces stream, what stands in for them until then is the map's average, from
-    // up to a few thousand faces single texel levels.
+
+    // until faces stream in, the map's average stands in, taken from the single texel level of a few thousand faces
     GfVec3f sum(0.0f);
     int sampled = 0;
     for (int f = 0; f < faces && channels > 0; f += std::max(faces / 4096, 1), ++sampled) {
@@ -171,6 +169,7 @@ Map const &LoadMap(std::string const &path)
     }
 
     if (sampled > 0) map.average = sum / float(sampled);
+
     streams = channels > 0 && texture->numChannels() <= 4 && texture->meshType() == Ptex::mt_quad &&
               texture->numFaces() <= (1 << HdAkariPtexFaceBits);
   } else {
@@ -179,7 +178,8 @@ Map const &LoadMap(std::string const &path)
 
   std::lock_guard<std::mutex> lock(mapMutex);
   auto [it, inserted] = maps.emplace(path, map);
-  // the key holds map + 1 in 13 bits.
+
+  // the tile key holds the map id plus one in 13 bits
   if (inserted && streams && mapPaths.size() + 1 < (1u << 13)) {
     it->second.id = int(mapPaths.size());
     mapPaths.push_back(path);
@@ -188,7 +188,7 @@ Map const &LoadMap(std::string const &path)
   return it->second;
 }
 
-/// One face's texels at one resolution, read as 8 bit rgba.
+/// one face's texels at one resolution, read as 8 bit rgba
 struct Texels
 {
   PtexFaceData *data;
@@ -209,8 +209,10 @@ struct Texels
   uint32_t Read(int u, int v) const
   {
     if (!data) return 0xFF000000u;
+
     uint8_t raw[64];
     data->getPixel(std::clamp(u, 0, width - 1), std::clamp(v, 0, height - 1), raw);
+
     uint8_t c[3];
     if (type == Ptex::dt_uint8) {
       for (int k = 0; k < 3; ++k) c[k] = raw[std::min(k, channels - 1)];
@@ -236,6 +238,7 @@ void Decode(Tile &tile)
   const uint32_t a = uint32_t(tile.key >> 32), b = uint32_t(tile.key);
   const int map = int(a >> HdAkariPtexFaceBits) - 1, face = int(a & ((1u << HdAkariPtexFaceBits) - 1));
   const int level = int(b >> 16), index = int(b & 0xFFFF);
+
   std::string path;
   {
     std::lock_guard<std::mutex> lock(mapMutex);
@@ -251,9 +254,11 @@ void Decode(Tile &tile)
   }
 
   if (!texture) return;
-  // released after the faces' data it hands out.
+
+  // declared first so it is released after the face data it hands out
   TextureHold hold(texture);
   if (face >= texture->numFaces()) return;
+
   Ptex::FaceInfo const &info = texture->getFaceInfo(face);
   const Ptex::Res res(std::max(info.res.ulog2 - level, 0), std::max(info.res.vlog2 - level, 0));
   const int w = res.u(), h = res.v();
@@ -264,8 +269,8 @@ void Decode(Tile &tile)
   const Texels own(texture, face, res);
   std::unique_ptr<Texels> neighbours[4];
   int neighbourEdges[4] = {0, 0, 0, 0};
-  // a texel past the face's edge comes from the face across it, at the resolution
-  // whose texels along that edge match this level's.
+
+  // a texel past the face's edge comes from the face across it at the matching resolution
   auto beyond = [&](int gx, int gy) -> uint32_t {
     const int cx = std::clamp(gx, 0, w - 1), cy = std::clamp(gy, 0, h - 1);
     int edge;
@@ -274,6 +279,7 @@ void Decode(Tile &tile)
     else if (gy >= h) { edge = 2; t = 1.0f - (float(cx) + 0.5f) / float(w); }
     else if (gx >= w) { edge = 1; t = (float(cy) + 0.5f) / float(h); }
     else { edge = 3; t = 1.0f - (float(cy) + 0.5f) / float(h); }
+
     const int adj = info.adjface(edge);
     if (adj < 0 || adj >= texture->numFaces()) return own.Read(cx, cy);
     if (!neighbours[edge]) {
@@ -288,7 +294,8 @@ void Decode(Tile &tile)
     }
 
     Texels const &n = *neighbours[edge];
-    // the shared edge runs the other way round the neighbour.
+
+    // the shared edge runs the other way round the neighbour
     const float s = 1.0f - t;
     switch (neighbourEdges[edge]) {
       case 0: return n.Read(int(s * float(n.width)), 0);
@@ -331,15 +338,18 @@ struct Streamer
       Tile tile;
       {
         std::unique_lock<std::mutex> lock(mutex);
-        // decoded tiles wait on the frame to take them, past a few frames worth the decoding waits too.
+
+        // decoded tiles wait for the frame to take them, past a few frames worth decoding waits too
         wake.wait(lock, [this] { return !queue.empty() && done.size() < 2048; });
-        // the newest requests are what's on screen now.
+
+        // the newest requests are what's on screen now
         tile.key = queue.back();
         queue.pop_back();
         ++busy;
       }
 
       Decode(tile);
+
       std::lock_guard<std::mutex> lock(mutex);
       --busy;
       if (tile.size != 0) done.push_back(std::move(tile));
@@ -378,7 +388,8 @@ void HdAkariPtexRequestTiles(uint64_t const *keys, int count)
   for (int i = 0; i < count; ++i) {
     if (streamer.waiting.insert(keys[i]).second) streamer.queue.push_back(keys[i]);
   }
-  // past a few frames of requests, the oldest are off screen.
+
+  // past a few frames of requests the oldest ones are off screen
   while (streamer.queue.size() > 16384) {
     streamer.waiting.erase(streamer.queue.front());
     streamer.queue.pop_front();
@@ -397,6 +408,7 @@ int HdAkariPtexTakeTiles(uint64_t *keys, uint32_t *sizes, uint32_t *offsets, uin
     Tile &tile = streamer.done.front();
     const int count = int(tile.texels.size());
     if (used + count > maxTexels) break;
+
     keys[taken] = tile.key;
     sizes[taken] = tile.size;
     offsets[taken] = uint32_t(used);

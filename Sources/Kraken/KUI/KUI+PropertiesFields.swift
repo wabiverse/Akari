@@ -45,13 +45,13 @@ import SwiftCrossUI
 #if os(macOS)
   import AppKit
   import AppKitBackend
+#else
+  import UIKit
 #endif
 
 extension Kraken
 {
-  /// A number field, the value centered in it. Drags scrub
-  /// the value, the ends step it, and a click types a new
-  /// one in.
+  /// a number field with the value centered, drags scrub it, the ends step it and a click types a new one
   @MainActor
   struct NumberField: View
   {
@@ -61,9 +61,9 @@ extension Kraken
     let format: (Double) -> String
     let label: String
     let width: Int
-    /// Polls the value itself, for one that changes every frame.
+    /// polls the value itself, for one that changes every frame.
     let live: Bool
-    /// The property to key when I is pressed over this field.
+    /// the property to key when i is pressed over this field.
     var key: KeyTarget?
 
     init(value: Binding<Double>, range: ClosedRange<Double> = -1e9 ... 1e9, step: Double = 1, label: String = "",
@@ -96,23 +96,42 @@ extension Kraken
           NativeNumberField(value: value, range: range, step: step, format: format, label: label, width: width, live: live,
                             key: key)
         #else
-          TextField(label, text: Binding(get: { format(value.wrappedValue) },
-                                         set: { text in NumberField.parse(text).map { value.wrappedValue = $0 } }))
+          TextField(label, text: Binding(get: { shownText }, set: { type($0) }))
             .font(Properties.font)
             .frame(width: Double(width))
+            .onSubmit { draft = nil }
         #endif
       }
     }
 
-    /// The number a typed entry starts with, its unit ignored.
-    nonisolated static func parse(_ text: String) -> Double?
+    /// the number a typed entry starts with, its unit ignored and held in `range`, nil until it is a finite number
+    nonisolated static func parse(_ text: String, in range: ClosedRange<Double>) -> Double?
     {
       let number = text.trimmingCharacters(in: .whitespaces).prefix { "0123456789.-+eE".contains($0) }
-      return Double(number)
+      guard let typed = Double(number), typed.isFinite else { return nil }
+      return min(max(typed, range.lowerBound), range.upperBound)
     }
+
+    #if !os(macOS)
+      /// what's being typed, kept while it still reads as the value so a trailing point or a lone minus sign survives.
+      @State private var draft: String?
+
+      private var shownText: String
+      {
+        guard let draft else { return format(value.wrappedValue) }
+        let typed = Self.parse(draft, in: range)
+        return typed == nil || typed == value.wrappedValue ? draft : format(value.wrappedValue)
+      }
+
+      private func type(_ text: String)
+      {
+        draft = text
+        if let typed = Self.parse(text, in: range), typed != value.wrappedValue { value.wrappedValue = typed }
+      }
+    #endif
   }
 
-  /// Options side by side, the selected one highlighted.
+  /// options side by side, the selected one highlighted.
   @MainActor
   struct Segmented<Value: Equatable & CustomStringConvertible>: View
   {
@@ -167,7 +186,7 @@ extension Kraken
     }
   }
 
-  /// A file path the full width of the panel, a folder button picks its directory.
+  /// a file path the full width of the panel, a folder button picks its directory.
   @MainActor
   struct PathField: View
   {
@@ -208,12 +227,12 @@ extension Kraken
     }
   }
 
-  /// A color swatch the width of a control, clicking it opens the color picker.
+  /// a color swatch the width of a control, clicking it opens the color picker.
   @MainActor
   struct ColorField: View
   {
     let color: Binding<SIMD3<Float>>
-    /// The property to key when I is pressed over this field.
+    /// the property to key when i is pressed over this field.
     var key: KeyTarget?
 
     var body: some View
@@ -223,16 +242,69 @@ extension Kraken
         #if os(macOS)
           NativeColorWell(color: color, width: Double(Properties.controlWidth), key: key)
         #else
-          Rectangle()
-            .fill(Color(red: Double(color.wrappedValue.x), green: Double(color.wrappedValue.y), blue: Double(color.wrappedValue.z)))
-            .frame(width: Double(Properties.controlWidth), height: Double(Properties.rowHeight))
+          NativeView(make: { SwatchView() },
+                     update: { [color] view in view.show(color.wrappedValue) { color.wrappedValue = $0 } },
+                     size: { _ in ViewSize(Double(Properties.controlWidth), Double(Properties.rowHeight)) })
         #endif
       }
     }
   }
 
-  /// The picked prim's name, an eyedropper that picks
-  /// one in the viewport, and a cross that clears it.
+  #if !os(macOS)
+    /// a swatch that opens the system color picker when tapped.
+    final class SwatchView: UIView
+    {
+      private let well = UIColorWell()
+      private let swatch = UIView()
+      private var onChange: (SIMD3<Float>) -> Void = { _ in }
+
+      init()
+      {
+        super.init(frame: .zero)
+        swatch.layer.cornerRadius = 4
+        swatch.isUserInteractionEnabled = false
+        well.supportsAlpha = false
+
+        // the well is see through over the swatch, so the whole row opens the picker.
+        well.alpha = 0.02
+        well.addTarget(self, action: #selector(picked), for: .valueChanged)
+        addSubview(swatch)
+        addSubview(well)
+      }
+
+      @available(*, unavailable)
+      required init?(coder _: NSCoder)
+      {
+        fatalError("init(coder:) is not supported")
+      }
+
+      override func layoutSubviews()
+      {
+        super.layoutSubviews()
+        swatch.frame = bounds
+        well.frame = bounds
+      }
+
+      func show(_ color: SIMD3<Float>, onChange: @escaping (SIMD3<Float>) -> Void)
+      {
+        self.onChange = onChange
+        let shown = UIColor(red: CGFloat(color.x), green: CGFloat(color.y), blue: CGFloat(color.z), alpha: 1)
+        swatch.backgroundColor = shown
+        if well.selectedColor != shown { well.selectedColor = shown }
+      }
+
+      @objc private func picked()
+      {
+        guard let color = well.selectedColor else { return }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return }
+        swatch.backgroundColor = color
+        onChange(SIMD3(Float(r), Float(g), Float(b)))
+      }
+    }
+  #endif
+
+  /// the picked prim's name, an eyedropper to pick one in the viewport and a cross to clear it
   @MainActor
   struct ObjectField: View
   {
@@ -269,7 +341,7 @@ extension Kraken
     }
   }
 
-  /// A value shown as text in the control column.
+  /// a value shown as text in the control column.
   @MainActor
   struct Readout: View
   {

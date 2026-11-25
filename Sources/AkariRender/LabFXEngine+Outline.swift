@@ -45,16 +45,19 @@ import LabGL
 
 public extension Akari
 {
-  /// What the viewport outlines.
+  /// what the viewport outlines
   struct Selection
   {
-    /// Per prim id, the object its outline groups it into, `0` when unselected.
+    /// per prim id, the object its outline groups it into, `0` when unselected
     public var labels: [Int32]
-    /// Outlines every prim, `labels` only splits it into objects.
+
+    /// outlines every prim, `labels` only splits it into objects
     public var all: Bool
-    /// RGBA, 0...1.
+
+    /// rgba in the 0 to 1 range
     public var color: SIMD4<Float>
-    /// In pixels.
+
+    /// in pixels
     public var width: Int32
 
     public init(labels: [Int32], all: Bool, color: SIMD4<Float>, width: Int32)
@@ -69,7 +72,7 @@ public extension Akari
 
 extension Akari.LabFXEngine
 {
-  /// The selection outline, drawn like an overlay.
+  /// the selection outline, drawn like an overlay
   struct Outline
   {
     var labels: [Int32] = []
@@ -77,12 +80,14 @@ extension Akari.LabFXEngine
     var textureWidth = 0
     var all = false
     var passesActive = true
-    /// The selected meshes, rerecorded when the selection or one of them changes.
+
+    /// the selected meshes, rerecorded when the selection or one of them changes
     var capture: LabGLCaptureBuffer?
     let recorder = Akari.Geom.Recorder(keepsTopology: false)
     var batch = BatchSummary()
     var recordedIDs: Set<UInt64> = []
-    /// Whether any selected prim is animated, so the mask also needs the animated capture.
+
+    /// whether any selected prim is animated, so the mask also needs the animated capture
     var selectsAnimated = false
     var needsRecord = true
     var projection = Akari.Matrix4.identity
@@ -96,7 +101,7 @@ extension Akari.LabFXEngine
     .outline
   ]
 
-  /// The texture the outline passes leave the final image in.
+  /// the texture the outline passes leave the final image in
   var outlinedTexture: GLuint
   {
     outline.passesActive ? runtime.texture(.outline, named: .outline) : runtime.texture(.tonemap, named: .tonemap)
@@ -105,13 +110,14 @@ extension Akari.LabFXEngine
   func createOutlineCapture() -> Bool
   {
     guard let capture = labgl.captureCreate() else { return false }
+
     outline.capture = capture
     runtime.setPassCallback(.drawOutlineMask, callback: akariOutlineMaskCallback,
                             userdata: Unmanaged.passUnretained(self).toOpaque())
     return true
   }
 
-  /// Uploads the selection's labels when they changed and toggles the outline passes.
+  /// uploads the selection's labels when they changed and toggles the outline passes
   func updateOutline(_ selection: Akari.Selection?, projection: Akari.Matrix4, sceneProjection: Akari.Matrix4)
   {
     if (selection != nil) != outline.passesActive
@@ -139,13 +145,16 @@ extension Akari.LabFXEngine
     setVector(.outlineColor, selection.color)
   }
 
-  /// Rerecords the selected static meshes when the selection or which of
-  /// them are static changed. The animated ones draw from the deformed
-  /// capture, and select all draws the scene captures instead.
+  /// rerecords the selected static meshes when the selection or what is static changes, animated ones draw from the deformed capture
   func recordOutline(changed: [Akari.Geom.Recorder.RawMesh], removed: [UInt64])
   {
     guard let capture = outline.capture, outline.passesActive else { return }
-    guard !outline.all else { outline.needsRecord = false; return }
+    guard !outline.all
+    else
+    {
+      outline.needsRecord = false
+      return
+    }
 
     func isSelected(_ primId: Int32) -> Bool
     {
@@ -164,13 +173,15 @@ extension Akari.LabFXEngine
     })
     outline.selectsAnimated = geometry.animated.contains { key in geometry.primIds[key].map(isSelected) ?? false }
     guard outline.needsRecord || ids != outline.recordedIDs else { return }
-    // the outline capture draws with the plain mesh path, so instances expand.
+
+    // the outline capture draws with the plain mesh path so instances are expanded
     let selected = ids.compactMap { geometry.meshes[$0] }.flatMap
     { mesh in mesh.instances.isEmpty ? [mesh] : Self.expandInstances(mesh) }
 
     outline.needsRecord = false
     outline.recordedIDs = ids
-    // a reframe building in the background is still writing the static recorder's cache.
+
+    // a reframe building in the background may still be writing the static recorder's cache
     geometry.view.reframing?.done.wait()
     outline.batch = recordBatch(selected, into: capture, recorder: outline.recorder,
                                 reusing: [geometry.staticRecorder])
@@ -195,7 +206,7 @@ extension Akari.LabFXEngine
   {
     let captures = outline.all ? geometry.captures
       : [outline.batch.isEmpty ? nil : outline.capture,
-         // the animated capture holds every animated mesh, so it's only drawn when one of them is selected.
+         // the animated capture holds every animated mesh so it is only drawn when one of them is selected
          geometry.dynamicBatch.isEmpty || !outline.selectsAnimated ? nil : geometry.dynamicCapture].compactMap(\.self)
     guard !captures.isEmpty else { return }
 
@@ -220,9 +231,9 @@ extension Akari.LabFXEngine
     let width = min(count, 4096)
     let height = (count + width - 1) / width
     var pixels = [Float](repeating: 0, count: width * height)
-    for (i, label) in labels.enumerated()
+    for (index, label) in labels.enumerated()
     {
-      pixels[i] = Float(label)
+      pixels[index] = Float(label)
     }
 
     if outline.texture == 0
@@ -236,7 +247,7 @@ extension Akari.LabFXEngine
     gl.bindTexture(target: GL_TEXTURE_2D, texture: outline.texture)
 
     pixels.withUnsafeBufferPointer
-    { buf in
+    { buffer in
       gl.texImage2D(target: GL_TEXTURE_2D,
                     level: 0,
                     internalFormat: GLint(GL_R32F),
@@ -245,7 +256,7 @@ extension Akari.LabFXEngine
                     border: 0,
                     format: GLenum(GL_RED),
                     type: GL_FLOAT,
-                    pixels: buf.baseAddress)
+                    pixels: buffer.baseAddress)
     }
 
     gl.bindTexture(target: GL_TEXTURE_2D, texture: 0)
@@ -253,7 +264,7 @@ extension Akari.LabFXEngine
   }
 }
 
-/// `Runtime.setPassCallback` takes a plain C function pointer.
+/// `Runtime.setPassCallback` takes a plain c function pointer
 private func akariOutlineMaskCallback(_ userdata: UnsafeMutableRawPointer?, _: Int32, _: Int32)
 {
   guard let userdata else { return }

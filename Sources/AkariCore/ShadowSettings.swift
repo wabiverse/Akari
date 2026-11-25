@@ -38,27 +38,27 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-/// How the shadow atlas is carved up and filtered.
+/// how the shadow atlas is carved up and filtered.
 public struct ShadowSettings: Sendable
 {
-  /// Reach of the sun's shadow in meters, measured from the camera.
+  /// reach of the sun's shadow in meters, measured from the camera.
   public var maxDistance: Float = 30
-  /// Constant offset applied to the comparison depth.
+  /// constant offset applied to the comparison depth.
   public var depthBias: Float = 0.0015
-  /// Extra offset as surfaces turn away from the light.
+  /// extra offset as surfaces turn away from the light.
   public var normalBias: Float = 0.04
 
-  /// Which technique renders the sun's shadows.
+  /// which technique renders the sun's shadows.
   public enum Technique: String, Sendable, CaseIterable
   {
-    /// Fixed depth slices of the camera frustum.
+    /// fixed depth slices of the camera frustum.
     case cascaded
-    /// Concentric levels centered on the camera, doubling in radius.
+    /// concentric levels centered on the camera, doubling in radius.
     case clipmap
   }
 
   public var levelLodBias: Float = 0
-  /// Ceiling on how many clipmap levels can be active at once, clamped to ``maxLevels``.
+  /// ceiling on how many clipmap levels can be active at once, clamped to ``maxLevels``.
   public var levelCount: Int32 = ShadowSettings.maxLevels
 
   public static let maxLevels: Int32 = 24
@@ -66,9 +66,7 @@ public struct ShadowSettings: Sendable
   public init()
   {}
 
-  /// Levels available before the frame's required
-  /// reach further limits how many are actually
-  /// fitted.
+  /// levels available before the frame's reach limits how many get fitted
   public var resolvedLevelCount: Int
   {
     Int(min(max(levelCount, 1), Self.maxLevels))

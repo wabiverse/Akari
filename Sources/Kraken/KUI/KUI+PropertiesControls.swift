@@ -47,7 +47,7 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// An enum menu, a dark field lists its options beneath it.
+  /// an enum menu, a dark field lists its options beneath it.
   @MainActor
   struct Dropdown<Value: Equatable>: View
   {
@@ -134,8 +134,7 @@ extension Kraken
     }
   }
 
-  /// A checkbox with its label to the right,
-  /// with the whole view being clickable.
+  /// a checkbox with its label to the right, all of it clickable
   @MainActor
   struct Checkbox: View
   {
@@ -190,8 +189,31 @@ extension Kraken
     }
   }
 
-  /// A chevron pointing right when
-  /// collapsed, down when expanded.
+  /// a square icon button in the control column, shaped like the pickers beside an object field
+  @MainActor
+  struct IconButton: View
+  {
+    let symbol: String
+    let enabled: Bool
+    let action: () -> Void
+
+    init(_ symbol: String, enabled: Bool = true, action: @escaping () -> Void)
+    {
+      self.symbol = symbol
+      self.enabled = enabled
+      self.action = action
+    }
+
+    var body: some View
+    {
+      SymbolIcon(symbol, size: 10, white: enabled ? 0.85 : 0.4)
+        .frame(width: 24, height: Double(Properties.rowHeight))
+        .background(RoundedRectangle(cornerRadius: 4).fill(enabled ? Properties.field : Properties.menu))
+        .onTapGesture { if enabled { action() } }
+    }
+  }
+
+  /// a chevron pointing right when collapsed and down when expanded
   struct DisclosureChevron: Shape
   {
     var expanded: Bool

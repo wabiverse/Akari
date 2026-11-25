@@ -42,6 +42,9 @@
 # include <Hd/rendererPluginRegistry.h>
 # include <Hd/sceneIndexPlugin.h>
 # include <Hd/sceneIndexPluginRegistry.h>
+# include <Hd/filteringSceneIndex.h>
+# include <Hd/legacyDisplayStyleSchema.h>
+# include <Hd/meshSchema.h>
 # include <Tf/registryManager.h>
 # include <Tf/type.h>
 #else
@@ -49,6 +52,9 @@
 # include <pxr/imaging/hd/rendererPluginRegistry.h>
 # include <pxr/imaging/hd/sceneIndexPlugin.h>
 # include <pxr/imaging/hd/sceneIndexPluginRegistry.h>
+# include <pxr/imaging/hd/filteringSceneIndex.h>
+# include <pxr/imaging/hd/legacyDisplayStyleSchema.h>
+# include <pxr/imaging/hd/meshSchema.h>
 # include <pxr/base/tf/registryManager.h>
 # include <pxr/base/tf/type.h>
 #endif
@@ -57,20 +63,23 @@
 #include "HdAkari/renderDelegate.h"
 #include "HdAkari/akariBridge.h"
 #include "HdAkari/prototypeMerging.h"
+#include "HdAkari/stageInfo.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-// register Akari with Hydra's plugin registry.
+// register akari with the hydra renderer plugin registry
 TF_REGISTRY_FUNCTION(TfType)
 {
   HdRendererPluginRegistry::Define<HdAkariRendererPlugin>();
 }
 
-// merge each instancer prototype's meshes ahead of the render index,
-// `AKARI_MERGE_PROTOTYPES=0` leaves them as authored.
+// merges each instancer prototype's meshes ahead of the render index, `AKARI_MERGE_PROTOTYPES=0` leaves them as authored
 TF_REGISTRY_FUNCTION(HdSceneIndexPlugin)
 {
   HdSceneIndexPluginRegistry::GetInstance().RegisterSceneIndexForRenderer(
@@ -79,17 +88,103 @@ TF_REGISTRY_FUNCTION(HdSceneIndexPlugin)
       -> HdSceneIndexBaseRefPtr {
       const char *env = std::getenv("AKARI_MERGE_PROTOTYPES");
       if (env && std::strcmp(env, "0") == 0) return input;
+
       return HdAkariPrototypeMergingSceneIndex::New(input);
+    },
+    nullptr, 0, HdSceneIndexPluginRegistry::InsertionOrderAtEnd);
+}
+
+namespace {
+
+TF_DECLARE_WEAK_AND_REF_PTRS(HdAkariMeshDirtyingSceneIndex);
+
+/// passes the scene through and tells hydra a mesh changed when kraken edits something hydra does not track
+class HdAkariMeshDirtyingSceneIndex final : public HdSingleInputFilteringSceneIndexBase
+{
+public:
+  static HdAkariMeshDirtyingSceneIndexRefPtr New(HdSceneIndexBaseRefPtr const &input)
+  {
+    return TfCreateRefPtr(new HdAkariMeshDirtyingSceneIndex(input));
+  }
+
+  HdSceneIndexPrim GetPrim(SdfPath const &primPath) const override { return _GetInputSceneIndex()->GetPrim(primPath); }
+
+  SdfPathVector GetChildPrimPaths(SdfPath const &primPath) const override
+  {
+    return _GetInputSceneIndex()->GetChildPrimPaths(primPath);
+  }
+
+  void Dirty(SdfPath const &path)
+  {
+    if (!_IsObserved() || GetPrim(path).primType != HdPrimTypeTokens->mesh) return;
+
+    HdDataSourceLocatorSet locators;
+    locators.insert(HdMeshSchema::GetTopologyLocator());
+    locators.insert(HdLegacyDisplayStyleSchema::GetRefineLevelLocator());
+    _SendPrimsDirtied({{path, locators}});
+  }
+
+protected:
+  explicit HdAkariMeshDirtyingSceneIndex(HdSceneIndexBaseRefPtr const &input) : HdSingleInputFilteringSceneIndexBase(input) {}
+
+  void _PrimsAdded(HdSceneIndexBase const &, HdSceneIndexObserver::AddedPrimEntries const &entries) override
+  {
+    _SendPrimsAdded(entries);
+  }
+
+  void _PrimsRemoved(HdSceneIndexBase const &, HdSceneIndexObserver::RemovedPrimEntries const &entries) override
+  {
+    _SendPrimsRemoved(entries);
+  }
+
+  void _PrimsDirtied(HdSceneIndexBase const &, HdSceneIndexObserver::DirtiedPrimEntries const &entries) override
+  {
+    _SendPrimsDirtied(entries);
+  }
+};
+
+std::mutex dirtyingLock;
+std::vector<HdAkariMeshDirtyingSceneIndexPtr> dirtying;
+
+}
+
+void
+HdAkariMarkMeshDirty(std::string const &path)
+{
+  if (!SdfPath::IsValidPathString(path)) return;
+
+  std::vector<HdAkariMeshDirtyingSceneIndexPtr> live;
+  {
+    std::lock_guard<std::mutex> lock(dirtyingLock);
+    dirtying.erase(std::remove_if(dirtying.begin(), dirtying.end(), [](auto const &index) { return !index; }),
+                   dirtying.end());
+    live = dirtying;
+  }
+
+  const SdfPath prim(path);
+  for (auto const &index : live) {
+    if (index) index->Dirty(prim);
+  }
+}
+
+// lets kraken resync a mesh after edits hydra ignores, like its own subdivision levels
+TF_REGISTRY_FUNCTION(HdSceneIndexPlugin)
+{
+  HdSceneIndexPluginRegistry::GetInstance().RegisterSceneIndexForRenderer(
+    "Akari",
+    [](std::string const &, HdSceneIndexBaseRefPtr const &input, HdContainerDataSourceHandle const &)
+      -> HdSceneIndexBaseRefPtr {
+      HdAkariMeshDirtyingSceneIndexRefPtr index = HdAkariMeshDirtyingSceneIndex::New(input);
+      std::lock_guard<std::mutex> lock(dirtyingLock);
+      dirtying.push_back(HdAkariMeshDirtyingSceneIndexPtr(index));
+      return index;
     },
     nullptr, 0, HdSceneIndexPluginRegistry::InsertionOrderAtEnd);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE
 
-/// Statically linking HdAkari means nothing references this
-/// translation unit, so the linker would drop it, and with it
-/// the TF_REGISTRY_FUNCTION above, leaving Akari undiscoverable,
-/// calling this from Swift forces the whole .o to be linked in.
+/// linked statically nothing references this file, so swift calls this to keep the linker from dropping its registry functions
 extern "C" void AkariHdEnsureLinked(void) {}
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -118,7 +213,7 @@ HdAkariRendererPlugin::IsSupported(
     const HdRendererCreateArgsSchema & /*rendererCreateArgs*/,
     std::string * /*reasonWhyNot*/) const
 {
-  // akari is available wherever Hydra runs.
+  // akari is available wherever hydra runs
   return true;
 }
 

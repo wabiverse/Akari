@@ -56,13 +56,17 @@
 # include <GeomUtil/cuboidMeshGenerator.h>
 #else
 # include <pxr/pxr.h>
-# include <pxr/imaging/hd/version.h>
+# include <pxr/imaging/hd/bufferSource.h>
+# include <pxr/imaging/hd/changeTracker.h>
 # include <pxr/imaging/hd/instancer.h>
+# include <pxr/imaging/hd/meshTopology.h>
+# include <pxr/imaging/hd/meshUtil.h>
 # include <pxr/imaging/hd/mesh.h>
-# include <pxr/imaging/hd/rprim.h>
-# include <pxr/imaging/hd/drawingCoord.h>
-# include <pxr/imaging/hd/enums.h>
-# include <pxr/imaging/hd/perfLog.h>
+# include <pxr/imaging/hd/repr.h>
+# include <pxr/imaging/hd/sceneDelegate.h>
+# include <pxr/imaging/hd/cubeSchema.h>
+# include <pxr/imaging/hd/tokens.h>
+# include <pxr/imaging/hd/vtBufferSource.h>
 # include <pxr/usd/sdf/path.h>
 # include <pxr/base/vt/array.h>
 # include <pxr/base/vt/value.h>
@@ -150,8 +154,7 @@ HdAkariCube::Sync(HdSceneDelegate *sceneDelegate,
   data.primId = GetPrimId();
   HdAkariSyncStyle(sceneDelegate, id, data.primId, scene);
 
-  // a point instancer's prototype publishes one matrix per instance, the
-  // renderer draws the cube with GPU instancing instead of copying it.
+  // a point instancer's prototype publishes a matrix per instance and the renderer instances the cube
   _UpdateInstancer(sceneDelegate, dirtyBits);
   const SdfPath instancerId = GetInstancerId();
   const bool instanced = !instancerId.IsEmpty();
@@ -186,8 +189,7 @@ HdAkariCube::Sync(HdSceneDelegate *sceneDelegate,
   data.transform = sceneDelegate->GetTransform(id);
   data.visible = sceneDelegate->GetVisible(id);
   
-  // constant display color, a minimal way to support authored colors.
-  // (todo): support actual per-vertex color.
+  // a constant display color, todo per vertex color
   const VtValue colorVal = sceneDelegate->Get(id, HdTokens->displayColor);
   if (colorVal.IsHolding<VtVec3fArray>()) {
     const VtVec3fArray colors = colorVal.UncheckedGet<VtVec3fArray>();
@@ -201,13 +203,14 @@ HdAkariCube::Sync(HdSceneDelegate *sceneDelegate,
   HdAkariSyncMaterial(sceneDelegate, id, atlas, meshUtil, data);
   data.contentKey = HdAkariMeshContentKey(data);
 
-  // bump revision so the GPU buffer cache knows to rebuild.
+  // bump revision so the gpu buffer cache knows to rebuild.
   data.dataRevision = ++_dataGeneration;
 
   if (instanced) {
     HdAkariInstanceSet set = HdAkariInstances(sceneDelegate->GetRenderIndex(), instancerId, id);
     data.instances = std::move(set.transforms);
     data.instancesKey = set.key;
+
     // nothing to draw without instances.
     if (data.instances.empty()) {
       scene->RemoveMesh(id);

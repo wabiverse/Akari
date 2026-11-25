@@ -44,7 +44,7 @@ import Foundation
 
   extension Kraken
   {
-    /// A popup menu, drawn over the viewport from an `NSMenu`'s items.
+    /// a popup menu, drawn over the viewport from an `NSMenu`'s items.
     final class MenuPanel: NSPanel
     {
       private(set) static var open: [MenuPanel] = []
@@ -69,7 +69,7 @@ import Foundation
       static let separatorHeight: CGFloat = 7
       static let pad: CGFloat = 4
 
-      /// Opens `menu` with its top left at `point` in `view`.
+      /// opens `menu` with its top left at `point` in `view`.
       static func show(_ menu: NSMenu, at point: CGPoint, in view: NSView)
       {
         closeAll()

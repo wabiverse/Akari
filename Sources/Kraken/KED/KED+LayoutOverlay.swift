@@ -39,54 +39,37 @@
  * ----------------------------------------------------------------- */
 
 import SwiftCrossUI
-#if os(macOS)
-  import AppKit
-  import AppKitBackend
-#endif
 
-#if os(macOS)
-  extension Kraken
+extension Kraken
+{
+  /// hosts the layout overlay over the viewport.
+  struct LayoutOverlay: View
   {
-    /// Hosts the layout overlay over the viewport.
-    struct LayoutOverlay
+    let layout: Kraken.Layout
+    let isPicking: @MainActor () -> Bool
+    let isMenuOpen: @MainActor () -> Bool
+    let toggleCamera: @MainActor () -> Void
+
+    var body: some View
     {
-      let layout: Kraken.Layout
-      let isPicking: @MainActor () -> Bool
-      let isMenuOpen: @MainActor () -> Bool
-      let toggleCamera: @MainActor () -> Void
+      NativeView(make: { [layout] in LayoutView(layout: layout) },
+                 update: { [layout, isPicking, isMenuOpen, toggleCamera] view in
+                   // the view outlives a `Workspace` re-init, so it follows the current layout.
+                   view.layout = layout
+                   view.isPicking = isPicking
+                   view.isMenuOpen = isMenuOpen
+                   view.toggleCamera = toggleCamera
+                   layout.viewport = view
+                 },
+                 size: { ViewSize($0.width ?? 800, $0.height ?? 600) })
     }
   }
+}
 
-  extension Kraken.LayoutOverlay: NSViewRepresentable
+extension Kraken.LayoutView: Kraken.Dismantling
+{
+  func dismantle()
   {
-    func makeNSView(context _: Context) -> Kraken.LayoutView
-    {
-      let view = Kraken.LayoutView(layout: layout)
-      view.isPicking = isPicking
-      view.isMenuOpen = isMenuOpen
-      view.toggleCamera = toggleCamera
-      return view
-    }
-
-    func updateNSView(_ view: Kraken.LayoutView, context _: Context)
-    {
-      // The view outlives a `Workspace` re-init, so it must follow the current
-      // layout instead of keeping the one it was made with.
-      view.layout = layout
-      view.isPicking = isPicking
-      view.isMenuOpen = isMenuOpen
-      view.toggleCamera = toggleCamera
-      layout.viewport = view
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView _: Kraken.LayoutView, context _: Context) -> ViewSize
-    {
-      ViewSize(proposal.width ?? 800, proposal.height ?? 600)
-    }
-
-    static func dismantleNSView(_ nsView: Kraken.LayoutView, coordinator _: Void)
-    {
-      MainActor.assumeIsolated { nsView.stop() }
-    }
+    stop()
   }
-#endif
+}

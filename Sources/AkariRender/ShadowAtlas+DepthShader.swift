@@ -83,7 +83,7 @@ extension Akari.ShadowAtlas
       float2 uv [[user(akari_uv)]];
       float  primId [[user(akari_prim)]];
     };
-    struct U { int u_viewBase; int u_alphaTest; };
+    struct U { int u_viewBase; int u_alphaTest; int u_glassSun; int u_glassSlots; };
     inline void clipToRect(thread VertOut& out, const device uint* render_rect, uint view)
     {
       uint rect = render_rect[view];
@@ -156,10 +156,7 @@ extension Akari.ShadowAtlas
       return out;
     }
 
-    // Amplified instanced draws read the instance matrices from buffer(1),
-    // which instanced draws always bind, and the per view matrices from a
-    // buffer the shadow pass uploads at buffer(7). LabGL's culled replay of
-    // the static capture rebinds buffer(4) to its model matrix mid pass.
+    // amplified instanced draws read instance matrices from buffer 1 and per view matrices from buffer 7, the culled replay rebinds buffer 4
     vertex VertOut vert_amplified_instanced_main(VertIn in [[stage_in]],
                                                  constant float4x4* instanceXf [[buffer(1)]],
                                                  constant U& u [[buffer(2)]],
@@ -200,7 +197,8 @@ extension Akari.ShadowAtlas
         out.view = instance_view[instance];
         out.position = (view_xf[out.view] * model) * in.a_position;
         clipToRect(out, render_rect, out.view);
-        // Point and spot light levels fill only a corner of the atlas view, sun levels fill all of it.
+
+        // point and spot light levels fill only a corner of the atlas view, sun levels fill all of it.
         if (out.view >= \(punctualViewBase)u)
         {
           float s = 1.0 / float(1u << ((out.view - \(punctualViewBase)u) % \(lodCount)u));
@@ -252,7 +250,7 @@ extension Akari.ShadowAtlas
                             constant MaterialImages& materials [[buffer(6)]],
                             constant MaterialImages& styles [[buffer(7)]])
     {
-      // Texel 4's w is 2 for prims whose material never cuts holes, so skip the alpha test.
+      // texel 4's w is 2 for prims whose material never cuts holes, so skip the alpha test.
       bool solid = false;
       if ((u.u_alphaTest & 2) != 0)
       {
@@ -261,20 +259,35 @@ extension Akari.ShadowAtlas
         if (id >= 0 && perRow > 0 && id / perRow < int(styles.atlas.get_height()))
         {
           float4 flags = styles.atlas.read(uint2((id % perRow) * 8 + 4, id / perRow));
-          if (flags.z > 0.5 || (flags.y > 0.5 && flags.w < 0.5)) return;
-          solid = flags.w > 1.5;
+          if (flags.z > 0.5) return;
+          if (flags.y > 0.5)
+          {
+            // glass shadows each light once, lights with glass maps get the tinted shadow there and the rest block a share of texels here
+            int view = int(in.view);
+            bool sun = view < \(punctualViewBase);
+            int slot = sun ? -1 : (view - \(punctualViewBase)) / \(lodCount * facesPerLight);
+            if (sun ? u.u_glassSun != 0 : ((u.u_glassSlots >> slot) & 1) != 0) return;
+
+            // refraction bends light out of the shadow even for clear glass, so it blocks at least half.
+            if (fract(52.9829189 * fract(dot(in.position.xy, float2(0.06711056, 0.00583715)))) >= mix(0.5, 1.0, flags.w)) return;
+            solid = true;
+          }
+          else
+          {
+            solid = flags.w > 1.5;
+          }
         }
       }
       if ((u.u_alphaTest & 1) != 0 && !solid)
       {
-        // Untextured materials store -(row + 1) in uv and use their constants, so only textured ones sample the atlas.
+        // untextured materials keep their constants row in the uv, only textured ones sample the atlas
         int row = int(-in.uv.x + 0.5) - 1;
         float4 mat;
         if (row >= 0)
         {
-          // 128 material rows (MaterialAtlas.constantsRowsPerLine) share a scanline.
+          // 128 material rows share a scanline
           uint line = uint(row) >> 7u;
-          uint base = uint(row & 127) * 3u;
+          uint base = uint(row & 127) * 4u;
           mat = float4(0.0, 0.0, constants.atlas.read(uint2(base, line)).a,
                        constants.atlas.read(uint2(base + 1u, line)).b);
         }

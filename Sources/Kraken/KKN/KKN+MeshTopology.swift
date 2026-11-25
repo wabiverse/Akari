@@ -42,9 +42,7 @@ import Foundation
 
 extension Kraken
 {
-  /// Edit mesh topology, each vertex keeps the cycle of edges around it (its disk) and each edge
-  /// the cycle of face corners along it (its radial), so every neighbor is a step away, manifold
-  /// or not.
+  /// edit mesh topology, each vertex keeps its cycle of edges and each edge its cycle of face corners, manifold or not
   struct MeshTopology
   {
     struct Vert
@@ -60,7 +58,7 @@ extension Kraken
       var loop = -1
     }
 
-    /// A face's corner, the edge on to the next corner, and its place in that edge's radial.
+    /// a face's corner, the edge on to the next corner, and its place in that edge's radial
     struct Loop
     {
       var vert: Int
@@ -108,10 +106,11 @@ extension Kraken
       edges[e].v.0 == v ? edges[e].prev.0 : edges[e].prev.1
     }
 
-    /// The edge between `a` and `b`, if one is.
+    /// the edge between `a` and `b`, if there is one
     func edge(_ a: Int, _ b: Int) -> Int?
     {
       guard a >= 0, a < verts.count, verts[a].edge >= 0 else { return nil }
+
       let first = verts[a].edge
       var e = first
       repeat
@@ -119,12 +118,14 @@ extension Kraken
         if other(e, a) == b { return e }
         e = diskNext(e, a)
       } while e != first
+
       return nil
     }
 
     func edgesAround(_ v: Int) -> [Int]
     {
       guard v >= 0, v < verts.count, verts[v].edge >= 0 else { return [] }
+
       let first = verts[v].edge
       var out: [Int] = []
       var e = first
@@ -133,6 +134,7 @@ extension Kraken
         out.append(e)
         e = diskNext(e, v)
       } while e != first
+
       return out
     }
 
@@ -140,6 +142,7 @@ extension Kraken
     {
       let first = edges[e].loop
       guard first >= 0 else { return [] }
+
       var out: [Int] = []
       var l = first
       repeat
@@ -147,6 +150,7 @@ extension Kraken
         out.append(loops[l].face)
         l = loops[l].radialNext
       } while l != first
+
       return out
     }
 
@@ -158,6 +162,7 @@ extension Kraken
     func faceLoops(_ f: Int) -> [Int]
     {
       guard faces[f].count > 0 else { return [] }
+
       var out: [Int] = []
       var l = faces[f].loop
       repeat
@@ -165,6 +170,7 @@ extension Kraken
         out.append(l)
         l = loops[l].next
       } while l != faces[f].loop
+
       return out
     }
 
@@ -178,10 +184,11 @@ extension Kraken
       faceLoops(f).map { loops[$0].edge }
     }
 
-    /// Whether a face runs from `a` to `b` along their edge.
+    /// whether a face runs from `a` to `b` along their edge
     func isDirected(_ a: Int, _ b: Int) -> Bool
     {
       guard let e = edge(a, b), edges[e].loop >= 0 else { return false }
+
       let first = edges[e].loop
       var l = first
       repeat
@@ -189,6 +196,7 @@ extension Kraken
         if loops[l].vert == a { return true }
         l = loops[l].radialNext
       } while l != first
+
       return false
     }
 
@@ -231,6 +239,7 @@ extension Kraken
     private mutating func ensureEdge(_ a: Int, _ b: Int) -> Int
     {
       if let e = edge(a, b) { return e }
+
       edges.append(Edge(v: (a, b)))
       let e = edges.count - 1
       link(e, into: a)
@@ -270,7 +279,7 @@ extension Kraken
       if edges[e].loop == l { edges[e].loop = n }
     }
 
-    /// A face through `corners`, repeats in a row dropped, `nil` when fewer than three different corners are left.
+    /// adds a face through `corners`, dropping repeats in a row, and returns `nil` when fewer than three distinct corners are left
     @discardableResult
     mutating func addFace(_ corners: [Int]) -> Int?
     {
@@ -278,6 +287,7 @@ extension Kraken
       for v in corners where ring.last != v { ring.append(v) }
       if ring.count > 1, ring.first == ring.last { ring.removeLast() }
       guard Set(ring).count >= 3 else { return nil }
+
       let f = faces.count, base = loops.count, n = ring.count
       faces.append(Face(loop: base, count: n))
       for (i, v) in ring.enumerated()
@@ -290,25 +300,27 @@ extension Kraken
       return f
     }
 
-    /// Takes the face out of its edges' radials, leaving its edges and verts for `compacted` to drop.
+    /// takes the face out of its edges' radials, leaving its edges and verts for `compacted` to drop
     mutating func killFace(_ f: Int)
     {
       for l in faceLoops(f) { detach(l) }
       faces[f] = Face()
     }
 
-    /// The topology rebuilt without dead faces, edges no face uses or verts no face uses, verts kept in order,
-    /// with each old vert's and face's new index, -1 for gone.
+    /// the topology without dead faces or unused edges and verts, with each old vert's and face's new index or -1
     func compacted() -> (mesh: MeshTopology, verts: [Int], faces: [Int])
     {
       let live = faces.indices.filter { faces[$0].count > 0 }
       var used = [Bool](repeating: false, count: verts.count)
       for f in live { for v in corners(of: f) { used[v] = true } }
+
       var mesh = MeshTopology()
       var vertMap = [Int](repeating: -1, count: verts.count)
       for v in verts.indices where used[v] { vertMap[v] = mesh.addVert() }
+
       var faceMap = [Int](repeating: -1, count: faces.count)
       for f in live { faceMap[f] = mesh.addFace(corners(of: f).map { vertMap[$0] }) ?? -1 }
+
       return (mesh, vertMap, faceMap)
     }
   }

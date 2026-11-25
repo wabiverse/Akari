@@ -43,42 +43,90 @@ import LabGL
 
 extension Akari
 {
-  /// A compute kernel, zero when it isn't built or failed to compile.
+  /// a compute kernel, zero when it isn't built or failed to compile
   struct ComputeKernel: Equatable
   {
-    var id: GLuint = 0
+    /// every copy of the kernel shares the program so a shader reload swaps it under all of them
+    private final class Program
+    {
+      var id: GLuint
+
+      init(_ id: GLuint)
+      {
+        self.id = id
+      }
+    }
+
+    private var program: Program?
+
+    var id: GLuint
+    {
+      program?.id ?? 0
+    }
 
     var isBuilt: Bool
     {
       id != 0
     }
 
-    /// Starts compiling in the background.
+    static func == (lhs: ComputeKernel, rhs: ComputeKernel) -> Bool
+    {
+      lhs.id == rhs.id
+    }
+
+    /// starts compiling in the background
     init(label: String, glsl: String = "", msl: String, threadgroup: SIMD3<Int>)
     {
-      id = gl.precompileComputeShader(name: label, glsl: glsl, msl: msl)
-      if id != 0
-      {
-        gl.setComputeShaderThreadgroupSize(id, x: GLuint(threadgroup.x), y: GLuint(threadgroup.y), z: GLuint(threadgroup.z))
+      let program = Program(Self.compile(label, glsl: glsl, msl: ShaderSource.msl(label, msl), threadgroup: threadgroup))
+      self.program = program
+
+      ShaderSource.watch(label)
+      { [weak program] source in
+        // a released kernel stays released
+        guard let program, program.id != 0 else { return .gone }
+
+        let fresh = Self.compile(label, glsl: glsl, msl: source, threadgroup: threadgroup)
+        guard fresh != 0, gl.waitComputeShader(fresh) != 0
+        else
+        {
+          if fresh != 0 { gl.deleteComputeShader(fresh) }
+          return .failed
+        }
+
+        let old = program.id
+        program.id = fresh
+        if old != 0 { ShaderSource.retire { gl.deleteComputeShader(old) } }
+        return .swapped
       }
     }
 
     init()
     {}
 
-    /// Waits for the compile, false and released if it failed.
+    private static func compile(_ label: String, glsl: String, msl: String, threadgroup: SIMD3<Int>) -> GLuint
+    {
+      let id = gl.precompileComputeShader(name: label, glsl: glsl, msl: msl)
+      if id != 0
+      {
+        gl.setComputeShaderThreadgroupSize(id, x: GLuint(threadgroup.x), y: GLuint(threadgroup.y), z: GLuint(threadgroup.z))
+      }
+      return id
+    }
+
+    /// waits for the compile, returns false and releases the kernel if it failed
     mutating func wait() -> Bool
     {
       if id != 0, gl.waitComputeShader(id) != 0 { return true }
-      release()
 
+      release()
       return false
     }
 
     mutating func release()
     {
       if id != 0 { gl.deleteComputeShader(id) }
-      id = 0
+      program?.id = 0
+      program = nil
     }
 
     func set(_ uniform: ComputeUniform, index: Int? = nil, _ value: some UniformValue)
@@ -89,7 +137,7 @@ extension Akari
       }
     }
 
-    /// Binds `buffers` in order from binding `first`.
+    /// binds `buffers` in order starting at binding `first`
     func bind(_ buffers: GLuint..., at first: Int = 0)
     {
       bind(buffers, at: first)
@@ -135,10 +183,10 @@ extension Akari
     }
   }
 
-  /// A set of kernels named by an enum, each case declaring its own source and threadgroup.
+  /// a set of kernels named by an enum, each case declaring its own source and threadgroup
   protocol ComputeKernelName: CaseIterable, Hashable
   {
-    /// Prefixes every kernel's label, ex. `shadow` for `akari-shadow-begin-frame`.
+    /// prefixes every kernel label, for example `shadow` in `akari-shadow-begin-frame`
     static var label: String { get }
     var glsl: String { get }
     var msl: String { get }
@@ -149,7 +197,7 @@ extension Akari
   {
     private var kernels: [Name: ComputeKernel] = [:]
 
-    /// True until `precompile`, a kernel that failed stays in the set unbuilt.
+    /// true until `precompile`, a kernel that failed stays in the set unbuilt
     var isEmpty: Bool
     {
       kernels.isEmpty
@@ -165,7 +213,7 @@ extension Akari
       kernels[name] ?? ComputeKernel()
     }
 
-    /// Starts every kernel compiling in the background.
+    /// starts every kernel compiling in the background
     static func precompile() -> Self
     {
       var set = Self()
@@ -180,7 +228,7 @@ extension Akari
       return set
     }
 
-    /// Waits for every kernel and releases the ones that failed, which it returns.
+    /// waits for every kernel, releases the ones that failed and returns them
     mutating func wait() -> [Name]
     {
       var failed: [Name] = []
@@ -203,7 +251,7 @@ extension Akari
     }
   }
 
-  /// Buffers named by an enum, each case declaring its own usage and size.
+  /// buffers named by an enum, each case declaring its own usage and size
   protocol GPUBufferName: CaseIterable, Hashable
   {
     var usage: GLuint { get }
@@ -219,7 +267,7 @@ extension Akari
       buffers[name] ?? 0
     }
 
-    /// Every buffer, nil if any failed to allocate.
+    /// every buffer, or nil if any failed to allocate
     static func make() -> Self?
     {
       var set = Self()
@@ -227,7 +275,13 @@ extension Akari
       {
         let buffer = gl.createBuffer(usage: name.usage, sizeBytes: GLsizei(name.bytes))
         set.buffers[name] = buffer
-        guard buffer != 0 else { set.release(); return nil }
+
+        guard buffer != 0
+        else
+        {
+          set.release()
+          return nil
+        }
       }
 
       return set
@@ -252,7 +306,7 @@ extension Akari.ComputeKernelName
     ""
   }
 
-  /// The case name as a label, ex. `beginFrame` as `begin-frame`.
+  /// the case name as a label, for example `beginFrame` becomes `begin-frame`
   var kebabName: String
   {
     String(describing: self).reduce(into: "")
@@ -263,7 +317,7 @@ extension Akari.ComputeKernelName
   }
 }
 
-/// A value a uniform takes, with the GL type it uploads as.
+/// a value a uniform takes, with the gl type it uploads as
 protocol UniformValue
 {
   static var glType: GLenum { get }

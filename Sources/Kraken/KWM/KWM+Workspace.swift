@@ -49,32 +49,32 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// The window's layout.
+  /// the window's layout.
   @MainActor
   struct Workspace: View
   {
     static let sidebarDefault = Double(Properties.width + 30)
-    /// The properties' controls don't fit in a narrower sidebar, so it collapses instead.
+    /// the properties' controls don't fit in a narrower sidebar, so it collapses instead.
     static let sidebarMinimum = Double(Properties.width + 30)
     static let timelineMinimum = 24.0
     static let outlinerMinimum = 48.0
 
-    /// How far an edge has to be dragged past an area's minimum size before the area collapses.
+    /// how far an edge has to be dragged past an area's minimum size before the area collapses.
     static let collapseDistance = 80.0
 
-    /// How close an area is to collapsing, from 0 at its minimum size to 1 once it collapses.
+    /// how close an area is to collapsing, from 0 at its minimum size to 1 once it collapses.
     static func overshoot(_ size: Double, minimum: Double) -> Double
     {
       min(max((minimum - size) / collapseDistance, 0), 1)
     }
 
-    /// The size an area is drawn at, between its minimum and `max`, or 0 once collapsed.
+    /// the size an area is drawn at, between its minimum and `max`, or 0 once collapsed.
     static func shown(_ size: Double, minimum: Double, max: Double) -> Double
     {
       overshoot(size, minimum: minimum) >= 1 ? 0 : min(Swift.max(size, minimum), max)
     }
 
-    /// The size an area keeps when a drag ends, so the next drag starts from its edge.
+    /// the size an area keeps when a drag ends, so the next drag starts from its edge.
     static func settled(_ size: Double, minimum: Double) -> Double
     {
       overshoot(size, minimum: minimum) >= 1 ? minimum - collapseDistance : max(size, minimum)
@@ -86,18 +86,26 @@ extension Kraken
     let scene: Binding<Kraken.SceneFile>
     let timeline: Kraken.Timeline
 
-    @State private var settings: Kraken.HUDState
-    @State private var renderJob: Kraken.RenderJob
-    @State private var showsTimeline = true
-    @State private var showsPlaybackMenu = false
-    @State private var openMenu: TopMenu?
-    @State private var showsProperties = true
-    /// Area sizes as their edges are dragged. Below an area's minimum, it's on its way to collapsing.
-    @State private var sidebarWidth = Kraken.Workspace.sidebarDefault
-    @State private var outlinerHeight = Kraken.PrimOutliner.height
-    @State private var timelineBody = Double(Kraken.TimelineView.rulerHeight)
+    @State var settings: Kraken.HUDState
+    @State var renderJob: Kraken.RenderJob
+    @State var showsTimeline = true
+    @State var showsPlaybackMenu = false
+    @State var openMenu: TopMenu?
+    @State var showsProperties = true
+    /// area sizes as their edges are dragged. below an area's minimum, it's on its way to collapsing.
+    @State var sidebarWidth = Kraken.Workspace.sidebarDefault
+    @State var outlinerHeight = Kraken.PrimOutliner.height
+    @State var timelineBody = Double(Kraken.TimelineView.rulerHeight)
+    @State var showsAssets = true
+    @State var assetsHeight = Kraken.Workspace.assetsDefault
+    static let assetsDefault = 200.0
+    static let assetsMinimum = 120.0
+    @State var showsObjects = true
+    @State var objectsWidth = Kraken.Workspace.objectsDefault
+    static let objectsDefault = 330.0
+    static let objectsMinimum = 240.0
 
-    /// The window's content size. Areas are capped to it so they can't push the window past the screen.
+    /// the window's content size. areas are capped to it so they can't push the window past the screen.
     private static var room: (width: Double, height: Double)
     {
       #if os(macOS)
@@ -109,19 +117,19 @@ extension Kraken
       return (1600, 1000)
     }
 
-    /// Leaves room for the viewport header and the timeline controls.
+    /// leaves room for the viewport header and the timeline controls.
     private static var sidebarMaximum: Double
     {
       max(room.width - 790, sidebarMinimum)
     }
 
-    /// Leaves the viewport at least 160 points, plus the bars around it.
+    /// leaves the viewport at least 160 points, plus the bars around it.
     private static var timelineMaximum: Double
     {
       max(room.height - 290, timelineMinimum)
     }
 
-    /// Leaves the properties panel at least 160 points.
+    /// leaves the properties panel at least 160 points.
     private static var outlinerMaximum: Double
     {
       max(room.height - 230, outlinerMinimum)
@@ -142,9 +150,11 @@ extension Kraken
       Self.shown(outlinerHeight, minimum: Self.outlinerMinimum, max: Self.outlinerMaximum)
     }
 
-    @State private var showsStatistics = true
-    @State private var showsAbout = false
-    @State private var layout: Kraken.Layout
+    @State var showsStatistics = true
+    @State var showsAbout = false
+    @State var layout: Kraken.Layout
+    /// the panel the touch layout shows under or beside the viewport, none for the viewport alone.
+    @State var panel: Kraken.TouchPanel?
 
     init(engine: Akari.RenderEngine,
          hydra: Hydra.RenderEngine,
@@ -173,12 +183,72 @@ extension Kraken
         Task { @MainActor in await playback.prebakeProbes(at: probeTimes) }
       }
 
+      layout.toggleCamera = { [renderJob] in renderJob.toggleCameraView() }
+
       layout.keyframes.timeline = timeline
       timeline.onFrame = { [weak layout] playing in layout?.keyframes.frameChanged(playing: playing) }
       _layout = State(wrappedValue: layout)
     }
 
     var body: some View
+    {
+      if FormFactor.isTouch { followingScenes(touchBody) } else { followingScenes(desktopBody) }
+    }
+
+    /// starts a render asked for at launch, and opens scenes handed to the app.
+    private func followingScenes(_ content: some View) -> some View
+    {
+      content
+        .onAppear
+        {
+          renderJob.startPendingJob()
+          startSculptingIfAsked()
+        }
+        .onOpenURL
+        { url in
+          guard url.isFileURL else { return }
+
+          // leaves the open event and comes to the front first, a save prompt behind the finder used to block every later open
+          DispatchQueue.main.async
+          {
+            #if os(macOS)
+              NSApp.activate()
+              NSApp.windows.first { $0.isVisible && $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
+            #endif
+
+            // a scene from the files app needs its folder too, or its references stay out of reach
+            Kraken.Dialogs.openHanded(url) { layout.replaceStage(with: $0, asking: true) }
+          }
+        }
+    }
+
+    /// opens the sculpting tab in the look the launch asked for, once
+    private func startSculptingIfAsked()
+    {
+      let args = Kraken.parseArgs()
+      guard args.sculptShading != nil, layout.tab != .sculpting else { return }
+
+      layout.open(.sculpting)
+      if let look = args.sculptShading.flatMap({ name in Kraken.SculptShading.allCases.first { $0.rawValue.lowercased() == name.lowercased() } })
+      {
+        layout.sculpt.shading = look
+      }
+    }
+
+    /// the hydra viewport with the passepartout and the tools drawn over it, shared by both layouts.
+    var viewportCanvas: some View
+    {
+      Hydra.Viewport(engine: hydra)
+        .frame(minWidth: FormFactor.isTouch ? 160 : 240, minHeight: 160)
+        .overlay
+        {
+          if renderJob.showsPassepartout { Passepartout(aspect: renderJob.aspect) }
+        }
+        .overlay { layoutOverlay }
+    }
+
+    /// the desktop layout: menus along the top, the viewport and timeline, the outliner and properties beside them.
+    private var desktopBody: some View
     {
       VStack(spacing: 0)
       {
@@ -190,31 +260,88 @@ extension Kraken
         {
           VStack(spacing: 0)
           {
-            VStack(spacing: 0)
+            HStack(spacing: 0)
             {
-            LayoutHeader(layout: layout)
-            Rectangle()
-              .fill(Color(white: 0.09))
-              .frame(height: 1)
-            Hydra.Viewport(engine: hydra)
-              .frame(minWidth: 240, minHeight: 160)
-              .overlay
+              if showsObjects, layout.tab == .assets
               {
-                if renderJob.showsPassepartout { Passepartout(aspect: renderJob.aspect) }
+                let shown = Self.shown(objectsWidth, minimum: Self.objectsMinimum, max: Self.sidebarMaximum)
+                if shown > 0
+                {
+                  AssetBrowser(layout: layout, shelf: AssetShelf.objects)
+                    .frame(width: shown)
+                    .area("objects")
+                }
+                AreaEdge(axis: .vertical, collapses: "objects", direction: .left)
+                { dx in
+                  objectsWidth = min(max(objectsWidth + dx, -200), Self.sidebarMaximum)
+                  return Self.overshoot(objectsWidth, minimum: Self.objectsMinimum)
+                }
+                reset: { objectsWidth = Self.objectsDefault }
+                ended: { objectsWidth = Self.settled(objectsWidth, minimum: Self.objectsMinimum) }
               }
-              .overlay { layoutOverlay }
-              .overlay(alignment: .topLeading)
+              VStack(spacing: 0)
               {
-                if showsStatistics { ViewportOverlay(driver: driver) }
+                LayoutHeader(layout: layout)
+                if layout.tab == .sculpting
+                {
+                  Rectangle()
+                    .fill(Color(white: 0.09))
+                    .frame(height: 1)
+                  SculptHeader(sculpt: layout.sculpt)
+                }
+
+                Rectangle()
+                  .fill(Color(white: 0.09))
+                  .frame(height: 1)
+                viewportCanvas
+                  .overlay(alignment: .topLeading)
+                  {
+                    if showsStatistics, layout.tab != .sculpting { ViewportOverlay(driver: driver) }
+                  }
+                  .overlay(alignment: .topLeading)
+                  {
+                    if layout.tab != .sculpting { LayoutToolbar(layout: layout) }
+                  }
+                  .overlay(alignment: .topTrailing)
+                  {
+                    if layout.tab != .sculpting { OutlineButton(engine: engine, hydra: hydra).padding(16) }
+                  }
+                  .overlay
+                  {
+                    if renderJob.showsResult { RenderResult(job: renderJob) }
+                  }
+                  .overlay
+                  {
+                    // the sculpt viewport lies over the scene's, which pauses while it shows
+                    if layout.tab == .sculpting
+                    {
+                      let sculpt = layout.sculpt
+                      SculptCanvas(sculpt: sculpt)
+                        .overlay(alignment: .topLeading) { SculptInfo(layout: layout) }
+                        .overlay(alignment: .topLeading) { SculptToolShelf(layout: layout) }
+                    }
+                  }
+                if layout.tab == .sculpting { SculptShelf(sculpt: layout.sculpt) }
               }
-              .overlay(alignment: .topLeading) { LayoutToolbar(layout: layout) }
-              .overlay(alignment: .topTrailing) { OutlineButton(engine: engine, hydra: hydra).padding(16) }
-              .overlay
+              .area()
+            }
+            if showsAssets, layout.tab == .assets
+            {
+              AreaEdge(axis: .horizontal, collapses: "assets", direction: .down)
+              { dy in
+                assetsHeight = min(max(assetsHeight - dy, -200), Self.timelineMaximum)
+                return Self.overshoot(assetsHeight, minimum: Self.assetsMinimum)
+              }
+              reset: { assetsHeight = Self.assetsDefault }
+              ended: { assetsHeight = Self.settled(assetsHeight, minimum: Self.assetsMinimum) }
+              let shown = Self.shown(assetsHeight, minimum: Self.assetsMinimum, max: Self.timelineMaximum)
+              if shown > 0
               {
-                if renderJob.showsResult { RenderResult(job: renderJob) }
+                AssetBrowser(layout: layout, shelf: AssetShelf.materials)
+                  .frame(height: shown)
+                  .area("assets")
               }
             }
-            .area()
             if showsTimeline
             {
               AreaEdge(axis: .horizontal, collapses: "timeline", direction: .down)
@@ -225,7 +352,15 @@ extension Kraken
               reset: { timelineBody = Double(TimelineView.rulerHeight) }
               ended: { timelineBody = Self.settled(timelineBody, minimum: Self.timelineMinimum) }
               TimelineView(timeline: timeline, job: renderJob, layout: layout, bodyHeight: timelineShown,
-                           editorChanged: { dope in if dope, timelineBody < 160 { timelineBody = Double(DopeSheetView.height) } })
+                           editorChanged: { dope in if dope, timelineBody < 160
+                           {
+                             #if os(macOS)
+                              timelineBody = Double(DopeSheetView.height)
+                             #else
+                              timelineBody = Double(220)
+                             #endif
+                           }
+              })
               { showsPlaybackMenu.toggle() }
               .area("timeline")
             }
@@ -259,9 +394,19 @@ extension Kraken
                 reset: { outlinerHeight = PrimOutliner.height }
                 ended: { outlinerHeight = Self.settled(outlinerHeight, minimum: Self.outlinerMinimum) }
                 .frame(width: sidebarShown)
-                HUD(state: settings, job: renderJob, inspector: layout.inspector, width: Int(sidebarShown) - 30)
-                  .frame(width: sidebarShown, alignment: .leading)
-                  .area()
+                Group
+                {
+                  if layout.tab == .sculpting
+                  {
+                    SculptProperties(layout: layout, width: Int(sidebarShown) - 30)
+                  }
+                  else
+                  {
+                    HUD(state: settings, job: renderJob, inspector: layout.inspector, width: Int(sidebarShown) - 30)
+                  }
+                }
+                .frame(width: sidebarShown, alignment: .leading)
+                .area()
               }
               .area("sidebar")
             }
@@ -276,12 +421,6 @@ extension Kraken
           .fill(Color(white: 0.09))
           .frame(height: 1)
         StatusBar(layout: layout)
-      }
-      .onAppear { renderJob.startPendingJob() }
-      .onOpenURL
-      { url in
-        guard url.isFileURL else { return }
-        layout.replaceStage(with: url, asking: true)
       }
     }
 
@@ -346,18 +485,15 @@ extension Kraken
       }
     }
     
-    @ViewBuilder
     private var layoutOverlay: some View
     {
-      #if os(macOS)
-        LayoutOverlay(layout: layout,
-                      isPicking: { [settings] in settings.pickingFocus },
-                      isMenuOpen: { openMenu != nil || showsPlaybackMenu },
-                      toggleCamera: { [renderJob] in renderJob.toggleCameraView() })
-      #endif
+      LayoutOverlay(layout: layout,
+                    isPicking: { [settings] in settings.pickingFocus },
+                    isMenuOpen: { openMenu != nil || showsPlaybackMenu },
+                    toggleCamera: { [renderJob] in renderJob.toggleCameraView() })
     }
 
-    /// The playback menu opens just above the timeline's header.
+    /// the playback menu opens just above the timeline's header.
     private var playbackMenuInset: Double
     {
       Double(TimelineView.headerHeight) + timelineShown - 4
@@ -386,7 +522,7 @@ extension Kraken
     }
 
     @ViewBuilder
-    private var aboutLayer: some View
+    var aboutLayer: some View
     {
       if showsAbout
       {
@@ -421,7 +557,7 @@ extension Kraken
       }
     }
 
-    private func entries(for menu: TopMenu) -> [MenuEntry]
+    func entries(for menu: TopMenu) -> [MenuEntry]
     {
       switch menu
       {
@@ -433,6 +569,8 @@ extension Kraken
                          MenuEntry(title: "Save", shortcut: "⌘S") { layout.save() }]
           #if os(macOS)
             entries.append(MenuEntry(title: "Save As…", shortcut: "⇧⌘S") { layout.askSaveAs() })
+            entries.append(MenuEntry.separator)
+            entries.append(MenuEntry(title: "Run Script…") { Kraken.ScriptHost.choose(layout: layout) })
           #endif
           return entries + [MenuEntry.separator, MenuEntry(title: "Quit Akari", shortcut: "⌘Q") { Self.quit() }]
         case .edit:
@@ -474,6 +612,16 @@ extension Kraken
             MenuEntry.separator,
             MenuEntry(title: "Properties", checked: showsProperties) { showsProperties.toggle() },
             MenuEntry(title: "Timeline", checked: showsTimeline) { showsTimeline.toggle() },
+            MenuEntry(title: "Object Assets", checked: showsObjects)
+            {
+              showsObjects.toggle()
+              if showsObjects, objectsWidth < Self.objectsMinimum { objectsWidth = Self.objectsDefault }
+            },
+            MenuEntry(title: "Material Assets", checked: showsAssets)
+            {
+              showsAssets.toggle()
+              if showsAssets, assetsHeight < Self.assetsMinimum { assetsHeight = Self.assetsDefault }
+            },
             MenuEntry(title: "Statistics", checked: showsStatistics) { showsStatistics.toggle() },
           ]
         case .help:
@@ -491,7 +639,7 @@ extension Kraken
     static let logo: URL? = Bundle.akari.url(forResource: "WabiLogo", withExtension: "png")
   }
 
-  /// The top bar's menus.
+  /// the top bar's menus.
   enum TopMenu: String, CaseIterable
   {
     case file = "File"
@@ -516,35 +664,11 @@ extension Kraken
       }
     }
 
-    /// Where its dropdown opens, under its title.
+    /// where its dropdown opens, under its title.
     var x: Int
     {
       Self.allCases.prefix { $0 != self }
         .reduce(Self.barPadding + Self.logoWidth + Self.spacing) { $0 + $1.width + Self.spacing }
-    }
-  }
-
-  struct MenuEntry
-  {
-    var title = ""
-    var shortcut = ""
-    var checked: Bool?
-    var isSeparator = false
-    var action: () -> Void = {}
-
-    static var separator: MenuEntry
-    {
-      MenuEntry(isSeparator: true)
-    }
-
-    init(title: String = "", shortcut: String = "", checked: Bool? = nil, isSeparator: Bool = false,
-         action: @escaping () -> Void = {})
-    {
-      self.title = title
-      self.shortcut = shortcut
-      self.checked = checked
-      self.isSeparator = isSeparator
-      self.action = action
     }
   }
 
@@ -556,7 +680,7 @@ extension Kraken
     let open: Bool
     let tap: () -> Void
 
-    @State private var hovered = false
+    @State var hovered = false
 
     init(title: String, width: Int, open: Bool, tap: @escaping () -> Void)
     {
@@ -582,7 +706,7 @@ extension Kraken
     }
   }
 
-  /// A workspace tab along the top bar: Layout, Modeling or Shading.
+  /// a workspace tab along the top bar: layout, modeling, shading or sculpting.
   @MainActor
   struct WorkspaceTab: View
   {
@@ -590,7 +714,7 @@ extension Kraken
     let selected: Bool
     let tap: () -> Void
 
-    @State private var hovered = false
+    @State var hovered = false
 
     init(title: String, selected: Bool, tap: @escaping () -> Void)
     {
@@ -613,8 +737,7 @@ extension Kraken
     }
   }
 
-  /// A dropdown of menu entries,
-  /// each closing it once it runs.
+  /// a dropdown of menu entries, each closing it once it runs
   @MainActor
   struct MenuList: View
   {
@@ -647,7 +770,7 @@ extension Kraken
     let entry: MenuEntry
     let dismiss: () -> Void
 
-    @State private var hovered = false
+    @State var hovered = false
 
     private static let width = 200
 
@@ -686,7 +809,7 @@ extension Kraken
               .font(Properties.font)
               .foregroundColor(Properties.text)
               .frame(minWidth: 0.0, maxWidth: .infinity, alignment: .leading)
-            Text(entry.shortcut)
+            Text(entry.shortcutText)
               .font(Properties.font)
               .foregroundColor(Color(white: 0.55))
           }

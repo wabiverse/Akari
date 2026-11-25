@@ -38,18 +38,18 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-/// How the volume should fill the view, through the froxel grid.
+/// how the volume should fill the view, through the froxel grid.
 public struct VolumeSettings: Sendable
 {
-  /// Fog density per meter.
+  /// fog density per meter.
   public var density: Float = 0.02
-  /// Henyey Greenstein phase anisotropy.
+  /// henyey greenstein phase anisotropy.
   public var anisotropy: Float = 0.3
-  /// View depth in meters the froxel grid reaches, clamped to the camera's far plane.
+  /// view depth in meters the froxel grid reaches, clamped to the camera's far plane.
   public var maxDistance: Float = 100
-  /// Attenuate the light reaching each froxel by the fog between it and the light.
+  /// attenuate the light reaching each froxel by the fog between it and the light.
   public var shadows = false
-  /// Coarser sun shadow levels for the fog.
+  /// coarser sun shadow levels for the fog.
   public var sunShadowLevelBias: Int = 2
 
   public init()

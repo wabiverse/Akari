@@ -50,46 +50,51 @@ extension Akari.LabFXEngine
     var passesActive = true
     var samplePassesActive = true
     var tiles = SIMD2<Int>(1, 1)
-    /// The camera's `shutter:open` and `shutter:close`, in frames.
+
+    /// the camera's `shutter:open` and `shutter:close` in frames
     var shutter = SIMD2<Float>(0, 0)
-    /// A final render splits the shutter into this many samples, each blurred over its own slice.
+
+    /// a final render splits the shutter into this many samples, each blurred over its own slice
     var subframes = 0
-    /// The USD camera's shutter while looking through one, in place of the Hydra camera's.
+
+    /// the usd camera's shutter while looking through one, used instead of the hydra camera's
     var cameraOverride: SIMD2<Float>?
-    /// The scene's frames a second, which the shutter is a fraction of.
+
+    /// the scene's frames per second, the shutter is a fraction of one frame
     var frameRate = 24.0
     var lastFrame = 0.0
   }
 
   static let motionBlurPasses: [Pass] = [.motionTiles8, .motionTiles, .motionNeighbors, .motionBlur, .motionBlurApply]
-  /// While a final render integrates the shutter, each sample is blurred over its own slice before the samples average.
+
+  /// while a final render integrates the shutter each sample is blurred over its own slice before they are averaged
   static let motionBlurSamplePasses: [Pass] = [.motionTilesPre8, .motionTilesPre, .motionNeighborsPre, .motionBlurPre, .motionBlurPreApply]
 
-  /// The widest blur in output pixels, also the size of a tile of the motion search.
+  /// the widest blur in output pixels, also the tile size of the motion search
   static let motionBlurRadius = 96
 
-  /// The camera's shutter, read each frame from the Hydra camera.
+  /// the camera's shutter, read each frame from the hydra camera
   public var cameraShutter: SIMD2<Float>
   {
     get { motionBlur.shutter }
     set { motionBlur.shutter = newValue }
   }
 
-  /// The shutter of the USD camera a render or the viewport looks through, nil for a free camera.
+  /// the shutter of the usd camera a render or the viewport looks through, nil for a free camera
   public var usdCameraShutter: SIMD2<Float>?
   {
     get { motionBlur.cameraOverride }
     set { motionBlur.cameraOverride = newValue }
   }
 
-  /// The stage's frames a second, which a shutter's open and close count in.
+  /// the stage's frames per second, the unit a shutter's open and close are measured in
   public var sceneFrameRate: Double
   {
     get { motionBlur.frameRate }
     set { motionBlur.frameRate = newValue }
   }
 
-  /// While a final render integrates the shutter over `count` samples, 0 when it doesnt.
+  /// how many samples a final render integrates the shutter over, 0 when it does not
   public var motionBlurSubframes: Int
   {
     get { motionBlur.subframes }
@@ -107,25 +112,30 @@ extension Akari.LabFXEngine
 
     runtime.stageBufferSize(.motionTiles8, width: Int32((width + 7) / 8), height: Int32((height + 7) / 8))
     runtime.stageBufferSize(.dofTiles8, width: Int32((width + 7) / 8), height: Int32((height + 7) / 8))
+
     for buffer in [.dofTiles, .dofNeighbors] as [Buffer]
     {
       runtime.stageBufferSize(buffer, width: Int32((width + 47) / 48), height: Int32((height + 47) / 48))
     }
   }
 
-  /// Turns motion blur on for this frame, over the camera's shutter interval.
+  /// turns motion blur on for this frame over the camera's shutter interval
   public func setMotionBlur()
   {
     let shutter = motionBlur.cameraOverride ?? motionBlur.shutter
     let interval = shutter.y - shutter.x
     guard interval > 0 else { return }
+
     let now = ProcessInfo.processInfo.systemUptime
     let elapsed = now - motionBlur.lastFrame
     motionBlur.lastFrame = now
-    // a viewport frame slower than the scene's moves further than one frame does, the shutter stays a scene frame's.
+
+    // a viewport frame slower than the scene moves further than one scene frame, the shutter stays one scene frame long
     let frames = elapsed > 0 && elapsed < 1 ? max(elapsed * motionBlur.frameRate, 1) : 1
-    // each sample reaches a little past its slice, so neighbors overlap rather than leave seams.
+
+    // each sample reaches a little past its slice so neighbors overlap instead of leaving seams
     let scale = motionBlur.subframes > 0 ? 1.35 : interval / Float(frames)
+
     setVector(.motionBlur, SIMD4(scale, Float(Self.motionBlurRadius), Float(motionBlur.tiles.x), Float(motionBlur.tiles.y)))
     setVector(.motionSize, SIMD4(Float(sizes.target.width), Float(sizes.target.height), 1 / Float(max(sizes.target.width, 1)), 1 / Float(max(sizes.target.height, 1))))
     motionBlur.thisFrame = true

@@ -57,9 +57,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 class HdSceneDelegate;
 class HdAkariScene;
 
-/// Publishes `id` as a light probe if it has an authored `primvars:akari:lightProbe`,
-/// which causes it to be dropped from the drawn meshes and this returns true.
-/// `points` are its object space points, null keeps the bounds already stored.
+/// publishes `id` as a light probe when it authors a light probe primvar, then drops it from the drawn meshes and returns true
 bool HdAkariSyncLightProbe(HdSceneDelegate *sceneDelegate,
                            SdfPath const &id,
                            HdAkariScene *scene,

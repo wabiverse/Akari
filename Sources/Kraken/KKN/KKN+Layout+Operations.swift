@@ -54,14 +54,15 @@ import class SwiftCrossUI.Published
 
 extension Kraken.Layout
 {
-  func add(_ kind: Kraken.AddKind)
+  func add(_ kind: Kraken.AddKind, options: Kraken.AddOptions = .standard, under parent: String? = nil)
   {
     if mode == .edit { exitEdit() }
     checkpoint()
     let at = [cursor.x, cursor.y, cursor.z]
     onStage
     { [self] stage in
-      let path = Kraken.SceneEdit.add(stage, kind, at: SIMD3(at[0], at[1], at[2]))
+      let path = Kraken.SceneEdit.add(stage, kind, at: SIMD3(at[0], at[1], at[2]), options: options, under: parent)
+
       DispatchQueue.main.async
       { [weak self] in
         guard let self, !path.isEmpty else { return }
@@ -74,9 +75,11 @@ extension Kraken.Layout
   func deleteSelected()
   {
     guard !selection.isEmpty else { return }
+
     checkpoint()
     let paths = selection
     onStage { stage in for path in paths { Kraken.SceneEdit.remove(stage, path) } }
+
     status = "Deleted \(paths.count) object\(paths.count == 1 ? "" : "s")"
     select([])
     primsChanged()
@@ -85,6 +88,7 @@ extension Kraken.Layout
   func duplicateSelected(_ then: @escaping @MainActor @Sendable () -> Void)
   {
     guard !selection.isEmpty else { return }
+
     checkpoint()
     let paths = selection
     let time = hydra.currentTimeCode
@@ -93,6 +97,7 @@ extension Kraken.Layout
       let copies = paths.map { Kraken.SceneEdit.duplicate(stage, $0) }.filter { !$0.isEmpty }
       var placements: [String: Placement] = [:]
       for copy in copies { placements[copy] = Self.placement(stage, copy, time) }
+
       DispatchQueue.main.async
       { [weak self] in
         guard let self else { return }
@@ -104,14 +109,15 @@ extension Kraken.Layout
     }
   }
 
-
   func hideSelected()
   {
     guard !selection.isEmpty else { return }
+
     checkpoint()
     let paths = selection
     hidden += paths
     onStage { stage in for path in paths { Kraken.SceneEdit.setHidden(stage, path, true) } }
+
     select([])
     primsChanged()
   }
@@ -119,18 +125,21 @@ extension Kraken.Layout
   func unhideAll()
   {
     guard !hidden.isEmpty else { return }
+
     checkpoint()
     let paths = hidden
     hidden = []
     onStage { stage in for path in paths { Kraken.SceneEdit.setHidden(stage, path, false) } }
+
     select(paths)
     primsChanged()
   }
 
-  /// Writes new local transforms, `commit` marks the end of a drag.
+  /// writes new local transforms, only the latest of a drag's writes reaches the stage
   func setLocals(_ locals: [String: simd_double4x4])
   {
     for (path, local) in locals { placements[path]?.local = local }
+
     let arrays = locals.mapValues(Self.array)
     transformWriter.submit(hydra)
     { stage in
@@ -138,7 +147,7 @@ extension Kraken.Layout
     }
   }
 
-  /// A light's size, rect height and cone angle (degrees), as its handles drag them.
+  /// sets a light's size, rect height and cone angle in degrees as its handles drag them
   func setLight(_ path: String, size: Double, size2: Double, angle: Double)
   {
     if let i = widgets.firstIndex(where: { $0.path == path })
@@ -159,6 +168,7 @@ extension Kraken.Layout
   func clear(_ what: Clear)
   {
     guard !selection.isEmpty else { return }
+
     checkpoint()
     var locals: [String: simd_double4x4] = [:]
     for path in selection
@@ -184,11 +194,14 @@ extension Kraken.Layout
     var x = SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z)
     var y = SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z)
     var z = SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z)
+
     var s = SIMD3(simd_length(x), simd_length(y), simd_length(z))
     if simd_dot(simd_cross(x, y), z) < 0 { s.x = -s.x }
+
     x /= s.x == 0 ? 1 : s.x
     y /= s.y == 0 ? 1 : s.y
     z /= s.z == 0 ? 1 : s.z
+
     let r = simd_quatd(simd_double3x3(columns: (x, y, z)))
     return (t, r, s)
   }
@@ -199,7 +212,7 @@ extension Kraken.Layout
     return simd_double4x4(columns: (SIMD4(m.columns.0, 0), SIMD4(m.columns.1, 0), SIMD4(m.columns.2, 0), SIMD4(t, 1)))
   }
 
-  /// The selection's middle in the world, its origins in object mode, its verts in edit mode.
+  /// the selection's middle in the world, from its origins in object mode or its verts in edit mode
   var pivot: SIMD3<Double>?
   {
     if mode == .edit

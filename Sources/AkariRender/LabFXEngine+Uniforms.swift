@@ -58,10 +58,11 @@ extension Akari.LabFXEngine
     runtime.setUniform(uniform, value)
   }
 
-  /// Skips texture names LabGL hasn't uploaded yet.
+  /// skips texture names labgl has not uploaded yet
   func setSampler(_ uniform: Uniform, _ texture: GLuint)
   {
     guard texture != 0 else { return }
+
     var texture = texture
     runtime.setUniform(uniform, type: GL_SAMPLER_2D, data: &texture)
   }
@@ -76,7 +77,7 @@ extension Akari.LabFXEngine
     runtime.setUniform(uniform, matrix)
   }
 
-  /// Toggles a set of graph passes on/off.
+  /// turns a set of graph passes on or off
   func setPasses(_ passes: [Pass], active: Bool)
   {
     for pass in passes

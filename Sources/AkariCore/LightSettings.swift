@@ -40,16 +40,18 @@
 
 import Foundation
 
-/// Scene light settings.
+/// scene light settings.
 public struct LightSettings: Sendable
 {
-  /// Sun height, for day/night approximation.
+  /// sun height, for the day and night approximation
   public var sunHeight: Float = 0.6
-  /// Angular diameter of the sun disk in radians.
+  /// angular diameter of the sun disk in radians.
   public var sunAngle: Float = 4 * .pi / 180
-  /// Sun Height and Sun Angle replace the stage's own dome and sun, otherwise they light it as authored.
+  /// sun height and sun angle replace the stage's own dome and sun, otherwise they light it as authored.
   public var overridesStageSun = false
-  /// Shadow atlas configuration.
+  /// whether the procedural sky and its sun light the scene, off a flat grey world stands in and stage lights still light as authored
+  public var showsSky = true
+  /// shadow atlas configuration.
   public var shadow = ShadowSettings()
 
   public init()
@@ -61,10 +63,7 @@ public struct LightSettings: Sendable
     self.shadow = shadow
   }
 
-  /// World space direction toward the dominant celestial body, swinging
-  /// from the sun to the moon across dusk. The deferred shader reads this
-  /// as a uniform, and the shadow cascades are fitted to it, so both stay
-  /// on the same light no matter how `sunHeight` is driven.
+  /// the world direction toward the sun or the moon across dusk, the shading and the shadow cascades both follow it
   public var sunDirection: SIMD3<Float>
   {
     let height = Akari.Math.saturate(abs(sunHeight) + 0.01)

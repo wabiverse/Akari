@@ -39,37 +39,54 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
+import Foundation
 import HdAkari
 import LabGL
 import simd
 
 public extension Akari.LabFXEngine
 {
-  /// What the light probes bake from besides the scene.
+  /// what the light probes bake from besides the scene
   struct Probes
   {
     var overrides: [Akari.LightProbes.Override] = []
     var overrideRevision: UInt64 = .max
-    /// Probe identity without the transform, keys the probe layout bake.
+
+    /// probe identity without the transform, used as the key for the probe layout bake
     var structuralRevision: UInt64 = 0
-    /// The material, color and emissive atlases the probe capture samples.
+
+    /// the material, color and emissive atlases the probe capture samples
     var materials: (material: GLuint, color: GLuint, emissive: GLuint, constants: GLuint) = (0, 0, 0, 0)
+
+    /// how many cube faces the probe capture draws per frame
+    var captureViews: Int = 24
+
+    /// the automatic volume last baked, kept while the scene still fits inside it
+    var automaticBox: (min: SIMD3<Float>, max: SIMD3<Float>)?
   }
 
-  /// Advances the light probe bake and binds the probes for the deferred resolve.
+  /// advances the light probe bake and binds the probes for the deferred resolve
   func updateLightProbes(renderParam: Pixar.HdAkariRenderParam, camera: Akari.Camera, settings: RenderSettings)
   {
-    let captures = geometry.shadowCaptures
+    let captures = geometry.probeCaptures
     guard
       !captures.isEmpty,
       let sceneBounds,
       let scene = renderParam.GetScene()
     else { return }
 
+    // a transform in progress keeps the last bake and pauses any bake underway, both catch up once it ends
+    if isEditing
+    {
+      if lightProbes.isReady { bindLightProbes() }
+      return
+    }
+
     let revision = scene.ProbeRevision()
     if revision != probes.overrideRevision
     {
       probes.overrideRevision = revision
+
       let (overrides, structural) = Self.lightProbeOverrides(scene)
       probes.overrides = overrides
       probes.structuralRevision = structural
@@ -77,20 +94,39 @@ public extension Akari.LabFXEngine
 
     var overrides = probes.overrides
     var structural = probes.structuralRevision
-    if overrides.isEmpty, let volume = landscapeProbeVolume(camera: camera, sceneBounds: sceneBounds)
+    var automatic: [Akari.LightProbes.Override] = []
+    if overrides.isEmpty, let volume = automaticProbeVolume(camera: camera, sceneBounds: sceneBounds)
     {
-      overrides = [volume]
-      for bits in [volume.min, volume.max].flatMap({ [$0.x, $0.y, $0.z] }).map({ UInt64($0.bitPattern) })
+      automatic.append(volume)
+    }
+
+    automatic += automaticGlassProbes(besides: overrides.filter(\.isSphere).count)
+    for probe in automatic
+    {
+      structural = (structural ^ (probe.isSphere ? 1 : 0)) &* 0x100_0000_01B3
+      for bits in [probe.min, probe.max].flatMap({ [$0.x, $0.y, $0.z] }).map({ UInt64($0.bitPattern) })
       {
         structural = (structural ^ bits) &* 0x100_0000_01B3
       }
     }
-    // no authored probes in view, the sky lights it, and the last ones stay baked for when they're back.
+    overrides += automatic
+
+    // with no probes in view the sky lights the scene and the last bake stays for when they come back
     lightProbes.inView = !overrides.isEmpty
     guard lightProbes.inView else { return }
-    // playback keeps going while they bake, a quarter as many views a frame.
+
     var probeSettings = settings.probes
-    if isPlaying { probeSettings.captureViewsPerFrame = max(probeSettings.captureViewsPerFrame / 4, 6) }
+    let frameBudget = 1 / Double(max(settings.targetFrameRate, 1))
+    let gpuTime = labgl.lastFrameGPUTime()
+    let hasRoom = gpuTime > 0 && gpuTime < frameBudget * 0.6
+    if loadsInBackground
+    {
+      let limit = max(isPlaying ? probeSettings.captureViewsPerFrame / 4 : probeSettings.captureViewsPerFrame, 4)
+      probeSettings.captureViewsPerFrame = adaptCaptureViews(overBudget: gpuTime > frameBudget * 0.9, hasRoom: hasRoom, limit: limit)
+    }
+
+    // sun directions the animation needs are only baked ahead while the view is idle
+    lightProbes.bakesAhead = !loadsInBackground || (!isPlaying && hasRoom)
 
     var lighting = Akari.LightProbes.Lighting(
       sunDirection: worldSpaceSunDirection(settings.light),
@@ -98,10 +134,8 @@ public extension Akari.LabFXEngine
       zUp: stageIsZUp,
       iblEnabled: settings.features.contains(.imageBasedLighting),
       sunColor: sunColor(iblEnabled: settings.features.contains(.imageBasedLighting)),
-      environment: environment.revision,
-      // a light that moves every frame would relight every probe every frame,
-      // so intensity is kept to an eighth of a stop so flicker doesn't relight
-      // them either.
+      environment: environment.bakedRevision,
+      // intensity rounded to an eighth of a stop so flicker doesn't relight every probe
       lights: pointLights.shadowed.filter(\.probes).flatMap
       {
         [SIMD4($0.position, exp2((log2(max($0.intensity, 1e-6)) * 8).rounded() / 8)), SIMD4($0.color, $0.radius)]
@@ -118,8 +152,22 @@ public extension Akari.LabFXEngine
                                    environment: runtime.texture(.envCube, named: .envCube),
                                    lighting: lighting,
                                    settings: probeSettings)
-    guard ready else { return }
 
+    // until the first bake finishes the resolve lights the scene by the sky alone
+    guard ready
+    else
+    {
+      setVector(.probeGridMin, SIMD4(lightProbes.layout.gridMin, 0))
+      setVector(.probeGridMax, SIMD4(lightProbes.layout.gridMax, 0))
+      return
+    }
+
+    bindLightProbes()
+  }
+
+  /// points the deferred resolve at the baked probes
+  private func bindLightProbes()
+  {
     let layout = lightProbes.layout
     setSampler(.probeVolume, lightProbes.volumeSH)
     setSampler(.probeSphere, lightProbes.sphereAtlas)
@@ -129,38 +177,106 @@ public extension Akari.LabFXEngine
     setVector(.probeGridSize, SIMD4(SIMD3<Float>(layout.dims), layout.normalBias))
   }
 
-  /// A "landscape" (a kilometer or more across) with no probes of its own gets, in a final render, a volume around the view,
-  /// so geometry casts shadows on the meshes under it, anything beyond that geometry gets lit by the sky.
-  func landscapeProbeVolume(camera: Akari.Camera, sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>)) -> Akari.LightProbes.Override?
+  /// halves the probe faces drawn per frame when a frame runs long and grows them back while there is room
+  private func adaptCaptureViews(overBudget: Bool, hasRoom: Bool, limit: Int) -> Int
   {
+    if overBudget
+    {
+      probes.captureViews = max(probes.captureViews / 2, 4)
+    }
+    else if hasRoom
+    {
+      probes.captureViews += max(probes.captureViews / 4, 1)
+    }
+
+    probes.captureViews = min(probes.captureViews, limit)
+    return probes.captureViews
+  }
+
+  /// a sphere probe at the middle of each glass object, for what the view through the glass can't see, the glass itself left out
+  func automaticGlassProbes(besides authored: Int) -> [Akari.LightProbes.Override]
+  {
+    let room = Akari.LightProbes.maxSphereProbes - authored
+    guard room > 0 else { return [] }
+
+    return geometry.deformer.glassBounds.prefix(room).map
+    { bounds in
+      // snapped to a sixteenth of the glass's size so glass that drifts a little keeps its probe instead of rebaking
+      let extent = bounds.max - bounds.min
+      let snap = max(extent.max() / 16, 1e-3)
+      let center = ((bounds.min + bounds.max) * 0.5 / snap).rounded(.toNearestOrAwayFromZero) * snap
+      let radius = (extent.max() * 0.5 / snap).rounded(.up) * snap
+      return Akari.LightProbes.Override(min: center - radius, max: center + radius, isSphere: true)
+    }
+  }
+
+  /// a probe volume for scenes without their own, covering the scene or following the view on large landscapes
+  func automaticProbeVolume(camera: Akari.Camera, sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>)) -> Akari.LightProbes.Override?
+  {
+    guard ProcessInfo.processInfo.environment["AKARI_LANDSCAPE_PROBES"] != "0" else { return nil }
+
+    // only still geometry places the volume so animation and edits do not relayout and rebake every probe
+    let still = probeBounds()
+    if still == nil, let held = probes.automaticBox
+    {
+      return Akari.LightProbes.Override(min: held.min, max: held.max, isSphere: false)
+    }
+
+    let sceneBounds = still ?? sceneBounds
     let extent = sceneBounds.max - sceneBounds.min
-    guard
-      !loadsInBackground,
-      ProcessInfo.processInfo.environment["AKARI_LANDSCAPE_PROBES"] != "0",
-      (extent * extent).sum().squareRoot() >= camera.world(meters: 1000)
-    else { return nil }
+    guard (extent * extent).sum().squareRoot() >= camera.world(meters: 1000)
+    else
+    {
+      let pad = Akari.Math.max(extent * 0.02, SIMD3(repeating: camera.world(meters: 0.05)))
+      let lo = sceneBounds.min - pad, hi = sceneBounds.max + pad
+
+      // the baked box stays while it still holds the scene and has not become far too big for it
+      if let held = probes.automaticBox, all(held.min .<= lo), all(held.max .>= hi),
+         all((hi - lo) .>= (held.max - held.min) * 0.75)
+      {
+        return Akari.LightProbes.Override(min: held.min, max: held.max, isSphere: false)
+      }
+
+      probes.automaticBox = (lo, hi)
+      return Akari.LightProbes.Override(min: lo, max: hi, isSphere: false)
+    }
+
+    guard !loadsInBackground else { return nil }
+
     let up = stageIsZUp ? 2 : 1
     let half = camera.world(meters: 80), snap = half / 2
+
     let inverseView = camera.view.inverse()
     let eye = inverseView.transform(.zero)
     var ahead = inverseView.transform(SIMD3(0, 0, -1)) - eye
     ahead[up] = 0
+
     let length = (ahead * ahead).sum().squareRoot()
     var center = length > 1e-4 ? eye + ahead / length * half * 0.8 : eye
     center = (center / snap).rounded(.toNearestOrAwayFromZero) * snap
+
     var lo = center - half, hi = center + half
     lo[up] = ((eye[up] - camera.world(meters: 20)) / snap).rounded(.down) * snap
     hi[up] = ((eye[up] + camera.world(meters: 60)) / snap).rounded(.up) * snap
     lo = pointwiseMax(lo, sceneBounds.min)
     hi = pointwiseMin(hi, sceneBounds.max)
     guard all(hi - lo .> camera.world(meters: 1)) else { return nil }
+
     var resolution = SIMD3<Int32>(repeating: 13)
     resolution[up] = 6
     return Akari.LightProbes.Override(min: lo, max: hi, isSphere: false, resolution: resolution)
   }
 
-  /// The authored probes as world space boxes, with a revision for the
-  /// probe identities and local bounds that ignores the transform.
+  /// the bounds of the static and instanced geometry, the part of the scene that holds still
+  private func probeBounds() -> (min: SIMD3<Float>, max: SIMD3<Float>)?
+  {
+    [geometry.staticBatch, geometry.instancedBatch].compactMap(\.bounds).reduce(nil)
+    { bounds, next in
+      bounds.map { (min: pointwiseMin($0.min, next.min), max: pointwiseMax($0.max, next.max)) } ?? next
+    }
+  }
+
+  /// the authored probes as world boxes and a revision over their ids and local bounds that ignores the transform
   private static func lightProbeOverrides(_ scene: Pixar.HdAkariScene) -> (overrides: [Akari.LightProbes.Override], structural: UInt64)
   {
     let probes = scene.ProbeSnapshot()
@@ -179,9 +295,9 @@ public extension Akari.LabFXEngine
         structural = (structural ^ bits) &* 0x100_0000_01B3
       }
 
-      let mat = Pixar.GfMatrix4f(probe.transform)
-      guard let mPtr = mat.GetArray() else { return nil }
-      let world = Akari.Matrix4(Array(UnsafeBufferPointer(start: mPtr, count: 16)))
+      let matrix = Pixar.GfMatrix4f(probe.transform)
+      guard let elements = matrix.GetArray() else { return nil }
+      let world = Akari.Matrix4(Array(UnsafeBufferPointer(start: elements, count: 16)))
 
       let lo = SIMD3(probe.minX, probe.minY, probe.minZ)
       let hi = SIMD3(probe.maxX, probe.maxY, probe.maxZ)
@@ -189,12 +305,12 @@ public extension Akari.LabFXEngine
       var boxMax = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
       for corner in 0 ..< 8
       {
-        let p = SIMD3(corner & 1 == 0 ? lo.x : hi.x,
-                      corner & 2 == 0 ? lo.y : hi.y,
-                      corner & 4 == 0 ? lo.z : hi.z)
-        let w = world.transform(p)
-        boxMin = Akari.Math.min(boxMin, w)
-        boxMax = Akari.Math.max(boxMax, w)
+        let local = SIMD3(corner & 1 == 0 ? lo.x : hi.x,
+                          corner & 2 == 0 ? lo.y : hi.y,
+                          corner & 4 == 0 ? lo.z : hi.z)
+        let point = world.transform(local)
+        boxMin = Akari.Math.min(boxMin, point)
+        boxMax = Akari.Math.max(boxMax, point)
       }
 
       return Akari.LightProbes.Override(min: boxMin,

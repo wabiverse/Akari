@@ -44,7 +44,7 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// The rendered frame, over the viewport, with the job's progress.
+  /// the rendered frame, over the viewport, with the job's progress.
   @MainActor
   struct RenderResult: View
   {
@@ -126,7 +126,7 @@ extension Kraken
       .background(Properties.popup)
     }
 
-    /// "Frame 120 (45/2843) | Sample 64/64 | Time 00:42.18 | Remaining 1:10:03.00"
+    /// the render progress line, frame, tile, sample, time taken and time remaining
     static func status(_ p: Akari.FinalRender.Progress) -> String
     {
       var parts = ["Frame \(p.frame)" + (p.frameCount > 1 ? " (\(p.frameNumber)/\(p.frameCount))" : "")]
@@ -175,7 +175,7 @@ extension Kraken
     }
   }
 
-  /// A push button styled like the properties editor's fields.
+  /// a push button styled like the properties editor's fields.
   @MainActor
   struct PropertiesButton: View
   {

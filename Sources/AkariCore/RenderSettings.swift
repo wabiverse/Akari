@@ -38,18 +38,16 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-/// Coarse quality tier. Presets pick sensible feature sets
-/// and internal resolutions, individual features can still
-/// be toggled afterward.
+/// a coarse quality tier, presets pick feature sets and internal resolutions and features can still be toggled after
 public enum RenderQuality: String, Sendable, CaseIterable
 {
-  /// Mobile, IBL + shadows + TAA.
+  /// mobile, ibl, shadows and taa
   case low
-  /// Balances quality with performance.
+  /// balances quality with performance.
   case medium
-  /// Full screen space stack at native resolution.
+  /// full screen space stack at native resolution.
   case high
-  /// Everything, including realtime ray tracing.
+  /// everything, including realtime ray tracing.
   case cinematic
 
   public init?(_ text: some StringProtocol)
@@ -58,16 +56,16 @@ public enum RenderQuality: String, Sendable, CaseIterable
   }
 }
 
-/// Brings the scene from its render resolution up to the target's.
+/// brings the scene from its render resolution up to the target's.
 public enum Upscaler: String, Sendable, CaseIterable
 {
-  /// TAA resolve, or a bilinear stretch with TAA off.
+  /// taa resolve, or a bilinear stretch with taa off.
   case taaResolve
-  /// MetalFX temporal upscaling with TAA on, spatial with it off.
+  /// metalfx temporal upscaling with taa on, spatial with it off
   case metalFX
 }
 
-/// How the viewport draws the scene, four shading modes.
+/// how the viewport draws the scene, four shading modes.
 public enum ViewportShading: Int, Sendable, CaseIterable
 {
   case wireframe
@@ -75,7 +73,7 @@ public enum ViewportShading: Int, Sendable, CaseIterable
   case materialPreview
   case rendered
 
-  /// The features a mode keeps of the ones turned on.
+  /// the features a mode keeps of the ones turned on.
   public var features: RenderFeatures
   {
     switch self
@@ -87,49 +85,59 @@ public enum ViewportShading: Int, Sendable, CaseIterable
   }
 }
 
-/// The complete description of how Akari should render a frame.
+/// the complete description of how akari should render a frame.
 public struct RenderSettings: Sendable
 {
-  /// Quality tier the feature set was derived from.
+  /// quality tier the feature set was derived from.
   public var quality: RenderQuality = .medium
-  /// The active lighting/shading/post features.
+  /// the lighting, shading and post features turned on
   public var features: RenderFeatures = RenderSettings.features(for: .medium)
-  /// Scene exposure + display view transform (AgX by default).
+  /// scene exposure and the display view transform, agx by default
   public var color: Akari.Color.Pipeline = .init()
-  /// Scene light settings.
+  /// scene light settings.
   public var light: LightSettings = .init()
-  /// Scene volume settings.
+  /// scene volume settings.
   public var volume: VolumeSettings = .init()
-  /// Screen space reflection settings.
+  /// screen space reflection settings.
   public var reflection: ReflectionSettings = .init()
-  /// Bloom settings.
+  /// bloom settings.
   public var bloom: BloomSettings = .init()
-  /// Depth of field settings.
+  /// depth of field settings.
   public var depthOfField: DepthOfFieldSettings = .init()
-  /// Light probe settings.
+  /// light probe settings.
   public var probes: LightProbeSettings = .init()
-  /// Frame rate the interactive pipeline budgets toward.
+  /// frame rate the interactive pipeline budgets toward.
   public var targetFrameRate: Int = 60
-  /// Viewport sample count (defaults to 16).
+  /// viewport samples, 16 by default
   public var samples: Int = 16
-  /// Final render sample count (defaults 64).
+  /// final render samples, 64 by default
   public var renderSamples: Int = 64
-  /// Maximum cloud ray-march steps in the interactive viewport.
+  /// how far subdivision surfaces refine in the viewport.
+  public var subdivision: Int = 1
+  /// how far subdivision surfaces refine in final renders.
+  public var renderSubdivision: Int = 2
+
+  /// the hydra complexity that refines subdivision surfaces to a level from 0 to 8.
+  public static func complexity(subdivision level: Int) -> Float
+  {
+    1 + Float(min(max(level, 0), 8)) / 10
+  }
+  /// maximum cloud ray-march steps in the interactive viewport.
   public var planetCloudMarchSteps: Int = 32
-  /// Maximum cloud ray-march steps in final renders.
+  /// maximum cloud ray-march steps in final renders.
   public var renderPlanetCloudMarchSteps: Int = 32
-  /// GPU backend (`Metal`, `OpenGL`, `Vulkan`).
+  /// the gpu backend, metal, opengl or vulkan
   public var backend: Akari.GPU.Backend = .preferredForCurrentPlatform
-  /// Upscales resolution with the selected technique.
+  /// upscales resolution with the selected technique.
   public var upscaler: Upscaler = .metalFX
-  /// Resolution multiplier and downsamples, 1 is off.
+  /// resolution multiplier and downsamples, 1 is off.
   public var supersampling: Float = 1
-  /// The viewport's shading mode, a final render is always `.rendered`.
+  /// the viewport's shading mode, a final render is always `.rendered`.
   public var shading: ViewportShading = .rendered
-  /// Draws the viewport's floor grid and axes.
+  /// draws the viewport's floor grid and axes.
   public var overlays = false
 
-  /// The supersampling factors, per axis: 1.78x, 2.25x and 4x the pixels.
+  /// the supersampling factors, per axis: 1.78x, 2.25x and 4x the pixels.
   public static let supersamplingSteps: [Float] = [1, 4 / 3, 1.5, 2]
 
   /// `factor` snapped to the nearest of `supersamplingSteps`.
@@ -170,7 +178,7 @@ public struct RenderSettings: Sendable
     self.backend = backend
   }
 
-  /// Default feature set for a quality tier.
+  /// default feature set for a quality tier.
   public static func features(for quality: RenderQuality) -> RenderFeatures
   {
     switch quality
@@ -189,7 +197,7 @@ public struct RenderSettings: Sendable
 
 extension RenderQuality: CustomStringConvertible
 {
-  /// Human label for UI (pickers, HUD).
+  /// the label pickers and the hud show
   public var description: String
   {
     switch self
@@ -204,7 +212,7 @@ extension RenderQuality: CustomStringConvertible
 
 extension Upscaler: CustomStringConvertible
 {
-  /// Human label for UI (pickers, HUD).
+  /// the label pickers and the hud show
   public var description: String
   {
     switch self

@@ -38,20 +38,20 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
-/// Bloom over the brightest highlights.
+/// bloom over the brightest highlights.
 public struct BloomSettings: Sendable
 {
-  /// Highlights brighter than this bloom.
+  /// highlights brighter than this bloom.
   public var threshold: Float = 0
-  /// How softly highlights below the threshold fade in.
+  /// how softly highlights below the threshold fade in.
   public var smoothness: Float = 0
-  /// Highlights are clamped to this before they bloom, 0 for no limit.
+  /// highlights are clamped to this before they bloom, 0 for no limit.
   public var maximum: Float = 0
-  /// Scales the camera's `akari:bloom`.
+  /// scales the camera's `akari:bloom`.
   public var strength: Float = 1
   public var saturation: Float = 1
   public var tint: SIMD3<Float> = .one
-  /// Added to the camera's `akari:streak` and `akari:flare`.
+  /// added to the camera's `akari:streak` and `akari:flare`.
   public var streaks: Float = 0
   public var ghosts: Float = 0
 

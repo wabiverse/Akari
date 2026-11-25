@@ -43,18 +43,24 @@ import simd
 
 extension Kraken
 {
-  /// What the "add mesh" menu adds.
+  /// what the add mesh menu adds
   enum AddKind: String, CaseIterable
   {
-    case plane, cube, circle, uvsphere, icosphere, cylinder, cone, torus, grid, point, sun, spot, area, camera, empty
+    case plane, cube, circle, uvsphere, icosphere, cylinder, cone, torus, grid, point, sun, spot, area, tube, dome, camera, empty
 
     static let meshes: [AddKind] = [.plane, .cube, .circle, .uvsphere, .icosphere, .cylinder, .cone, .torus, .grid]
-    static let lights: [AddKind] = [.point, .sun, .spot, .area]
+    static let lights: [AddKind] = [.point, .sun, .spot, .area, .tube, .dome]
 
-    /// The name the added prim starts from.
+    /// the name the added prim starts from.
     var name: String
     {
-      self == .uvsphere ? "Sphere" : rawValue.capitalized
+      switch self
+      {
+        case .uvsphere: "Sphere"
+        case .tube: "CylinderLight"
+        case .dome: "DomeLight"
+        default: rawValue.capitalized
+      }
     }
 
     var label: String
@@ -63,20 +69,50 @@ extension Kraken
       {
         case .uvsphere: "UV Sphere"
         case .icosphere: "Ico Sphere"
+        case .tube: "Cylinder"
+        case .dome: "Dome"
         default: name
       }
     }
   }
 
-  /// Add > Mesh primitives, two units across about the origin, z up, faces wound outward.
+  /// add mesh options with sizes in meters
+  struct AddOptions: Equatable, Sendable
+  {
+    /// circles, cylinders, cones and spheres
+    var radius: Float = 1
+    /// cylinders and cones along z
+    var depth: Float = 2
+    /// cubes, planes and grids edge to edge
+    var size: Float = 2
+    /// around circles, cylinders, cones and uv spheres
+    var vertices = 32
+    /// down a uv sphere
+    var rings = 16
+    /// ico sphere subdivisions
+    var subdivisions = 2
+    /// grid cuts
+    var cuts = 10
+    /// torus ring and tube radii and their segments
+    var majorRadius: Float = 1
+    var minorRadius: Float = 0.25
+    var majorSegments = 48
+    var minorSegments = 12
+
+    static let standard = AddOptions()
+  }
+
+  /// add mesh primitives about the origin, z up, faces wound outward
   struct PrimitiveShape
   {
     var points: [SIMD3<Float>] = []
     var faces: [[Int]] = []
 
-    static func named(_ kind: AddKind) -> PrimitiveShape
+    static func named(_ kind: AddKind, _ options: AddOptions = .standard) -> PrimitiveShape
     {
       var s = PrimitiveShape()
+      let o = options
+      let n = max(o.vertices, 3)
       let origin: (SIMD3<Float>) -> SIMD3<Float> = { _ in .zero }
       let below: (SIMD3<Float>) -> SIMD3<Float> = { SIMD3($0.x, $0.y, $0.z - 1) }
       switch kind
@@ -85,17 +121,17 @@ extension Kraken
           s = grid(1, 2)
           s.orient(below)
         case .grid:
-          s = grid(10, 2)
+          s = grid(max(o.cuts, 1), 2)
           s.orient(below)
         case .circle:
-          s.faces.append(ngon(s.ring(32, 1, 0), 32))
+          s.faces.append(ngon(s.ring(n, 1, 0), n))
           s.orient(below)
         case .cube:
           s.points = (0 ..< 8).map { SIMD3($0 & 1 != 0 ? 1 : -1, $0 & 2 != 0 ? 1 : -1, $0 & 4 != 0 ? 1 : -1) }
           s.faces = [[4, 5, 7, 6], [0, 2, 3, 1], [1, 3, 7, 5], [2, 0, 4, 6], [3, 2, 6, 7], [0, 1, 5, 4]]
           s.orient(origin)
         case .uvsphere:
-          let segments = 32, rings = 16
+          let segments = n, rings = max(o.rings, 3)
           s.points.append(SIMD3(0, 0, 1))
           for i in 1 ..< rings
           {
@@ -119,10 +155,9 @@ extension Kraken
 
           s.orient(origin)
         case .icosphere:
-          s = icosphere(2)
+          s = icosphere(max(o.subdivisions, 1))
           s.orient(origin)
         case .cylinder, .cone:
-          let n = 32
           let base = s.ring(n, 1, -1)
           s.faces.append(ngon(base, n))
           if kind == .cylinder
@@ -140,15 +175,15 @@ extension Kraken
 
           s.orient(origin)
         case .torus:
-          let major = 48, minor = 12
+          let major = max(o.majorSegments, 3), minor = max(o.minorSegments, 3)
           for i in 0 ..< major
           {
             let phi = 2 * Float.pi * Float(i) / Float(major)
             for j in 0 ..< minor
             {
               let theta = 2 * Float.pi * Float(j) / Float(minor)
-              let r = 1 + 0.25 * cos(theta)
-              s.points.append(SIMD3(r * cos(phi), r * sin(phi), 0.25 * sin(theta)))
+              let r = o.majorRadius + o.minorRadius * cos(theta)
+              s.points.append(SIMD3(r * cos(phi), r * sin(phi), o.minorRadius * sin(theta)))
             }
           }
 
@@ -170,10 +205,21 @@ extension Kraken
           break
       }
 
+      // the shapes are made two units across then sized to the options
+      let scale: SIMD3<Float>
+      switch kind
+      {
+        case .plane, .grid, .cube: scale = SIMD3(repeating: o.size / 2)
+        case .circle, .uvsphere, .icosphere: scale = SIMD3(repeating: o.radius)
+        case .cylinder, .cone: scale = SIMD3(o.radius, o.radius, o.depth / 2)
+        default: scale = SIMD3(repeating: 1)
+      }
+
+      if scale != SIMD3(repeating: 1) { s.points = s.points.map { $0 * scale } }
       return s
     }
 
-    /// A polygon's area weighted normal.
+    /// a polygon's area weighted normal.
     static func newell(_ points: [SIMD3<Float>], _ face: [Int]) -> SIMD3<Float>
     {
       var n = SIMD3<Float>.zero

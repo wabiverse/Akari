@@ -47,11 +47,11 @@ extension Akari.ShadowAtlas
   {
     case tiles, pagesFree, pagesInfo, pagesCached
     case renderMap, clearArgs, renderRect
-    /// The tiles to render whose static depth is stale too, and their dirty rect per view.
+    /// the tiles to render whose static depth is stale too, and their dirty rect per view.
     case renderMapStatic, clearArgsStatic, renderRectStatic
-    /// Per tilemap depth range, as ordered ints so it can be atomically min/maxed.
+    /// each tilemap's depth range as ordered ints for atomic min and max
     case tilemapsClip
-    /// Per view, its stale tiles and how many of them fit this frame's budget.
+    /// per view, its stale tiles and how many of them fit this frame's budget.
     case dirtyCount, allowance
 
     var usage: GLuint
@@ -65,7 +65,7 @@ extension Akari.ShadowAtlas
       }
     }
 
-    /// Every element is four bytes.
+    /// every element is four bytes.
     var bytes: Int
     {
       4 * count
@@ -87,7 +87,7 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// Everything the CPU rewrites per frame, one set per frame in flight.
+  /// everything the cpu rewrites per frame, one set per frame in flight.
   struct Frame
   {
     var data: GLuint = 0
@@ -102,12 +102,12 @@ extension Akari.ShadowAtlas
   enum FrameBuffer: Akari.GPUBufferName
   {
     case gridShift, levelParams
-    /// Fit order view index -> tilemap slot, for the page table kernel.
+    /// fit order view index -> tilemap slot, for the page table kernel.
     case slotOfView
-    /// Per view, nonzero when this frame's draw rendered it.
+    /// per view, nonzero when this frame's draw rendered it.
     case drawnView
     case clearList, clearListStatic, runViews, runXf, punctualViews, viewXf
-    /// Old and new boxes of the casters that moved, six floats each, and the same for the static captures.
+    /// old and new boxes of the casters that moved, six floats each, and the same for the static captures.
     case movedBoxes, movedStaticBoxes
 
     var usage: GLuint
@@ -120,7 +120,7 @@ extension Akari.ShadowAtlas
       }
     }
 
-    /// Every element is four bytes.
+    /// every element is four bytes.
     var bytes: Int
     {
       4 * count
@@ -144,7 +144,7 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// The capture's per draw bounds and the cull outputs sized to them.
+  /// the capture's per draw bounds and the cull outputs sized to them.
   struct DrawCulling
   {
     var capture: OpaquePointer?
@@ -161,7 +161,7 @@ extension Akari.ShadowAtlas
     }
   }
 
-  /// One world AABB per shadow caster, six floats.
+  /// one world aabb per shadow caster, six floats.
   struct CasterBounds
   {
     var buffer: GLuint = 0
@@ -174,24 +174,25 @@ extension Akari.ShadowAtlas
     var viewports: GLuint = 0
   }
 
-  /// Allocates the atlas and its tables if they don't exist yet.
+  /// allocates the atlas and its tables if they don't exist yet.
   @discardableResult
   public func prepare() -> Bool
   {
     ensureResources()
   }
 
-  /// Starts the tile management kernels and the depth shader compiling in the background.
+  /// starts the tile management kernels and the depth shader compiling in the background.
   func precompileShaders()
   {
     guard depthShader == 0 else { return }
 
     kernels = .precompile()
-    depthShader = gl.precompileShader(name: "akari-shadow-depth",
-                                      vertexGLSL: Self.depthVertexGLSL,
-                                      fragmentGLSL: Self.depthFragmentGLSL,
-                                      vertexMSL: Self.depthMSL,
-                                      fragmentMSL: nil)
+    depthShader = Akari.ShaderSource.shader("akari-shadow-depth", vertexGLSL: Self.depthVertexGLSL,
+                                            fragmentGLSL: Self.depthFragmentGLSL, msl: Self.depthMSL, owner: self)
+    { owner, fresh in
+      defer { owner.depthShader = fresh }
+      return owner.depthShader
+    }
   }
 
   func ensureResources() -> Bool
@@ -268,7 +269,18 @@ extension Akari.ShadowAtlas
     return true
   }
 
-  /// Drops every GPU resource, the next `markPageUsage`/`render` rebuilds them.
+  /// forgets what the shadows were drawn from so the next frame redraws every page for the scene now shown
+  public func forgetScene()
+  {
+    lastSceneRevision = .max
+    casterMotion = CasterMotion()
+    staticMotion = CasterMotion()
+    casterRedraw = .none
+    punctualHistory = PunctualHistory()
+    directionalHistory = DirectionalHistory()
+  }
+
+  /// drops every gpu resource, the next mark or render rebuilds them
   public func release()
   {
     if atlasTarget != 0 { gl.deleteRenderTarget(atlasTarget) }
@@ -322,7 +334,7 @@ extension Akari.ShadowAtlas
     sun.lodBias = 0
   }
 
-  /// Every amplified run `drawViews` replays, direct and indirect.
+  /// every amplified run `drawViews` replays, direct and indirect.
   private func precompileDepthVariants()
   {
     for count in 1 ... Self.maxAmplificationViews

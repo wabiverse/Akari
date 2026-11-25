@@ -1,0 +1,641 @@
+#usda 1.0
+(
+    defaultPrim = "Materials"
+    doc = "The sample material library, one material per prim with its catalog in assetInfo."
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Scope "Materials"
+{
+    def Material "Oak" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Wood"
+            }
+            string name = "Oak"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Oak/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor.connect = </Materials/Oak/Texture.outputs:rgb>
+            float inputs:metallic = 0
+            float inputs:roughness = 0.55
+            token outputs:surface
+        }
+
+        def Shader "Texture"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @./textures/oak.png@
+            token inputs:sourceColorSpace = "sRGB"
+            float2 inputs:st.connect = </Materials/Oak/Reader.outputs:result>
+            token inputs:wrapS = "repeat"
+            token inputs:wrapT = "repeat"
+            float3 outputs:rgb
+        }
+
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+
+    def Material "Walnut" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Wood"
+            }
+            string name = "Walnut"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Walnut/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor.connect = </Materials/Walnut/Texture.outputs:rgb>
+            float inputs:metallic = 0
+            float inputs:roughness = 0.45
+            token outputs:surface
+        }
+
+        def Shader "Texture"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @./textures/walnut.png@
+            token inputs:sourceColorSpace = "sRGB"
+            float2 inputs:st.connect = </Materials/Walnut/Reader.outputs:result>
+            token inputs:wrapS = "repeat"
+            token inputs:wrapT = "repeat"
+            float3 outputs:rgb
+        }
+
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+
+    def Material "Pine" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Wood"
+            }
+            string name = "Pine"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Pine/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor.connect = </Materials/Pine/Texture.outputs:rgb>
+            float inputs:metallic = 0
+            float inputs:roughness = 0.6
+            token outputs:surface
+        }
+
+        def Shader "Texture"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @./textures/pine.png@
+            token inputs:sourceColorSpace = "sRGB"
+            float2 inputs:st.connect = </Materials/Pine/Reader.outputs:result>
+            token inputs:wrapS = "repeat"
+            token inputs:wrapT = "repeat"
+            float3 outputs:rgb
+        }
+
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+
+    def Material "Parquet" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Floor"
+            }
+            string name = "Parquet"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Parquet/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor.connect = </Materials/Parquet/Texture.outputs:rgb>
+            float inputs:metallic = 0
+            float inputs:roughness = 0.4
+            token outputs:surface
+        }
+
+        def Shader "Texture"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @./textures/parquet.png@
+            token inputs:sourceColorSpace = "sRGB"
+            float2 inputs:st.connect = </Materials/Parquet/Reader.outputs:result>
+            token inputs:wrapS = "repeat"
+            token inputs:wrapT = "repeat"
+            float3 outputs:rgb
+        }
+
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+
+    def Material "PaintedTeal" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Wall"
+            }
+            string name = "Painted Teal"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/PaintedTeal/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.05, 0.3, 0.3)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.75
+            token outputs:surface
+        }
+    }
+
+    def Material "PaintedCream" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Wall"
+            }
+            string name = "Painted Cream"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/PaintedCream/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.82, 0.78, 0.68)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.8
+            token outputs:surface
+        }
+    }
+
+    def Material "Plaster" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Wall"
+            }
+            string name = "Plaster"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Plaster/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.7, 0.68, 0.64)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.95
+            token outputs:surface
+        }
+    }
+
+    def Material "Terracotta" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Ceramic"
+            }
+            string name = "Terracotta"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Terracotta/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.62, 0.27, 0.14)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.85
+            token outputs:surface
+        }
+    }
+
+    def Material "Ceramic" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Ceramic"
+            }
+            string name = "Glazed Ceramic"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Ceramic/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.88, 0.88, 0.84)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.12
+            token outputs:surface
+        }
+    }
+
+    def Material "BrushedSteel" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Metal"
+            }
+            string name = "Brushed Steel"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/BrushedSteel/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.72, 0.72, 0.74)
+            float inputs:metallic = 1
+            float inputs:roughness = 0.32
+            token outputs:surface
+        }
+    }
+
+    def Material "Brass" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Metal"
+            }
+            string name = "Brass"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Brass/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.9, 0.7, 0.36)
+            float inputs:metallic = 1
+            float inputs:roughness = 0.25
+            token outputs:surface
+        }
+    }
+
+    def Material "BlackIron" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Metal"
+            }
+            string name = "Black Iron"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/BlackIron/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.06, 0.06, 0.06)
+            float inputs:metallic = 1
+            float inputs:roughness = 0.5
+            token outputs:surface
+        }
+    }
+
+    def Material "Velvet" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Fabric"
+            }
+            string name = "Red Velvet"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Velvet/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.45, 0.05, 0.07)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.95
+            token outputs:surface
+        }
+    }
+
+    def Material "Linen" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Fabric"
+            }
+            string name = "Linen"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Linen/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.78, 0.74, 0.66)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.9
+            token outputs:surface
+        }
+    }
+
+    def Material "Leaf" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Plant"
+            }
+            string name = "Leaf"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Leaf/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.16, 0.36, 0.1)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.6
+            token outputs:surface
+        }
+    }
+
+    def Material "Boards" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Floor"
+            }
+            string name = "Basketweave Boards"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Boards/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor.connect = </Materials/Boards/Texture.outputs:rgb>
+            float inputs:metallic = 0
+            float inputs:roughness = 0.35
+            token outputs:surface
+        }
+
+        def Shader "Texture"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @./textures/boards_basketweave.png@
+            token inputs:sourceColorSpace = "sRGB"
+            float2 inputs:st.connect = </Materials/Boards/Reader.outputs:result>
+            token inputs:wrapS = "repeat"
+            token inputs:wrapT = "repeat"
+            float3 outputs:rgb
+        }
+
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+
+    def Material "Concrete" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Wall"
+            }
+            string name = "Concrete"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Concrete/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor.connect = </Materials/Concrete/Texture.outputs:rgb>
+            float inputs:metallic = 0
+            float inputs:roughness = 0.55
+            token outputs:surface
+        }
+
+        def Shader "Texture"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @./textures/concrete.png@
+            token inputs:sourceColorSpace = "sRGB"
+            float2 inputs:st.connect = </Materials/Concrete/Reader.outputs:result>
+            token inputs:wrapS = "repeat"
+            token inputs:wrapT = "repeat"
+            float3 outputs:rgb
+        }
+
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+
+    def Material "PlasterTeal" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Wall"
+            }
+            string name = "Teal Plaster"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/PlasterTeal/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor.connect = </Materials/PlasterTeal/Texture.outputs:rgb>
+            float inputs:metallic = 0
+            float inputs:roughness = 0.85
+            token outputs:surface
+        }
+
+        def Shader "Texture"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @./textures/plaster_teal.png@
+            token inputs:sourceColorSpace = "sRGB"
+            float2 inputs:st.connect = </Materials/PlasterTeal/Reader.outputs:result>
+            token inputs:wrapS = "repeat"
+            token inputs:wrapT = "repeat"
+            float3 outputs:rgb
+        }
+
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+
+    def Material "DarkWood" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Wood"
+            }
+            string name = "Dark Wood"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/DarkWood/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor.connect = </Materials/DarkWood/Texture.outputs:rgb>
+            float inputs:metallic = 0
+            float inputs:roughness = 0.6
+            token outputs:surface
+        }
+
+        def Shader "Texture"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @./textures/dark_wood.png@
+            token inputs:sourceColorSpace = "sRGB"
+            float2 inputs:st.connect = </Materials/DarkWood/Reader.outputs:result>
+            token inputs:wrapS = "repeat"
+            token inputs:wrapT = "repeat"
+            float3 outputs:rgb
+        }
+
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+
+    def Material "GroundPlate" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Floor"
+            }
+            string name = "Ground Plate"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/GroundPlate/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.042, 0.042, 0.042)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.81
+            token outputs:surface
+        }
+    }
+
+    def Material "WindowWhite" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Paint"
+            }
+            string name = "Window White"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/WindowWhite/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.88, 0.88, 0.85)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.45
+            token outputs:surface
+        }
+    }
+
+    def Material "Glass" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Glass"
+            }
+            string name = "Clear Glass"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/Glass/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (1, 1, 1)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.02
+            float inputs:ior = 1.5
+                float inputs:opacity = 0.05
+            token outputs:surface
+        }
+    }
+
+    def Material "TintedGlass" (
+        assetInfo = {
+            dictionary akari = {
+                string catalog = "Materials/Glass"
+            }
+            string name = "Tinted Glass"
+        }
+    )
+    {
+        token outputs:surface.connect = </Materials/TintedGlass/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.55, 0.85, 0.95)
+            float inputs:metallic = 0
+            float inputs:roughness = 0.02
+            float inputs:ior = 1.5
+                float inputs:opacity = 0.1
+            token outputs:surface
+        }
+    }
+}

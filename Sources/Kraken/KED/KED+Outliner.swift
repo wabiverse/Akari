@@ -50,23 +50,20 @@ import SwiftCrossUI
 
 extension Kraken
 {
-  /// The outliner over the stage's prims: their hierarchy, types and composition, the viewport's
-  /// selection, hiding a prim in the viewport, in the session layer, and deactivating it in the
-  /// department layer.
+  /// the outliner over the stage's prims, their hierarchy, types and composition, with selection, hiding and deactivating
   struct PrimOutliner
   {
     let layout: Kraken.Layout
     static let height: Double = 260
   }
 
-  /// One prim in the outliner's list,
-  /// what a row's icon shows it as.
+  /// what a row's icon shows a prim as
   enum OutlinerKind: Sendable
   {
     case geometry, camera, light, shading, group, other
   }
 
-  /// A composition arc on a row, badged as usdview does.
+  /// a composition arc on a row, badged as usdview does.
   enum OutlinerArc: CaseIterable, Sendable
   {
     case references, payloads, variants, inherits, specializes
@@ -119,7 +116,7 @@ extension Kraken
       return range.next() != nil
     }
 
-    /// The rows under the expanded prims, in order, the pseudo root's children at depth 0.
+    /// the rows under the expanded prims, in order, the pseudo root's children at depth 0.
     nonisolated static func rows(_ stage: UsdStage, expanded: Set<String>) -> [OutlinerRow]
     {
       let time = Pixar.UsdTimeCode.Default()

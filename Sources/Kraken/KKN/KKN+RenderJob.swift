@@ -47,10 +47,10 @@ import class SwiftCrossUI.Published
 
 extension Kraken
 {
-  /// A camera an output can render through.
+  /// a camera an output can render through
   struct CameraChoice: Equatable, CustomStringConvertible
   {
-    /// `nil` is the viewport's own view.
+    /// `nil` is the viewport's own view
     let path: String?
 
     static let viewport = CameraChoice(path: nil)
@@ -61,7 +61,7 @@ extension Kraken
     }
   }
 
-  /// Frame rate menu, a rate is `fps / base`.
+  /// the frame rate menu, where each rate is `fps / base`
   enum FrameRate: Equatable, CaseIterable, CustomStringConvertible
   {
     case fps23_98, fps24, fps25, fps29_97, fps30, fps50, fps59_94, fps60, fps120, fps240, custom
@@ -102,7 +102,7 @@ extension Kraken
     }
   }
 
-  /// Final renders, the output properties, the running job, and its result.
+  /// final renders with their output properties, the running job and its result
   @MainActor
   final class RenderJob: ObservableObject
   {
@@ -132,6 +132,7 @@ extension Kraken
     }
 
     @Published var frameStep: Int
+
     @Published var fps: Int
     {
       didSet { syncPlayback() }
@@ -143,6 +144,7 @@ extension Kraken
     }
 
     @Published var customFrameRate: Bool
+
     @Published var camera: CameraChoice?
     @Published var path: String
     @Published var format: OutputFormat?
@@ -161,6 +163,7 @@ extension Kraken
     @Published var showsPassepartout = false
 
     @Published var cameras: [CameraChoice]
+
     let renderer: Akari.FinalRender
     let cameraView: Akari.CameraView
     let playback: Akari.Playback
@@ -174,12 +177,15 @@ extension Kraken
          cameraView: Akari.CameraView,
          playback: Akari.Playback,
          defaultPath: String,
-         arguments: AppUtils.RenderArguments)
+         arguments: KrakenArgs.Render)
     {
       self.renderer = renderer
       self.cameraView = cameraView
       self.playback = playback
       savesSingleFrameOnCompletion = arguments.background
+
+      // a modifier can be left out of the viewport or out of a render, so the stacks evaluate again either way
+      renderer.onRenderStage = { stage, time, render in Kraken.Modifiers.syncAll(stage, time, render: render) }
 
       let info = renderer.stageInfo
       let stageCameras = info.cameras.map { CameraChoice(path: String($0)) }
@@ -195,12 +201,14 @@ extension Kraken
       frameStart = arguments.frameStart ?? (animated ? Int(info.startTimeCode.rounded()) : defaults.frameStart)
       frameEnd = arguments.frameEnd ?? (animated ? Int(info.endTimeCode.rounded()) : defaults.frameEnd)
       frameStep = arguments.frameStep ?? defaults.frameStep
+
       let rate = arguments.frameRate ?? (info.timeCodesPerSecond > 0 ? info.timeCodesPerSecond : defaults.frameRate)
       let rounded = max(Int(rate.rounded()), 1)
       let base = abs(Double(rounded) / rate - 1) < 1e-6 ? 1 : Double(rounded) / rate
       fps = rounded
       fpsBase = base
       customFrameRate = FrameRate.preset(fps: rounded, base: base) == nil
+
       if let path = arguments.camera
       {
         camera = path.lowercased() == "viewport" ? .viewport : CameraChoice(path: path)
@@ -228,6 +236,7 @@ extension Kraken
       if !arguments.background { installKeyMonitor() }
       syncAspect()
       syncPlayback()
+
       cameraView.onArrive = { [weak self] in self?.showsPassepartout = self?.lookingThrough == true }
       cameraView.onLeave = { [weak self] in
         self?.lookingThrough = false
@@ -243,31 +252,38 @@ extension Kraken
       return path.isEmpty ? nil : CameraChoice(path: path)
     }
 
-    /// A newly opened scene's cameras, frame range and rate, looking through its render camera.
+    /// takes on a newly opened scene's cameras, frame range and rate, and looks through its render camera
     func adoptStage()
     {
       renderer.adoptStage()
+      cameraView.adoptStage()
+      lookingThrough = false
+      showsPassepartout = false
+
       let info = renderer.stageInfo
       let stageCameras = info.cameras.map { CameraChoice(path: String($0)) }
       cameras = [.viewport] + stageCameras
       let track = String(info.soundtrack)
       soundtrack = track.isEmpty ? nil : track
+
       let defaults = OutputSettings()
       let animated = renderer.hasAuthoredTimeCodeRange
       frameStart = animated ? Int(info.startTimeCode.rounded()) : defaults.frameStart
       frameEnd = animated ? Int(info.endTimeCode.rounded()) : defaults.frameEnd
+
       let rate = info.timeCodesPerSecond > 0 ? info.timeCodesPerSecond : defaults.frameRate
       let rounded = max(Int(rate.rounded()), 1)
       let base = abs(Double(rounded) / rate - 1) < 1e-6 ? 1 : Double(rounded) / rate
       fps = rounded
       fpsBase = base
       customFrameRate = FrameRate.preset(fps: rounded, base: base) == nil
+
       let render = Self.renderCamera(info)
       camera = render ?? stageCameras.first ?? .viewport
       lookThrough(render ?? .viewport)
     }
 
-    /// The output properties as the renderer takes them.
+    /// the output properties as the renderer takes them
     var output: OutputSettings
     {
       var output = OutputSettings()
@@ -290,7 +306,7 @@ extension Kraken
       return output
     }
 
-    /// The render frame's width over its height.
+    /// the render frame's width over its height
     var aspect: Double
     {
       let size = output.pixelSize
@@ -302,7 +318,7 @@ extension Kraken
       renderer.isRunning || progress?.status.isActive == true
     }
 
-    /// The frame the viewport is on, what `Render Image` renders.
+    /// the frame the viewport is on, which render image renders
     var currentFrame: Int
     {
       Int(playback.frame.rounded(.down))
@@ -318,10 +334,11 @@ extension Kraken
       start(.animation)
     }
 
-    /// Starts a job the command line asked for, once the window is up.
+    /// starts a job the command line asked for once the window is up
     func startPendingJob()
     {
       guard let job = pendingJob else { return }
+
       pendingJob = nil
       start(job)
     }
@@ -329,6 +346,7 @@ extension Kraken
     func start(_ job: Akari.FinalRender.Job)
     {
       guard !isRendering else { return }
+
       playback.pause()
       message = nil
       showsResult = true
@@ -340,7 +358,7 @@ extension Kraken
       if !started { message = "a render is already running" }
     }
 
-    /// Looks the viewport through `choice`, the viewport's own view for `.viewport`.
+    /// looks the viewport through `choice`, or its own view for `.viewport`
     func lookThrough(_ choice: CameraChoice?)
     {
       cameraView.look(through: choice?.path)
@@ -348,13 +366,13 @@ extension Kraken
       showsPassepartout = false
     }
 
-    /// Numpad 0: in and out of the scene camera's view.
+    /// numpad 0 toggles in and out of the scene camera's view
     func toggleCameraView()
     {
       lookThrough(lookingThrough ? .viewport : camera)
     }
 
-    /// The timeline plays the output's frame range at its frame rate.
+    /// makes the timeline play the output's frame range at its frame rate
     private func syncPlayback()
     {
       playback.range = Double(frameStart) ... Double(max(frameEnd, frameStart))
@@ -379,6 +397,7 @@ extension Kraken
     func closeResult()
     {
       guard !isRendering else { return }
+
       showsResult = false
     }
   }

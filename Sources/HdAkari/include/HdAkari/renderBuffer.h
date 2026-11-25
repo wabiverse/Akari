@@ -47,6 +47,7 @@
 # include <Hgi/texture.h>
 #else
 # include <pxr/pxr.h>
+# include <HdAkari/swiftInterop.h>
 # include <pxr/imaging/hd/renderBuffer.h>
 # include <pxr/imaging/hgi/texture.h>
 #endif
@@ -67,12 +68,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 class Hgi;
 
-/// @class HdAkariRenderBuffer
-///
-/// An AOV render target backed by an Hgi texture, shared with
-/// the Swift engine (which renders into it) and with Hydra's
-/// present / compositing tasks.
-///
+/// an aov render target backed by an hgi texture, shared with the swift engine and hydra's present tasks
 class SWIFT_UNSAFE_REFERENCE HdAkariRenderBuffer final : public HdRenderBuffer
 {
  public:
@@ -97,7 +93,7 @@ class SWIFT_UNSAFE_REFERENCE HdAkariRenderBuffer final : public HdRenderBuffer
   HdFormat GetFormat() const override { return _format; }
   bool IsMultiSampled() const override { return _multiSampled; }
 
-  // GPU resident only, no CPU staging path yet.
+  // gpu resident only, there is no cpu staging path yet
   void *Map() override { return nullptr; }
   void Unmap() override {}
   bool IsMapped() const override { return false; }
@@ -107,30 +103,21 @@ class SWIFT_UNSAFE_REFERENCE HdAkariRenderBuffer final : public HdRenderBuffer
   HDAKARI_API
   VtValue GetResource(bool multiSampled) const override;
 
-  /// Raw `HgiTexture` for the Swift engine to render
-  /// into (may be null until Allocate runs).
+  /// the raw `HgiTexture` the swift engine renders into, null until `Allocate` runs
   HDAKARI_API
   void *GetHgiTexture() const;
 
-  /// The Hgi texture handle (with its id). What the Hgi command
-  /// recorders bind as a render target attachment. Invalid until
-  /// Allocate runs.
+  /// the hgi texture handle the command recorders bind as an attachment, invalid until `Allocate` runs
   HgiTextureHandle const &GetTextureHandle() const { return _texture; }
 
-  /// Adopt an externally-wrapped texture as the AOV texture
-  /// (e.g. LabGL's final color buffer wrapped by HgiMetal's
-  /// raw resource factory). The buffer takes over Hgi ownership
-  /// of the passed handle, the Metal object itself remains owned
-  /// by its creator, so it is not destroyed here. No-op if the
-  /// passed value of `wrapped` is invalid or Sync has not captured
-  /// he Hgi yet.
+  /// adopts an externally wrapped texture as the aov, hgi owns the handle but its creator keeps the metal object
   HDAKARI_API
   void SetWrappedTexture(HgiTextureHandle const &wrapped, uint64_t rawResource);
 
-  /// Whether the AOV texture already wraps `rawResource`.
+  /// whether the aov texture already wraps `rawResource`
   bool Wraps(uint64_t rawResource) const { return _wrappedResource == rawResource; }
 
-  /// Minimal HdFormat -> HgiFormat mapping for the AOVs Akari produces.
+  /// maps an `HdFormat` to an `HgiFormat` for the aovs akari produces
   HDAKARI_API
   static HgiFormat ToHgiFormat(HdFormat format);
 
@@ -140,8 +127,10 @@ class SWIFT_UNSAFE_REFERENCE HdAkariRenderBuffer final : public HdRenderBuffer
 
  private:
   Hgi *_hgi = nullptr; // shared, not owned
+
   HgiTextureHandle _texture;
   uint64_t _wrappedResource = 0;
+
   unsigned int _width = 0;
   unsigned int _height = 0;
   HdFormat _format = HdFormatInvalid;

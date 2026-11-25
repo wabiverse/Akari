@@ -70,6 +70,7 @@ import SwiftCrossUI
     private func focusViewport()
     {
       if metal == nil, let content = window?.contentView { metal = Self.find(content) { $0 is MTKView } }
+
       if let metal, window?.firstResponder !== metal { window?.makeFirstResponder(metal) }
     }
 
@@ -84,7 +85,7 @@ import SwiftCrossUI
       return nil
     }
 
-    /// The SwiftCrossUI controls over the viewport, the toolbar and the outline button, take their own clicks.
+    /// the swiftcrossui controls over the viewport, the toolbar and the outline button, take their own clicks
     private func passesThrough(_ p: CGPoint) -> Bool
     {
       let toolbar = CGRect(x: 8, y: 8, width: 28, height: CGFloat(Kraken.Layout.Tool.allCases.count) * 30)
@@ -92,11 +93,12 @@ import SwiftCrossUI
       return (layout.showsToolbar && toolbar.contains(p)) || outline.contains(p)
     }
 
-    /// Whether a mouse event hits the viewport itself, and not a control or area on top of it.
+    /// whether a mouse event hits the viewport itself and not a control or area on top of it
     private func owns(_ event: NSEvent) -> Bool
     {
       guard let content = window?.contentView else { return false }
       let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+
       guard let hit = content.hitTest(point) else { return true }
       return hit is MTKView || isDescendant(of: hit)
     }
@@ -104,9 +106,14 @@ import SwiftCrossUI
     func handle(_ event: NSEvent) -> Bool
     {
       guard !Kraken.MenuPanel.isOpen, !isMenuOpen() else { return false }
-      guard let window, event.window === window || event.type == .keyDown else { return false }
+
+      // the sculpt viewport lies over this one and takes its own input
+      guard layout.tab != .sculpting else { return false }
+      guard let window, event.window === window || event.type == .keyDown || event.type == .keyUp else { return false }
+
       let p = convert(event.locationInWindow, from: nil)
       let inside = bounds.contains(p) && !isHiddenOrHasHiddenAncestor && (event.type == .keyDown || owns(event))
+
       switch event.type
       {
         case .mouseMoved:
@@ -140,8 +147,10 @@ import SwiftCrossUI
         case .scrollWheel:
           return handleScroll(event, inside: inside)
         case .keyDown:
-          guard !textEditing, modal != nil || pointerInside() else { return false }
+          guard !textEditing, modal != nil || pie != nil || pointerInside() else { return false }
           return key(event)
+        case .keyUp:
+          return pieKeyUp(event)
         default:
           return false
       }
@@ -150,7 +159,16 @@ import SwiftCrossUI
     private func handleMouseMoved(to p: CGPoint, inside: Bool) -> Bool
     {
       mouse = p
-      if modal != nil { update() }
+      if pie != nil
+      {
+        needsDisplay = true
+        return true
+      }
+
+      if modal != nil
+      {
+        update()
+      }
       else if inside
       {
         lightHover = lightHandle(at: p)
@@ -158,16 +176,24 @@ import SwiftCrossUI
       }
 
       if loopCutArmed { updateLoopCut() }
+
       return false
     }
 
-    /// Option picks an edge loop, otherwise a click confirms a modal, cuts an armed loop,
-    /// grabs a gizmo or light handle, or starts a click or box select.
+    /// option picks an edge loop, else a click confirms a modal, cuts an armed loop, grabs a handle or starts a select
     private func handleLeftDown(_ event: NSEvent, at p: CGPoint, inside: Bool) -> Bool
     {
       guard inside, !passesThrough(p) else { return false }
+
       mouse = p
+      if pie != nil
+      {
+        choosePie()
+        return true
+      }
+
       if isPicking() { return false }
+
       focusViewport()
       if event.modifierFlags.contains(.option)
       {
@@ -176,40 +202,13 @@ import SwiftCrossUI
         return true
       }
 
-      if modal != nil
-      {
-        confirm()
-        return true
-      }
-
-      if loopCutArmed
-      {
-        if let loopCut { layout.editMesh { mesh, _ in mesh.loopCut(loopCut.edge) } }
-        loopCutArmed = false
-        loopCut = nil
-        return true
-      }
-
-      if navigationHit(p) { return true }
-      if !boxArmed, let light = lightHandle(at: p)
-      {
-        beginLightDrag(light)
-        return true
-      }
-
-      if !boxArmed, let grabbed = handle(at: p)
-      {
-        begin(grabbed)
-        return true
-      }
-
-      press = (p, event.modifierFlags.contains(.shift))
-      return true
+      return pressBegan(at: p, extend: event.modifierFlags.contains(.shift))
     }
 
     private func handleLeftDrag(_ event: NSEvent, to p: CGPoint) -> Bool
     {
       mouse = p
+
       if let start = loopPress
       {
         if hypot(p.x - start.x, p.y - start.y) > 4 || loopOrbiting
@@ -221,26 +220,7 @@ import SwiftCrossUI
         return true
       }
 
-      if modal != nil
-      {
-        update()
-        return true
-      }
-
-      if lightDrag != nil
-      {
-        updateLightDrag()
-        return true
-      }
-
-      guard let press else { return false }
-      if box != nil || hypot(p.x - press.point.x, p.y - press.point.y) > 4
-      {
-        box = CGRect(x: min(p.x, press.point.x), y: min(p.y, press.point.y),
-                     width: abs(p.x - press.point.x), height: abs(p.y - press.point.y))
-      }
-
-      return true
+      return pressMoved(to: p)
     }
 
     private func handleLeftUp(_ event: NSEvent) -> Bool
@@ -253,42 +233,21 @@ import SwiftCrossUI
         return true
       }
 
-      if let modal, modal.confirmOnRelease
-      {
-        confirm()
-        return true
-      }
-
-      if let drag = lightDrag
-      {
-        lightDrag = nil
-        layout.dragging = nil
-        layout.refresh()
-        layout.inspector.load(drag.widget.path)
-        return true
-      }
-
-      guard let press else { return false }
-      self.press = nil
-      if let box
-      {
-        select(in: box, extend: press.extend)
-        self.box = nil
-        boxArmed = false
-      }
-      else
-      {
-        click(press.point, extend: press.extend)
-      }
-
-      return true
+      return pressEnded()
     }
 
-    /// Cancels a modal or an armed loop cut, Shift places the 3D cursor, otherwise the context menu.
+    /// cancels a modal or an armed loop cut, shift places the 3d cursor, otherwise opens the context menu
     private func handleRightDown(_ event: NSEvent, at p: CGPoint, inside: Bool) -> Bool
     {
       guard inside else { return false }
+
       focusViewport()
+      if pie != nil
+      {
+        closePie()
+        return true
+      }
+
       if modal != nil
       {
         cancel()
@@ -315,10 +274,11 @@ import SwiftCrossUI
     private func handleScroll(_ event: NSEvent, inside: Bool) -> Bool
     {
       guard inside else { return false }
+
       if event.hasPreciseScrollingDeltas
       {
-        let s: CGFloat = event.isDirectionInvertedFromDevice ? 1 : -1
-        navigate(dx: Double(event.scrollingDeltaX * s), dy: Double(event.scrollingDeltaY * s),
+        let sign: CGFloat = event.isDirectionInvertedFromDevice ? 1 : -1
+        navigate(dx: Double(event.scrollingDeltaX * sign), dy: Double(event.scrollingDeltaY * sign),
                  flags: event.modifierFlags, drag: false)
       }
       else
@@ -329,11 +289,12 @@ import SwiftCrossUI
       return true
     }
 
-    /// Viewport navigation: a middle drag or a two finger swipe orbits, Shift pans and Ctrl zooms.
+    /// a middle drag or a two finger swipe orbits the view, shift pans and ctrl zooms
     private func navigate(dx: Double, dy: Double, flags: NSEvent.ModifierFlags, drag: Bool)
     {
       let hydra = layout.hydra
       hydra.stopFlick()
+
       if flags.contains(.shift)
       {
         hydra.pan(deltaX: drag ? dx : -dx, deltaY: drag ? dy : -dy, viewHeight: Double(bounds.height))
@@ -353,12 +314,20 @@ import SwiftCrossUI
     func key(_ event: NSEvent) -> Bool
     {
       let flags = event.modifierFlags
-      let shift = flags.contains(.shift), alt = flags.contains(.option)
+      let shift = flags.contains(.shift)
+      let alt = flags.contains(.option)
       let ctrl = flags.contains(.control) || flags.contains(.command)
       let code = Int(event.keyCode)
       let char = (event.charactersIgnoringModifiers ?? "").lowercased()
 
       if modal != nil { return modalKey(code, char, shift: shift) }
+
+      if pie != nil
+      {
+        // the pie holds the keys while open and escape closes it
+        if code == 53 { closePie() }
+        return true
+      }
 
       if code == 53, loopCutArmed || boxArmed
       {
@@ -377,6 +346,7 @@ import SwiftCrossUI
       if flags.contains(.command) { return documentKey(char, shift: shift) }
 
       let edit = layout.mode == .edit
+
       switch (code, char)
       {
         case (48, _):
@@ -406,6 +376,12 @@ import SwiftCrossUI
           layout.selectAll()
         case (_, "i") where ctrl:
           layout.invertSelection()
+        case (_, "p") where ctrl && !edit:
+          layout.parentSelected()
+        case (_, "j") where ctrl && !edit:
+          layout.joinSelected()
+        case (_, "]") where !edit:
+          layout.selectHierarchy()
         case (_, "i") where alt && !edit:
           layout.keyframes.deleteTransforms(layout.selection)
         case (_, "i") where !edit:
@@ -447,12 +423,16 @@ import SwiftCrossUI
         case (_, "z") where shift:
           layout.toggleShading(.wireframe)
         case (_, "z"):
-          popUp(.shading, at: mouse)
+          openShadingPie(key: event.keyCode)
         case (_, "t"):
           layout.showsToolbar.toggle()
         case (_, "f") where !edit:
-          // nothing in object mode, kept from the Hydra view's own frame selected.
+          // nothing in object mode, kept from the hydra view's own frame selected
           break
+        case (_, "e") where edit && ctrl:
+          popUp(.edge, at: mouse)
+        case (_, "e") where edit && shift:
+          begin(.crease)
         case (_, "e") where edit:
           extrude()
         case (_, "i") where edit:
@@ -465,6 +445,8 @@ import SwiftCrossUI
           layout.editMesh { mesh, _ in mesh.selectLinked() }
         case (_, "l") where edit:
           linkedUnderMouse()
+        case (_, let c) where !edit && ctrl && c.count == 1 && "0123456".contains(c):
+          layout.setSubdivision(level: Int(c) ?? 0)
         case (_, "1") where edit:
           layout.setSelectMode(.vertex)
         case (_, "2") where edit:
@@ -480,7 +462,7 @@ import SwiftCrossUI
       return true
     }
 
-    /// Command S saves, with Shift as a new file, Command N starts a scene and Command O opens one.
+    /// command s saves, with shift as a new file, command n starts a scene and command o opens one
     private func documentKey(_ char: String, shift: Bool) -> Bool
     {
       switch char
@@ -497,6 +479,7 @@ import SwiftCrossUI
     private func modalKey(_ code: Int, _ char: String, shift: Bool) -> Bool
     {
       guard var modal else { return false }
+
       switch (code, char)
       {
         case (53, _):
@@ -508,16 +491,17 @@ import SwiftCrossUI
         case (51, _):
           if !modal.numeric.isEmpty { modal.numeric.removeLast() }
         case (_, "x"), (_, "y"), (_, "z"):
-          guard modal.kind != .inset, modal.along == nil else { return true }
-          let i = char == "x" ? 0 : char == "y" ? 1 : 2
-          if modal.axis == i, modal.plane == shift
+          guard modal.kind != .inset, modal.kind != .crease, modal.along == nil else { return true }
+
+          let axis = char == "x" ? 0 : char == "y" ? 1 : 2
+          if modal.axis == axis, modal.plane == shift
           {
             if modal.local { modal.axis = nil }
             modal.local.toggle()
           }
           else
           {
-            modal.axis = i
+            modal.axis = axis
             modal.plane = shift
             modal.local = false
           }
@@ -531,6 +515,7 @@ import SwiftCrossUI
 
       self.modal = modal
       update()
+
       return true
     }
   }

@@ -49,20 +49,26 @@ import ImageFormats
 
 extension Kraken.RenderJob
 {
-  /// `<scene folder>/render/<scene>_####`, next to the stage, in the home folder for a scene not saved yet.
+  /// `<scene folder>/render/<scene>_####` next to the stage, or in the home folder for a scene not saved yet
   nonisolated static func defaultOutputPath(for sceneFile: URL?) -> String
   {
-    let sceneURL = sceneFile ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("untitled.usda")
+    #if os(macOS)
+      let sceneURL = sceneFile ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("untitled.usda")
+    #else
+      let sceneURL = sceneFile ?? URL.documentsDirectory.appendingPathComponent("untitled.usda")
+    #endif
+
     let name = sceneURL.deletingPathExtension().lastPathComponent
     return sceneURL.deletingLastPathComponent()
       .appendingPathComponent("render", isDirectory: true)
       .appendingPathComponent("\(name)_####").path
   }
 
-  /// Writes the shown frame to its output file, as `Image > Save` would.
+  /// writes the shown frame to its output file, the same as image save
   func saveImage()
   {
     guard let frame = progress?.frame else { return }
+
     let url = output.fileURL(frame: frame).deletingPathExtension().appendingPathExtension("png")
     do
     {
@@ -114,13 +120,14 @@ extension Kraken.RenderJob
     }
   }
 
-  /// Runs a command line render synchronously in the separate worker process.
+  /// runs a command line render synchronously in the separate worker process
   func renderInBackground(_ job: Akari.FinalRender.Job) -> Akari.FinalRender.Status
   {
     let renderer = renderer
     let output = output
     let subject = job == .animation ? "animation" : "frame"
-    print("[akari] rendering \(subject) to \(output.path)")
+    Console.info("rendering \(subject) to \(Console.paint(output.path, .bold))", from: .akari)
+
     nonisolated(unsafe) var status = Akari.FinalRender.Status.preparing
     renderer.runBlocking(job, output: output)
     { progress in
@@ -137,6 +144,12 @@ extension Kraken.RenderJob
     return status
   }
 
+  /// prints the saved line with its label in green for terminals
+  private nonisolated static func saved(_ url: URL)
+  {
+    print("\(Console.paint("Saved:", .bold, .green)) '\(url.path)'")
+  }
+
   private nonisolated static func logBackgroundProgress(_ progress: Akari.FinalRender.Progress,
                                                         output: OutputSettings,
                                                         renderer: Akari.FinalRender)
@@ -144,9 +157,12 @@ extension Kraken.RenderJob
     switch progress.status
     {
       case .rendering where progress.finishedFrame == progress.frame:
-        let remaining = progress.remaining.map { " | Remaining:\(Self.clock($0))" } ?? ""
-        print("Fra:\(progress.frame) | Time:\(Self.clock(progress.lastFrameTime))\(remaining) | Sample \(progress.sample)/\(progress.samples)")
-        if let url = progress.output, progress.job == .animation, output.format == .png { print("Saved: '\(url.path)'") }
+        // keeps the usual frame line wording so tools that parse it still work
+        let bar = Console.paint("|", .gray)
+        let remaining = progress.remaining.map { " \(bar) \(Console.paint("Remaining:", .gray))\(Self.clock($0))" } ?? ""
+        print("\(Console.paint("Fra:", .gray))\(Console.paint("\(progress.frame)", .bold)) \(bar) \(Console.paint("Time:", .gray))"
+          + "\(Self.clock(progress.lastFrameTime))\(remaining) \(bar) \(Console.paint("Sample", .gray)) \(progress.sample)/\(progress.samples)")
+        if let url = progress.output, progress.job == .animation, output.format == .png { saved(url) }
       case .finished:
         if case let .image(frame) = progress.job, renderer.lastFrame != nil
         {
@@ -154,45 +170,44 @@ extension Kraken.RenderJob
           do
           {
             try renderer.saveLastFrame(to: url)
-            print("Saved: '\(url.path)'")
+            saved(url)
           }
           catch
           {
-            print("[akari] could not save render: \(error)")
+            Console.error("could not save render: \(error)", from: .akari)
           }
         }
         else if let url = progress.output, output.format == .mpeg4
         {
-          print("Saved: '\(url.path)'")
+          saved(url)
         }
 
-        print("[akari] finished in \(Self.clock(progress.elapsed))")
+        Console.success("finished in \(Self.clock(progress.elapsed))", from: .akari)
       case .cancelled:
-        print("[akari] render cancelled")
+        Console.warn("render cancelled", from: .akari)
       case let .failed(reason):
-        print("[akari] render failed: \(reason)")
+        Console.error("render failed: \(reason)", from: .akari)
       default:
         break
     }
   }
 
-  /// `h:mm:ss.cc`, without the hours when there are none.
+  /// formats seconds as `h:mm:ss.cc`, leaving out the hours when there are none
   nonisolated static func clock(_ seconds: TimeInterval) -> String
   {
     let total = max(seconds, 0)
     let hours = Int(total) / 3600
     let minutes = Int(total) / 60 % 60
     let rest = total.truncatingRemainder(dividingBy: 60)
+
     return hours > 0 ? String(format: "%d:%02d:%05.2f", hours, minutes, rest) : String(format: "%02d:%05.2f", minutes, rest)
   }
 
-  /// `F12` renders the frame, `⌃F12`/`⌘F12` the animation, `F11` shows the
-  /// result, and `Esc` cancels a render or closes its result. Reloads the
-  /// stage's layers and images from disk, on the frame queue so hydra never
-  /// draws mid reload.
+  /// reloads the stage's layers and images from disk on the frame queue so hydra never draws mid reload
   func reloadStage()
   {
     guard let hydra = renderer.hydra, let akari = renderer.akari else { return }
+
     nonisolated(unsafe) let labfx = akari.labfx
     labfx.reloadTextures()
     hydra.performOnFrameQueue
@@ -202,13 +217,14 @@ extension Kraken.RenderJob
     }
   }
 
-  /// Whether a reload is still running, and how far along.
+  /// whether a reload is still running and how far along it is
   var reloadStatus: (pending: Bool, progress: Double)
   {
     guard let labfx = renderer.akari?.labfx else { return (false, 1) }
     return (labfx.reloadPending, Double(labfx.reloadProgress))
   }
 
+  /// f12 renders a frame, ctrl or cmd f12 the animation, f11 shows the result, esc cancels or closes, space plays
   func installKeyMonitor()
   {
     #if os(macOS)
@@ -225,6 +241,7 @@ extension Kraken.RenderJob
     private func handleKey(code: UInt16, flags: NSEvent.ModifierFlags) -> Bool
     {
       if NSApp.keyWindow?.firstResponder is NSText { return false }
+
       switch code
       {
         case 49:

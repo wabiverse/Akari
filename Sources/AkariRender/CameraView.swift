@@ -44,23 +44,21 @@ import HydraKit
 
 public extension Akari
 {
-  /// The viewport looks through a stage camera, following
-  /// it as time plays, until the view is orbited, panned
-  /// or zoomed off it.
+  /// the viewport looks through a stage camera and follows it as time plays, until it is orbited, panned or zoomed away
   final class CameraView: @unchecked Sendable
   {
     public weak var hydra: Hydra.RenderEngine?
     public weak var akari: Akari.RenderEngine?
 
-    /// Called on the main actor when the view has eased into the camera.
+    /// called on the main actor once the view has eased into the camera
     public var onArrive: (@MainActor @Sendable () -> Void)?
-    /// Called on the main actor when the viewport is moved off the camera.
+    /// called on the main actor when the viewport is moved off the camera
     public var onLeave: (@MainActor @Sendable () -> Void)?
 
-    /// How long the view eases between shots.
+    /// how long the view eases between shots
     public static let smoothView = 0.2
 
-    /// The render frame's width over its height, safe to set from any thread.
+    /// the render frame width over its height, safe to set from any thread
     public var aspect: Double
     {
       get { lock.withLock { _aspect } }
@@ -70,13 +68,28 @@ public extension Akari
     private let lock = NSLock()
     private var _aspect = 16.0 / 9.0
     private var request: String??
-    private let isZUp: Bool
+    /// the up axis of the stage the viewport shows, reread whenever it changes
+    private var isZUp: Bool
     private var camera: UsdGeom.Camera?
+    {
+      didSet
+      {
+        let path = camera.map { String($0.GetPrim().GetPath().string) }
+        lock.withLock { _lookedThrough = path }
+      }
+    }
+
+    private var _lookedThrough: String?
+    /// the camera the viewport looks through, nil in its own view
+    public var lookedThrough: String?
+    {
+      lock.withLock { _lookedThrough }
+    }
     private var saved: FinalRender.ViewState?
     private var posed: [Double]?
     private var transition: (from: Shot, start: Double)?
 
-    /// Where a view is, and what it sees.
+    /// where a view is and what it sees
     private struct Shot
     {
       var eye: Pixar.GfVec3d
@@ -103,22 +116,35 @@ public extension Akari
       isZUp = UsdGeom.getUpAxis(for: hydra.stage) == .z
     }
 
-    /// Looks through the camera at `path`, or back at the viewport's own view when `nil`.
+    /// looks through the camera at `path`, or back at the viewport's own view when `nil`
     public func look(through path: String?)
     {
       lock.withLock { request = .some(path) }
     }
 
-    /// The fraction of the viewport's height the render frame fills, leaving a margin around it.
+    /// forgets the camera and its saved view since they belong to a stage that is gone
+    public func adoptStage()
+    {
+      if let hydra { isZUp = UsdGeom.getUpAxis(for: hydra.stage) == .z }
+
+      camera = nil
+      saved = nil
+      posed = nil
+      transition = nil
+      lock.withLock { request = nil }
+    }
+
+    /// the fraction of the viewport height the render frame fills, leaving a margin around it
     public static func frameHeight(viewAspect: Double, aspect: Double) -> Double
     {
       0.9 * min(1, viewAspect / max(aspect, 0.001))
     }
 
-    /// Poses the viewport, on the frame queue before each frame.
+    /// poses the viewport on the frame queue before each frame
     func update()
     {
       guard let hydra, let akari else { return }
+
       let (request, aspect) = lock.withLock
       {
         defer { self.request = nil }
@@ -155,28 +181,36 @@ public extension Akari
 
       akari.labfx.usdVolume = Pixar.HdAkariStageVolumeAt(hydra.stage, hydra.currentTimeCode)
       akari.labfx.usdFogDisturbers = FinalRender.fogDisturbers(hydra.stage, hydra.currentTimeCode)
-      let fogSim = akari.labfx.fogSim, time = hydra.currentTimeCode, zUp = UsdGeom.getUpAxis(for: hydra.stage) == .z
+
+      let fogSim = akari.labfx.fogSim
+      let time = hydra.currentTimeCode
+      let zUp = UsdGeom.getUpAxis(for: hydra.stage) == .z
+      isZUp = zUp
+
       let fps = Pixar.HdAkariTimeCodesPerSecond(hydra.stage)
       akari.labfx.waterTime = time / (fps > 0 ? fps : 24)
       akari.labfx.sceneFrameRate = fps > 0 ? fps : 24
-      akari.labfx.fogSimRequest = { [hydra] in FinalRender.advanceFogSim(fogSim, stage: hydra.stage, to: time, zUp: zUp, framesPerSecond: fps, preview: true) }
-      var lens = Pixar.HdAkariCameraLens()
-      lens.focalLength = Double(view.gfCamera.focalLength)
-      lens.horizontalAperture = Double(view.gfCamera.horizontalAperture)
-      akari.labfx.viewportLens = lens
+      akari.labfx.fogSimRequest = { [hydra] in
+        FinalRender.advanceFogSim(fogSim, stage: hydra.stage, to: time, zUp: zUp, framesPerSecond: fps, preview: true)
+      }
+
       akari.labfx.focusObjectDistance = Self.focusDistance(view, settings: akari.settings.depthOfField, stage: hydra.stage, time: time)
+
       guard camera != nil || transition != nil else { return }
+
       let size = akari.viewportSize
       guard size.width > 1, size.height > 1 else { return }
 
       if let camera
       {
         let viewAspect = Double(size.width) / Double(size.height)
+        let path = std.string(camera.GetPrim().GetPath().string)
         FinalRender.pose(view, from: camera.GetCamera(Usd.TimeCode(hydra.currentTimeCode)),
                          aspect: aspect * Self.frameHeight(viewAspect: viewAspect, aspect: aspect), isZUp: isZUp)
-        let shutter = Pixar.HdAkariCameraShutter(hydra.stage, std.string(camera.GetPrim().GetPath().string), hydra.currentTimeCode)
+
+        let shutter = Pixar.HdAkariCameraShutter(hydra.stage, path, hydra.currentTimeCode)
         akari.labfx.usdCameraShutter = SIMD2(Float(shutter.open), Float(shutter.close))
-        akari.labfx.usdCameraLens = Pixar.HdAkariCameraLensAt(hydra.stage, std.string(camera.GetPrim().GetPath().string), hydra.currentTimeCode)
+        akari.labfx.usdCameraLens = Pixar.HdAkariCameraLensAt(hydra.stage, path, hydra.currentTimeCode)
       }
       else
       {
@@ -208,17 +242,20 @@ public extension Akari
       posed = Self.placement(view)
     }
 
-    /// How far ahead of the view its focus object's point is, along the view.
+    /// how far ahead of the view the focus object's point sits along its view direction
     private static func focusDistance(_ view: Hydra.Camera, settings: DepthOfFieldSettings, stage: UsdStage, time: Double) -> Double?
     {
       guard !settings.focusObject.isEmpty else { return nil }
+
       var p = [settings.focusPoint.x, settings.focusPoint.y, settings.focusPoint.z]
       _ = Pixar.HdAkariPrimTransformPoint(stage, std.string(settings.focusObject), time, false, &p)
+
       let transform = view.getTransform()
       let eye = transform.ExtractTranslation()
       let ahead = transform.TransformDir(Pixar.GfVec3d(0, 0, -1))
       let length = max((ahead[0] * ahead[0] + ahead[1] * ahead[1] + ahead[2] * ahead[2]).squareRoot(), 1e-9)
       let along = ((p[0] - eye[0]) * ahead[0] + (p[1] - eye[1]) * ahead[1] + (p[2] - eye[2]) * ahead[2]) / length
+
       return along > 0 ? along : nil
     }
 
@@ -240,21 +277,22 @@ public extension Akari
       var transform = Pixar.GfMatrix4d(1.0)
       _ = transform.SetRotate(shot.rotation)
       _ = transform.SetTranslateOnly(shot.eye)
+
       var lens = Gf.Camera()
       lens.transform = transform
       lens.focalLength = 50
       lens.horizontalAperture = Float(100 * tan(shot.fov / 2))
+
       FinalRender.pose(view, from: lens, aspect: 1, isZUp: isZUp)
       view.nearClipOverride = shot.near
       view.farClipOverride = shot.far
     }
 
-    /// Leaves the view where the camera was, with the viewport's own lens,
-    /// orbiting the point on its view nearest where the viewport orbited
-    /// before.
+    /// leaves the view where the camera was with the viewport's own lens, orbiting the point ahead nearest the old orbit
     private func orbitAhead(_ view: Hydra.Camera)
     {
       guard let saved else { return }
+
       let transform = view.getTransform()
       let eye = transform.ExtractTranslation()
       let ahead = transform.TransformDir(Pixar.GfVec3d(0, 0, -1))
@@ -262,6 +300,7 @@ public extension Akari
       let along = ((saved.focus[0] - eye[0]) * ahead[0] + (saved.focus[1] - eye[1]) * ahead[1]
         + (saved.focus[2] - eye[2]) * ahead[2]) / length
       let distance = along > 0.01 ? along : 1
+
       view.focus = Pixar.GfVec3d(eye[0] + ahead[0] / length * distance,
                                  eye[1] + ahead[1] / length * distance,
                                  eye[2] + ahead[2] / length * distance)
@@ -273,13 +312,15 @@ public extension Akari
 
     private func leave(notify: Bool)
     {
-      // the free view has no shutter or lens of the camera it left.
+      // the free view has no shutter or lens from the camera it left
       akari?.labfx.usdCameraShutter = nil
       akari?.labfx.usdCameraLens = nil
+
       camera = nil
       saved = nil
       posed = nil
       transition = nil
+
       guard notify, let onLeave else { return }
       Task { @MainActor in onLeave() }
     }

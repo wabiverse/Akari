@@ -59,13 +59,13 @@ HdAkariRenderBuffer::HdAkariRenderBuffer(SdfPath const &id)
 HgiFormat
 HdAkariRenderBuffer::ToHgiFormat(HdFormat format)
 {
-  // minimal HdFormat -> HgiFormat for the AOVs Akari currently produces.
+  // only the aov formats akari produces today, anything else falls back to half float color
   switch (format) {
     case HdFormatUNorm8Vec4:   return HgiFormatUNorm8Vec4;
     case HdFormatFloat16Vec4:  return HgiFormatFloat16Vec4;
     case HdFormatFloat32Vec4:  return HgiFormatFloat32Vec4;
     case HdFormatFloat32:      return HgiFormatFloat32;
-    case HdFormatInt32:        return HgiFormatInt32;  // primId / instanceId AOVs
+    case HdFormatInt32:        return HgiFormatInt32;  // prim id and instance id aovs
     default:                   return HgiFormatFloat16Vec4;
   }
 }
@@ -77,7 +77,7 @@ HdAkariRenderBuffer::Sync(HdSceneDelegate *sceneDelegate,
                           HdRenderParam *renderParam,
                           HdDirtyBits *dirtyBits)
 {
-  // capture the shared Hgi so Allocate can build the texture.
+  // keep the shared hgi so `Allocate` can build the texture
   if (auto *param = static_cast<HdAkariRenderParam *>(renderParam)) {
     _hgi = param->GetHgi();
   }
@@ -90,6 +90,7 @@ HdAkariRenderBuffer::Allocate(GfVec3i const &dimensions, HdFormat format,
                               bool multiSampled)
 {
   _Deallocate();
+
   _width = static_cast<unsigned int>(dimensions[0]);
   _height = static_cast<unsigned int>(dimensions[1]);
   _format = format;
@@ -107,6 +108,7 @@ HdAkariRenderBuffer::Allocate(GfVec3i const &dimensions, HdFormat format,
   desc.mipLevels = 1;
   desc.sampleCount = HgiSampleCount1;
   desc.usage = HgiTextureUsageBitsColorTarget | HgiTextureUsageBitsShaderRead;
+
   _texture = _hgi->CreateTexture(desc);
   return bool(_texture);
 }
@@ -130,7 +132,7 @@ HdAkariRenderBuffer::SetWrappedTexture(HgiTextureHandle const &wrapped, uint64_t
     return;
   }
 
-  if (_hgi && _texture) {
+  if (_texture) {
     _hgi->DestroyTexture(&_texture);
   }
 

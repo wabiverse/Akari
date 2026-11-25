@@ -44,8 +44,7 @@ import HdAkari
 
 public extension Akari.Geom
 {
-  /// Instance matrices, sixteen floats each, read in place from USD's array when they come from one,
-  /// so a scene's instances aren't held twice.
+  /// instance matrices read in place from usd's array when they come from one, so a scene's instances aren't held twice
   struct Matrices: RandomAccessCollection, ExpressibleByArrayLiteral, @unchecked Sendable
   {
     private final class Storage: @unchecked Sendable

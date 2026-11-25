@@ -44,33 +44,33 @@ public extension Akari
 {
   enum Lux
   {
-    /// One Akari point light from the scene.
+    /// one akari point light from the scene.
     public struct PointLight: Sendable
     {
-      /// World-space position.
+      /// world-space position.
       public var position: SIMD3<Float>
-      /// Illuminated linear color.
+      /// illuminated linear color.
       public var color: SIMD3<Float>
-      /// Radiant intensity.
+      /// radiant intensity.
       public var intensity: Float
-      /// Sphere radius in world units.
+      /// sphere radius in world units.
       public var radius: Float
-      /// Scales its diffuse and specular lobes, UsdLux's `diffuse` and `specular`.
+      /// scales its diffuse and specular lobes, UsdLux's `diffuse` and `specular`.
       public var diffuse: Float
       public var specular: Float
-      /// A tube light's half length along its axis in world units, and its radius, zero for a sphere.
+      /// a tube light's half length along its axis in world units, and its radius, zero for a sphere.
       public var halfAxis: SIMD3<Float>
       public var tubeRadius: Float
-      /// A rect light's half extents in world units, emitting away from their cross product, zero for the rest.
+      /// a rect light's half extents in world units, emitting away from their cross product, zero for the rest.
       public var halfWidth: SIMD3<Float> = .zero
       public var halfHeight: SIMD3<Float> = .zero
-      /// How far it moved since the last frame, its shadow maps may still be from there.
+      /// how far it moved since the last frame, its shadow maps may still be from there.
       public var moved: Float = 0
-      /// False when its glow shouldn't show to the camera, it still lights.
+      /// false when its glow shouldn't show to the camera, it still lights.
       public var cameraVisible = true
-      /// False leaves it out of the light probes bounce.
+      /// false leaves it out of the light probes bounce.
       public var probes = true
-      /// The irradiance under which its shadow no longer shows.
+      /// the irradiance under which its shadow no longer shows.
       public var shadowFloor: Float = 1e-3
 
       public init(position: SIMD3<Float>, color: SIMD3<Float>, intensity: Float, radius: Float,
@@ -86,8 +86,7 @@ public extension Akari
         self.tubeRadius = tubeRadius
       }
 
-      /// Where the light's irradiance, intensity * (radius / distance)^2,
-      /// falls under `shadowFloor`, the farthest its shadow can show.
+      /// the distance where the light's falloff drops under `shadowFloor`, the farthest its shadow can show
       public var reach: Float
       {
         radius * (max(intensity, 0) * max(max(color.x, color.y), color.z) / max(shadowFloor, 1e-6)).squareRoot()

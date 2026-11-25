@@ -45,11 +45,10 @@ import LabGL
 
 public extension Akari.Geom
 {
-  /// The recorded draws triangles' streamed Ptex faces, a region a draw,
-  /// which its base instance points the gbuffer shader at.
+  /// streamed ptex faces for each recorded draw's triangles, one region per draw that its base instance points the gbuffer at
   final class PtexFaces
   {
-    /// The first stands for the draws without any, base instance 0.
+    /// the first entry stands for draws without ptex at base instance 0
     public private(set) var entries: [UInt32] = [.max]
     public private(set) var count = 1
     public private(set) var revision = 0
@@ -63,7 +62,7 @@ public extension Akari.Geom
       revision += 1
     }
 
-    /// Adds a draw's faces, returning the base instance it draws with.
+    /// adds a draw's faces and returns the base instance it draws with
     public func add(_ faces: ArraySlice<UInt32>) -> UInt32
     {
       let base = UInt32(count)
@@ -82,17 +81,12 @@ public extension Akari.Geom
 
 extension Akari
 {
-  /// Streams Ptex color tiles into a fixed size GPU cache as the frames ask
-  /// for them, after Lee, Zeichner and Li, "A Texture Streaming Pipeline for
-  /// Real-Time GPU Ray Tracing" (SIGGRAPH 2025): slabs of an atlas a tile
-  /// size apiece, a hash table from tile to slot the shader probes, the
-  /// gbuffer's requests read back to load what's missing and keep what's
-  /// drawn, and the least recently drawn evicted once it's full.
+  /// streams ptex color tiles into a fixed gpu cache as frames ask for them, after lee, zeichner and li's texture streaming pipeline from siggraph 2025
   final class PtexStream
   {
     let faces = Geom.PtexFaces()
 
-    /// What the atlas takes, 512 MB with 16 GB of memory and scaling with it.
+    /// atlas size in bytes, 512 mb on a 16 gb machine and scaling with memory
     static var cacheBytes: Int
     {
       min(max(Int(ProcessInfo.processInfo.physicalMemory / 32), 256 << 20), 4 << 30)
@@ -156,18 +150,18 @@ extension Akari
       atlas == 0 ? 0 : Self.cacheBytes + hashA.count * 16
     }
 
-    /// Whether the frame still waits on tiles, a final render draws until it doesn't.
+    /// whether the frame still waits on tiles, a final render keeps drawing until this is false
     var isStreaming: Bool
     {
       atlas != 0 && (Pixar.HdAkariPtexPendingTiles() > 0 || quiet < stride * stride + 2)
     }
 
-    /// Loads what the last frames asked for and returns what the gbuffer
-    /// binds, `keys` its request textures still holding the last frame.
+    /// loads what the last frames asked for and returns what the gbuffer binds
     func update(keys: (GLuint, GLuint), width: Int, height: Int)
       -> (table: GLuint, atlas: GLuint, hash: GLuint, params: SIMD4<Int32>)
     {
       if kernels.isEmpty { kernels = .precompile() }
+
       guard faces.count > 1, kernels[.copy].isBuilt, atlas != 0 || allocate()
       else
       {
@@ -179,11 +173,13 @@ extension Akari
       stale = nil
       if tableRevision != faces.revision { uploadTable() }
       readRequests()
+
       let r = Int(frame) % Self.ring
       let placed = takeTiles(into: r)
       if placed > 0 { dispatch(kernels[.copy], count: placed, buffers: [copies[r], staging[r]], image: atlas, groups: placed) }
       if !dirty.isEmpty { dispatchHashUpdates(into: r) }
       if keys.0 != 0, keys.1 != 0 { gather(keys, width: width, height: height) }
+
       return (table, atlas, hash, SIMD4(Int32(bitPattern: mask), Int32(probes), 0, 1))
     }
 
@@ -195,36 +191,42 @@ extension Akari
                                     format: GLenum(GL_R32UI))
       hash = gl.createTextureArray(width: 4096, height: GLsizei(entries / 1024), layers: 1, format: GLenum(GL_R32UI))
       guard atlas != 0, hash != 0 else { return false }
+
       mask = UInt32(entries - 1)
       hashA = [UInt32](repeating: 0, count: entries)
       hashB = hashA
       hashSlot = hashA
       slabs = [Slab](repeating: Slab(), count: layers * Self.slabsPerLayer)
       freeSlabs = Array((0 ..< slabs.count).reversed())
+
       let usage = GLuint(LGL_BUFFER_COMPUTE_READ | LGL_BUFFER_MAP_WRITE)
       staging = (0 ..< Self.ring).map { _ in gl.createBuffer(usage: usage, sizeBytes: GLsizei(Self.stagingTexels * 4)) }
       copies = (0 ..< Self.ring).map { _ in gl.createBuffer(usage: usage, sizeBytes: GLsizei(Self.maxTiles * 16)) }
       updates = (0 ..< Self.ring).map { _ in gl.createBuffer(usage: usage, sizeBytes: GLsizei(Self.maxUpdates * 16)) }
       updateCapacity = [Int](repeating: Self.maxUpdates, count: Self.ring)
       readback = gl.createComputeReadback(sizeBytes: GLsizei(Self.maxSamples * 8), ringSize: 3)
-      // the hash table starts empty, a texture starts as whatever its memory held.
+
+      // clear the hash table since a new texture holds whatever its memory had
       kernels[.clear].set(.params, SIMD4<Int32>(4096, Int32(entries / 1024), 0, 0))
       kernels[.clear].layeredImage(hash, at: 0, format: GLenum(GL_R32UI))
       kernels[.clear].dispatch(4096 / 16, entries / 1024 / 16)
       return true
     }
 
-    /// The table, 8192 entries a row, copied on the GPU from a file mapped buffer into a texture the shader reads.
+    /// copies the face table on the gpu from a file mapped buffer into a texture with 8192 entries per row
     private func uploadTable()
     {
       tableRevision = faces.revision
       let entries = faces.take()
       guard entries.count == faces.count else { return }
+
       let rows = (entries.count + 8191) / 8192
       if table != 0 { gl.deleteTextures(count: 1, textures: &table) }
       if tableBuffer != 0 { gl.deleteBuffer(tableBuffer) }
+
       table = gl.createTextureArray(width: 8192, height: GLsizei(min(rows, 8192)), layers: GLsizei((rows + 8191) / 8192),
                                     format: GLenum(GL_R32UI))
+
       tableBuffer = entries.withUnsafeBytes
       { bytes in
         let mapped = Geom.GeometryCache.shared.mappedBuffer(usage: GLuint(LGL_BUFFER_COMPUTE_READ), [bytes])
@@ -245,11 +247,13 @@ extension Akari
       var size: GLsizei = 0
       guard readback != 0, let raw = gl.computeReadbackLatest(readback, size: &size) else { return }
       let samples = raw.assumingMemoryBound(to: UInt32.self)
+
       var wanted = Set<UInt64>()
       for i in 0 ..< Int(size) / 8
       {
         let a = samples[i * 2], b = samples[i * 2 + 1]
         guard a != 0 else { continue }
+
         let key = UInt64(a) << 32 | UInt64(b & 0x7FFF_FFFF)
         if let slot = resident[key]
         {
@@ -262,6 +266,7 @@ extension Akari
       }
 
       quiet = wanted.isEmpty ? quiet + 1 : 0
+
       let keys = Array(wanted)
       keys.withUnsafeBufferPointer { Pixar.HdAkariPtexRequestTiles($0.baseAddress, Int32($0.count)) }
     }
@@ -269,17 +274,21 @@ extension Akari
     private func takeTiles(into r: Int) -> Int
     {
       guard let texels = gl.mapBuffer(staging[r])?.assumingMemoryBound(to: UInt32.self) else { return 0 }
+
       var keys = [UInt64](repeating: 0, count: Self.maxTiles)
       var sizes = [UInt32](repeating: 0, count: Self.maxTiles)
       var offsets = [UInt32](repeating: 0, count: Self.maxTiles)
       let taken = Int(Pixar.HdAkariPtexTakeTiles(&keys, &sizes, &offsets, texels, Int32(Self.maxTiles), Int32(Self.stagingTexels)))
       gl.unmapBuffer(staging[r])
+
       guard taken > 0, let commands = gl.mapBuffer(copies[r])?.assumingMemoryBound(to: SIMD4<UInt32>.self) else { return 0 }
+
       var placed = 0
       for i in 0 ..< taken where resident[keys[i]] == nil && dirty.count < Self.maxUpdates - 8192
       {
         let width = Int(sizes[i] & 0xFFFF), height = Int(sizes[i] >> 16)
         guard let slot = place(keys[i], width: width, height: height) else { continue }
+
         commands[placed] = SIMD4(offsets[i], origin(slot), UInt32(width + 2) | UInt32(height + 2) << 16, 0)
         placed += 1
       }
@@ -290,7 +299,7 @@ extension Akari
 
     private func dispatchHashUpdates(into r: Int)
     {
-      // a slab's worth of evictions can shift more entries than a frame's buffer holds.
+      // a slab worth of evictions can shift more entries than one frame's buffer holds
       if dirty.count > updateCapacity[r]
       {
         gl.deleteBuffer(updates[r])
@@ -300,6 +309,7 @@ extension Akari
       }
 
       guard let out = gl.mapBuffer(updates[r])?.assumingMemoryBound(to: SIMD4<UInt32>.self) else { return }
+
       var count = 0
       for index in dirty
       {
@@ -312,12 +322,13 @@ extension Akari
       dispatch(kernels[.hash], count: count, buffers: [updates[r]], image: hash, groups: (count + 63) / 64)
     }
 
-    /// A pixel in `stride` each way, a different one each frame.
+    /// samples one pixel per `stride` square, a different one each frame
     private func gather(_ keys: (GLuint, GLuint), width: Int, height: Int)
     {
       stride = max(4, Int((Double(width * height) / Double(Self.maxSamples)).squareRoot().rounded(.up)))
       let columns = (width + stride - 1) / stride, rows = (height + stride - 1) / stride
       let step = Int(frame) % (stride * stride)
+
       kernels[.gather].set(.params, SIMD4(Int32(stride), Int32(step % stride | (step / stride) << 8), Int32(columns), Int32(rows)))
       kernels[.gather].sample(keys.0, at: 0)
       kernels[.gather].sample(keys.1, at: 1)
@@ -330,7 +341,6 @@ extension Akari
     {
       kernel.set(.params, SIMD4(Int32(count), 0, 0, 0))
       kernel.bind(buffers)
-
       kernel.layeredImage(image, at: 0, format: GLenum(GL_R32UI))
       kernel.dispatch(groups)
     }
@@ -350,6 +360,7 @@ extension Akari
       let s = Int(slot >> 12), local = Int(slot & 0xFFF)
       let slab = slabs[s]
       let (w, h) = Self.slotSize(slab.size)
+
       let inLayer = s % Self.slabsPerLayer
       let x = inLayer % Self.slabsAcross * Self.slabSize + local % slab.across * w
       let y = inLayer / Self.slabsAcross * Self.slabSize + local / slab.across * h
@@ -366,18 +377,21 @@ extension Akari
     private func place(_ key: UInt64, width: Int, height: Int) -> UInt32?
     {
       let size = Self.sizeClass(width, height)
-      // past half full, the hash table's probes grow long.
+
+      // past half full the hash table probes get long
       if resident.count >= Int(mask / 2), let victim = oldest(size) ?? residents.lazy.compactMap({ self.oldest(in: $0) }).first
       {
         evict(victim)
       }
 
       guard let slot = freeSlot(size) else { return nil }
+
       let s = Int(slot >> 12), local = Int(slot & 0xFFF)
       slabs[s].keys[local] = key
       slabs[s].used[local] = frame
       slabs[s].newest = frame
       slabs[s].places[local] = Int32(residents[size].count)
+
       residents[size].append(slot)
       resident[key] = slot
       insert(key, slot: origin(slot))
@@ -408,15 +422,18 @@ extension Akari
         evict(victim)
         return freeSlot(size)
       }
-      // no tile this size is old enough, a whole slab of another size goes instead.
+
+      // no tile of this size is old enough so recycle a whole slab of another size
       if stale == nil
       {
         stale = slabs.indices.filter { slabs[$0].size >= 0 && slabs[$0].newest + Self.inFlight < frame }
           .sorted { slabs[$0].newest > slabs[$1].newest }
       }
+
       while let s = stale?.popLast()
       {
         guard slabs[s].newest + Self.inFlight < frame else { continue }
+
         for local in slabs[s].keys.indices where slabs[s].keys[local] != 0
         {
           evict(UInt32(s) << 12 | UInt32(local))
@@ -434,6 +451,7 @@ extension Akari
     {
       let (w, h) = Self.slotSize(size)
       let across = Self.slabSize / w, count = across * (Self.slabSize / h)
+
       slabs[s] = Slab(size: size, across: across, keys: [UInt64](repeating: 0, count: count),
                       used: [UInt32](repeating: 0, count: count), free: Array((0 ..< UInt16(count)).reversed()),
                       places: [Int32](repeating: -1, count: count), newest: frame)
@@ -448,13 +466,18 @@ extension Akari
     private func oldest(in slots: [UInt32]) -> UInt32?
     {
       guard !slots.isEmpty else { return nil }
+
       var best: UInt32?
       var bestUsed = UInt32.max
       for _ in 0 ..< min(32, slots.count)
       {
         let slot = slots[Int.random(in: 0 ..< slots.count)]
         let used = slabs[Int(slot >> 12)].used[Int(slot & 0xFFF)]
-        if used < bestUsed { best = slot; bestUsed = used }
+        if used < bestUsed
+        {
+          best = slot
+          bestUsed = used
+        }
       }
 
       return bestUsed + Self.inFlight < frame ? best : nil
@@ -467,6 +490,7 @@ extension Akari
       let key = slabs[s].keys[local]
       resident[key] = nil
       remove(key)
+
       let place = Int(slabs[s].places[local])
       let last = residents[size].removeLast()
       if last != slot
@@ -481,7 +505,7 @@ extension Akari
       if slabs[s].free.count == 1 { open[size].append(s) }
     }
 
-    /// The shader's `ptexSlot` hashes the same.
+    /// must match the hash in the shader's `ptexSlot`
     private static func hashOf(_ a: UInt32, _ b: UInt32) -> UInt32
     {
       var h = (a &* 0x9E37_79B1) ^ ((b &+ 0x7F4A_7C15) &* 0x85EB_CA77)
@@ -496,6 +520,7 @@ extension Akari
       let a = UInt32(key >> 32), b = UInt32(truncatingIfNeeded: key)
       var i = Self.hashOf(a, b) & mask
       var distance: UInt32 = 0
+
       while hashA[Int(i)] != 0
       {
         i = (i + 1) & mask
@@ -513,6 +538,7 @@ extension Akari
     {
       let a = UInt32(key >> 32), b = UInt32(truncatingIfNeeded: key)
       var i = Self.hashOf(a, b) & mask
+
       while hashA[Int(i)] != a || hashB[Int(i)] != b
       {
         guard hashA[Int(i)] != 0 else { return }
@@ -524,9 +550,12 @@ extension Akari
       {
         j = (j + 1) & mask
         guard hashA[Int(j)] != 0 else { break }
+
         let home = Self.hashOf(hashA[Int(j)], hashB[Int(j)]) & mask
-        // an entry stays when its home lies cyclically within (i, j].
+
+        // an entry stays put when its home lies cyclically between i exclusive and j inclusive
         if i <= j ? (home > i && home <= j) : (home > i || home <= j) { continue }
+
         hashA[Int(i)] = hashA[Int(j)]
         hashB[Int(i)] = hashB[Int(j)]
         hashSlot[Int(i)] = hashSlot[Int(j)]
@@ -587,7 +616,7 @@ extension Akari
       }
       """
 
-    /// A threadgroup a tile: its staged texels' offset, the slot, and its bordered size.
+    /// one threadgroup per tile, each command holds the staged texel offset, the slot and the bordered size
     private static let copyMSL = """
       kernel void compute_main(constant U& u [[buffer(0)]],
                                device const uint4* tiles [[buffer(1)]],
@@ -605,7 +634,7 @@ extension Akari
       }
       """
 
-    /// Four texels an entry: its key's halves and its slot.
+    /// each entry takes four texels holding its two key halves and its slot
     private static let hashMSL = """
       kernel void compute_main(constant U& u [[buffer(0)]],
                                device const uint4* updates [[buffer(1)]],
@@ -650,11 +679,12 @@ extension Akari
 
 extension Akari.LabFXEngine
 {
-  /// Streams the Ptex tiles the last frames asked for and binds the cache for the gbuffer.
+  /// streams the ptex tiles the last frames asked for and binds the cache for the gbuffer
   func syncPtex()
   {
     let bound = ptex.update(keys: (runtime.texture(.gbuffer, named: .ptexA), runtime.texture(.gbuffer, named: .ptexB)),
                             width: sizes.render.width, height: sizes.render.height)
+
     setSampler(.ptexTable, bound.table)
     setSampler(.ptexAtlas, bound.atlas)
     setSampler(.ptexHash, bound.hash)

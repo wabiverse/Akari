@@ -43,23 +43,22 @@ import Foundation
 
 public extension Akari
 {
-  /// Instance matrices something else writes every frame, a simulation on
-  /// the GPU say, drawn from the buffer it writes rather than recorded.
+  /// instance matrices something else writes every frame, like a gpu simulation, drawn from its buffer rather than recorded
   enum LiveInstances
   {
     public struct Slot
     {
-      /// Row major 4x4 float matrices, `count` of them.
+      /// row major 4x4 float matrices, `count` of them.
       public var base: UnsafeMutableRawPointer?
       public var count: Int
-      /// Bumped whenever a recording allocates a new buffer.
+      /// bumped whenever a recording allocates a new buffer.
       public var version: Int
     }
 
     private static let lock = NSLock()
     private nonisolated(unsafe) static var slots: [String: Slot] = [:]
 
-    /// Claims a prototype's instances, before the stage is first drawn.
+    /// claims a prototype's instances, before the stage is first drawn.
     public static func register(prototype path: String, count: Int)
     {
       lock.lock()
@@ -67,7 +66,7 @@ public extension Akari
       lock.unlock()
     }
 
-    /// Whether any prototype's instances move without a rerecord.
+    /// whether any prototype's instances move without a rerecord.
     static var isEmpty: Bool
     {
       lock.lock()
@@ -82,7 +81,7 @@ public extension Akari
       return slots[path]
     }
 
-    /// The prototype a rprim draws, hydra names it under the prototype's path.
+    /// the prototype a rprim draws, hydra names it under the prototype's path.
     static func prototype(of rprim: String) -> (path: String, slot: Slot)?
     {
       lock.lock()

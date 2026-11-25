@@ -50,271 +50,349 @@ import SwiftCrossUI
   import AppKit
 #endif
 
-#if os(macOS)
-  extension Kraken.LayoutView
+extension Kraken.LayoutView
+{
+  typealias Entry = Kraken.MenuEntry
+
+  enum Menu
   {
-    enum Menu
+    case add, delete, snap, shading, context, merge, view, select, object, mesh, edge, mode, layer, sculptView, sculpt, mask, sculptAdd
+  }
+
+  func entries(_ kind: Menu) -> [Entry]
+  {
+    let l = layout
+    let edit = l.mode == .edit
+    var items: [Entry] = []
+
+    let snap: [Entry] = [Entry("Cursor to Selected") { l.cursorToSelected() },
+                         Entry("Cursor to World Origin") { l.cursorToOrigin() },
+                         Entry("Selection to Cursor") { l.selectionToCursor() }]
+    let transform: [Entry] = [Entry("Move", "g") { [weak self] in self?.begin(.translate) },
+                              Entry("Rotate", "r") { [weak self] in self?.begin(.rotate) },
+                              Entry("Scale", "s") { [weak self] in self?.begin(.scale) }]
+    let deletes: [Entry] = [Entry("Vertices") { l.editMesh { mesh, _ in mesh.delete(.vertices) } },
+                            Entry("Edges") { l.editMesh { mesh, _ in mesh.delete(.edges) } },
+                            Entry("Faces") { l.editMesh { mesh, _ in mesh.delete(.faces) } },
+                            Entry("Only Faces") { l.editMesh { mesh, _ in mesh.delete(.faces) } }]
+    let edges: [Entry] = [Entry("Edge Crease", "e", .shift) { [weak self] in self?.begin(.crease) },
+                          Entry("Mark Sharp") { l.editMesh { mesh, _ in mesh.markSharp(true) } },
+                          Entry("Clear Sharp") { l.editMesh { mesh, _ in mesh.markSharp(false) } }]
+    let subdivisions: [Entry] = [Entry("None", "0", .control) { l.setSubdivision(level: 0) }]
+      + (1 ... 6).map { level in Entry("Level \(level)", "\(level)", .control) { l.setSubdivision(level: level) } }
+    let merges: [Entry] = [Entry("At Center") { l.editMesh { mesh, _ in mesh.merge(at: nil) } },
+                           Entry("At Cursor") { [weak self] in self?.mergeAtCursor() },
+                           Entry("Collapse") { l.editMesh { mesh, _ in mesh.merge(at: nil) } },
+                           Entry("By Distance") { l.editMesh { mesh, _ in mesh.mergeByDistance(Float(0.0001 * l.unit)) } }]
+
+    // edit mode writes its mesh back first so the remesh reads the latest shape
+    let remesh = { (faces: Int, symmetry: Int?) in
+      if l.mode == .edit { l.exitEdit() }
+      l.remesh(faces: faces, symmetry: symmetry)
+    }
+    let remeshes: [Entry] = [Entry("Low, 2k Faces") { remesh(2000, nil) },
+                             Entry("Medium, 8k Faces") { remesh(8000, nil) },
+                             Entry("High, 24k Faces") { remesh(24000, nil) },
+                             Entry.separator,
+                             Entry("Symmetric X, 8k Faces") { remesh(8000, 0) }]
+
+    switch kind
     {
-      case add, delete, snap, shading, context, merge, view, select, object, mesh, mode, layer
+      case .add:
+        items.append(Entry.header(edit ? "Add Mesh" : "Add"))
+
+        let meshes: [Entry] = Kraken.AddKind.meshes.map { kind in Entry(kind.label) { [weak self] in self?.add(kind) } }
+        if edit
+        {
+          items += meshes
+        }
+        else
+        {
+          items.append(Entry.submenu("Mesh", meshes))
+          let lights: [Entry] = Kraken.AddKind.lights.map { kind in Entry(kind.label) { l.add(kind) } }
+          items.append(Entry.submenu("Light", lights))
+          items.append(Entry(Kraken.AddKind.camera.label) { l.add(.camera) })
+          items.append(Entry.submenu("Empty", [Entry("Plain Axes") { l.add(.empty) }]))
+        }
+      case .delete:
+        if edit
+        {
+          items.append(Entry.header("Delete"))
+          items += deletes
+        }
+        else
+        {
+          items.append(Entry("Delete") { l.deleteSelected() })
+        }
+      case .snap:
+        items.append(Entry.header("Snap"))
+        items += snap
+      case .shading:
+        items.append(Entry.header("Shading"))
+        items += [("Wireframe", ViewportShading.wireframe), ("Solid", .solid),
+                  ("Material Preview", .materialPreview), ("Rendered", .rendered)].map
+        { title, mode -> Entry in
+          var item = Entry(title) { l.setShading(mode) }
+          item.checked = l.shading == mode
+          return item
+        }
+      case .merge:
+        items.append(Entry.header("Merge"))
+        items += merges
+      case .context where edit:
+        items.append(Entry.header("Context Menu"))
+        items += [Entry("Subdivide") { l.editMesh { mesh, _ in mesh.subdivide() } },
+                  Entry("Extrude", "e") { [weak self] in self?.extrude() },
+                  Entry("Inset Faces", "i") { [weak self] in self?.begin(.inset) },
+                  Entry("Loop Cut", "r", .control) { [weak self] in self?.armLoopCut() },
+                  Entry("Fill", "f") { l.editMesh { mesh, _ in _ = mesh.fill() } },
+                  Entry("Duplicate", "d", .shift) { [weak self] in self?.duplicate() },
+                  Entry("Select Linked", "l", .control) { l.editMesh { mesh, _ in mesh.selectLinked() } },
+                  Entry("Checker Deselect") { l.editMesh { mesh, _ in mesh.checkerDeselect() } },
+                  Entry.separator] + edges + [
+                  Entry.separator, Entry.submenu("Merge", merges), Entry.submenu("Delete", deletes),
+                  Entry.submenu("Snap", snap)]
+      case .context:
+        items.append(Entry.header("Object Context Menu"))
+        items += [Entry("Shade Smooth") { l.shade(smooth: true) },
+                  Entry("Shade Flat") { l.shade(smooth: false) },
+                  Entry.separator,
+                  Entry.submenu("Subdivision", subdivisions),
+                  Entry.submenu("Remesh", remeshes),
+                  Entry.separator,
+                  Entry("Duplicate Objects", "d", .shift) { [weak self] in self?.duplicate() },
+                  Entry("Delete") { l.deleteSelected() },
+                  Entry.separator, Entry.submenu("Snap", snap),
+                  Entry("Hide Selected", "h") { l.hideSelected() },
+                  Entry("Show Hidden", "h", .option) { l.unhideAll() },
+                  Entry("Frame Selected") { l.frameSelected() }]
+      case .view:
+        var toolbar = Entry("Toolbar", "t") { [weak self] in self?.layout.showsToolbar.toggle() }
+        toolbar.checked = layout.showsToolbar
+
+        items += [toolbar, Entry.separator,
+                  Entry("Frame Selected") { l.frameSelected() },
+                  Entry("Frame All") { l.frameAll() },
+                  Entry.separator,
+                  Entry("Camera") { [weak self] in self?.toggleCamera() },
+                  Entry("Align Active Camera to View") { l.alignCameraToView() },
+                  Entry.separator,
+                  Entry("Top") { l.hydra.setStandardView(.top) },
+                  Entry("Front") { l.hydra.setStandardView(.front) },
+                  Entry("Right") { l.hydra.setStandardView(.right) }]
+      case .select:
+        items += [Entry("All", "a") { l.selectAll() },
+                  Entry("None", "a", .option) { l.deselectAll() },
+                  Entry("Invert", "i", .control) { l.invertSelection() },
+                  Entry.separator,
+                  Entry("Box Select", "b") { [weak self] in self?.boxArmed = true }]
+
+        if edit
+        {
+          items.append(Entry("Select Linked", "l", .control) { l.editMesh { mesh, _ in mesh.selectLinked() } })
+          items.append(Entry("Checker Deselect") { l.editMesh { mesh, _ in mesh.checkerDeselect() } })
+          items.append(Entry("Select Sharp Edges") { l.editMesh { mesh, _ in mesh.selectSharp() } })
+        }
+        else
+        {
+          items.append(Entry("Select Hierarchy", "]") { l.selectHierarchy() })
+        }
+      case .object:
+        items += [Entry.submenu("Transform", transform),
+                  Entry.submenu("Shading", [Entry("Shade Smooth") { l.shade(smooth: true) },
+                                            Entry("Shade Flat") { l.shade(smooth: false) }]),
+                  Entry.submenu("Subdivision", subdivisions),
+                  Entry.submenu("Remesh", remeshes),
+                  Entry.submenu("Clear", [Entry("Location", "g", .option) { l.clear(.location) },
+                                         Entry("Rotation", "r", .option) { l.clear(.rotation) },
+                                         Entry("Scale", "s", .option) { l.clear(.scale) }]),
+                  Entry.submenu("Snap", snap),
+                  Entry.separator,
+                  Entry("Duplicate Objects", "d", .shift) { [weak self] in self?.duplicate() },
+                  Entry("Delete") { l.deleteSelected() },
+                  Entry("Join", "j", .control) { l.joinSelected() },
+                  Entry.separator,
+                  Entry("Parent to Active", "p", .control) { l.parentSelected() },
+                  Entry.separator,
+                  Entry.submenu("Show/Hide", [Entry("Show Hidden", "h", .option) { l.unhideAll() },
+                                             Entry("Hide Selected", "h") { l.hideSelected() }])]
+      case .mesh:
+        items += [Entry.submenu("Transform", transform),
+                  Entry("Extrude", "e") { [weak self] in self?.extrude() },
+                  Entry("Inset Faces", "i") { [weak self] in self?.begin(.inset) },
+                  Entry("Subdivide") { l.editMesh { mesh, _ in mesh.subdivide() } },
+                  Entry("Loop Cut", "r", .control) { [weak self] in self?.armLoopCut() },
+                  Entry("Fill", "f") { l.editMesh { mesh, _ in _ = mesh.fill() } },
+                  Entry("Duplicate", "d", .shift) { [weak self] in self?.duplicate() },
+                  Entry.separator, Entry.submenu("Merge", merges), Entry.submenu("Delete", deletes),
+                  Entry.submenu("Snap", snap), Entry.separator, Entry.submenu("Remesh", remeshes)]
+      case .edge:
+        items.append(Entry.header("Edge"))
+        items += edges + [Entry.separator,
+                          Entry("Loop Cut", "r", .control) { [weak self] in self?.armLoopCut() },
+                          Entry("Subdivide") { l.editMesh { mesh, _ in mesh.subdivide() } }]
+      case .mode:
+        let sculpting = l.tab == .sculpting
+        var object = Entry("Object Mode") { if l.tab == .sculpting { l.open(.layout) } else { l.exitEdit() } }
+        object.checked = !edit && !sculpting
+        object.symbol = Kraken.Layout.objectSymbol
+
+        var editing = Entry("Edit Mode") { if l.tab == .sculpting { l.open(.modeling) } else { l.enterEdit() } }
+        editing.checked = edit && !sculpting
+        editing.symbol = Kraken.Layout.editSymbol
+
+        var sculpt = Entry("Sculpt Mode") { l.open(.sculpting) }
+        sculpt.checked = sculpting
+        sculpt.symbol = Kraken.Layout.sculptSymbol
+
+        items += [object, editing, sculpt]
+      case .sculptView:
+        let sculpt = l.sculpt
+        var toolbar = Entry("Toolbar") { l.showsToolbar.toggle() }
+        toolbar.checked = l.showsToolbar
+        var shelf = Entry("Asset Shelf") { sculpt.showsShelf.toggle() }
+        shelf.checked = sculpt.showsShelf
+        items += [toolbar, shelf, Entry.separator, Entry("Frame All", "f") { sculpt.viewport?.frameAll() }, Entry.separator]
+
+        for look in Kraken.SculptShading.allCases
+        {
+          var item = Entry(look.rawValue) { sculpt.shading = look }
+          item.checked = sculpt.shading == look
+          items.append(item)
+        }
+      case .sculpt:
+        let sculpt = l.sculpt
+        items += [Entry("Smooth All") { sculpt.smoothAll() },
+                  Entry("Fill Surface With Paint") { sculpt.fillPaint() },
+                  Entry.submenu("Add Shape", Kraken.SculptShape.allCases.map
+                  { shape in
+                    Entry(shape.rawValue)
+                    {
+                      sculpt.shape = shape
+                      sculpt.insertShape()
+                    }
+                  }),
+                  Entry.separator,
+                  Entry.submenu("Remesh", sculpt.remeshEntries),
+                  Entry("Add Detail", "r", [.control]) { sculpt.addDetail() },
+                  Entry("Reduce Detail", "r", [.control, .shift]) { sculpt.reduceDetail() },
+                  Entry.separator,
+                  Entry("Write to Scene Now") { sculpt.writeNow() }]
+      case .sculptAdd:
+        items.append(Entry.header("Add Mesh"))
+        items += Kraken.AddKind.meshes.map { kind in Entry(kind.label) { l.add(kind) } }
+      case .mask:
+        let sculpt = l.sculpt
+        var shows = Entry("Show Mask") { sculpt.showsMask.toggle() }
+        shows.checked = sculpt.showsMask
+        items += [Entry("Invert Mask") { sculpt.invertMask() },
+                  Entry("Clear Mask") { sculpt.clearMask() },
+                  Entry.separator,
+                  shows]
+      case .layer:
+        items.append(Entry.header("Edit Layer"))
+
+        for layer in l.layers
+        {
+          var item = Entry(layer.name) { l.work(in: layer.identifier) }
+          item.checked = layer.identifier == l.department
+          items.append(item)
+        }
+
+        items.append(Entry.separator)
+        items.append(Entry.submenu("New Department Layer", Kraken.Authoring.Department.allCases.map
+        { department in Entry(department.rawValue) { l.newDepartment(department) } }))
     }
 
-    final class Action: NSMenuItem
-    {
-      private let run: () -> Void
+    return items
+  }
 
-      init(_ title: String, _ key: String = "", _ modifiers: NSEvent.ModifierFlags = [], run: @escaping () -> Void)
-      {
-        self.run = run
-        super.init(title: title, action: #selector(fire), keyEquivalent: key)
-        keyEquivalentModifierMask = modifiers
-        target = self
-      }
+  /// opens a menu at `p` drawn the native way
+  func popUp(_ kind: Menu, at p: CGPoint)
+  {
+    #if os(macOS)
+      Kraken.MenuPanel.show(menu(kind), at: p, in: self)
+    #else
+      Entry.present(entries(kind), from: self, at: p)
+    #endif
+  }
 
-      @available(*, unavailable)
-      required init(coder _: NSCoder)
-      {
-        fatalError("init(coder:) is not supported")
-      }
-
-      @objc private func fire()
-      {
-        run()
-      }
-    }
-
-    private static func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem
-    {
-      let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-      let menu = NSMenu(title: title)
-      items.forEach(menu.addItem)
-      item.submenu = menu
-      return item
-    }
+  #if os(macOS)
+    /// a menu item that runs a closure, used by the outliner's own menus
+    typealias Action = Kraken.MenuAction
 
     func menu(_ kind: Menu) -> NSMenu
     {
-      let l = layout
-      let edit = l.mode == .edit
-      let menu = NSMenu()
-      menu.autoenablesItems = false
-      var items: [NSMenuItem] = []
-      let snap: [NSMenuItem] = [Action("Cursor to Selected") { l.cursorToSelected() },
-                  Action("Cursor to World Origin") { l.cursorToOrigin() },
-                  Action("Selection to Cursor") { l.selectionToCursor() }]
-      let transform: [NSMenuItem] = [Action("Move", "g") { [weak self] in self?.begin(.translate) },
-                       Action("Rotate", "r") { [weak self] in self?.begin(.rotate) },
-                       Action("Scale", "s") { [weak self] in self?.begin(.scale) }]
-      let deletes: [NSMenuItem] = [Action("Vertices") { l.editMesh { mesh, _ in mesh.delete(.vertices) } },
-                     Action("Edges") { l.editMesh { mesh, _ in mesh.delete(.edges) } },
-                     Action("Faces") { l.editMesh { mesh, _ in mesh.delete(.faces) } },
-                     Action("Only Faces") { l.editMesh { mesh, _ in mesh.delete(.faces) } }]
-      let merges: [NSMenuItem] = [Action("At Center") { l.editMesh { mesh, _ in mesh.merge(at: nil) } },
-                    Action("At Cursor") { [weak self] in self?.mergeAtCursor() },
-                    Action("Collapse") { l.editMesh { mesh, _ in mesh.merge(at: nil) } },
-                    Action("By Distance") { l.editMesh { mesh, _ in mesh.mergeByDistance(Float(0.0001 * l.unit)) } }]
-      switch kind
-      {
-        case .add:
-          items.append(header(edit ? "Add Mesh" : "Add"))
-          let meshes: [NSMenuItem] = Kraken.AddKind.meshes.map { kind in Action(kind.label) { [weak self] in self?.add(kind) } }
-          if edit
-          {
-            items += meshes
-          }
-          else
-          {
-            items.append(Self.submenu("Mesh", meshes))
-            let lights: [NSMenuItem] = Kraken.AddKind.lights.map { kind in Action(kind.label) { l.add(kind) } }
-            items.append(Self.submenu("Light", lights))
-            items.append(Action(Kraken.AddKind.camera.label) { l.add(.camera) })
-            items.append(Self.submenu("Empty", [Action("Plain Axes") { l.add(.empty) }]))
-          }
-        case .delete:
-          if edit
-          {
-            items.append(header("Delete"))
-            items += deletes
-          }
-          else
-          {
-            items.append(Action("Delete") { l.deleteSelected() })
-          }
-        case .snap:
-          items.append(header("Snap"))
-          items += snap
-        case .shading:
-          items.append(header("Shading"))
-          items += [("Wireframe", ViewportShading.wireframe), ("Solid", .solid),
-                    ("Material Preview", .materialPreview), ("Rendered", .rendered)].map
-          { title, mode -> NSMenuItem in
-            let item = Action(title) { l.setShading(mode) }
-            item.state = l.shading == mode ? .on : .off
-            return item
-          }
-        case .merge:
-          items.append(header("Merge"))
-          items += merges
-        case .context where edit:
-          items.append(header("Context Menu"))
-          items += [Action("Subdivide") { l.editMesh { mesh, _ in mesh.subdivide() } },
-                    Action("Extrude", "e") { [weak self] in self?.extrude() },
-                    Action("Inset Faces", "i") { [weak self] in self?.begin(.inset) },
-                    Action("Loop Cut", "r", .control) { [weak self] in self?.armLoopCut() },
-                    Action("Fill", "f") { l.editMesh { mesh, _ in _ = mesh.fill() } },
-                    Action("Duplicate", "d", .shift) { [weak self] in self?.duplicate() },
-                    Action("Select Linked", "l", .control) { l.editMesh { mesh, _ in mesh.selectLinked() } },
-                    .separator(), Self.submenu("Merge", merges), Self.submenu("Delete", deletes),
-                    Self.submenu("Snap", snap)]
-        case .context:
-          items.append(header("Object Context Menu"))
-          items += [Action("Duplicate Objects", "d", .shift) { [weak self] in self?.duplicate() },
-                    Action("Delete") { l.deleteSelected() },
-                    .separator(), Self.submenu("Snap", snap),
-                    Action("Hide Selected", "h") { l.hideSelected() },
-                    Action("Show Hidden", "h", .option) { l.unhideAll() },
-                    Action("Frame Selected") { l.frameSelected() }]
-        case .view:
-          let toolbar = Action("Toolbar", "t") { [weak self] in self?.layout.showsToolbar.toggle() }
-          toolbar.state = layout.showsToolbar ? .on : .off
-          items += [toolbar, .separator(),
-                    Action("Frame Selected") { l.frameSelected() },
-                    Action("Frame All") { l.frameAll() },
-                    .separator(),
-                    Action("Camera") { [weak self] in self?.toggleCamera() },
-                    Action("Align Active Camera to View") { l.alignCameraToView() },
-                    .separator(),
-                    Action("Top") { l.hydra.setStandardView(.top) },
-                    Action("Front") { l.hydra.setStandardView(.front) },
-                    Action("Right") { l.hydra.setStandardView(.right) }]
-        case .select:
-          items += [Action("All", "a") { l.selectAll() },
-                    Action("None", "a", .option) { l.deselectAll() },
-                    Action("Invert", "i", .control) { l.invertSelection() },
-                    .separator(),
-                    Action("Box Select", "b") { [weak self] in self?.boxArmed = true }]
-          if edit
-          {
-            items.append(Action("Select Linked", "l", .control) { l.editMesh { mesh, _ in mesh.selectLinked() } })
-          }
-        case .object:
-          items += [Self.submenu("Transform", transform),
-                    Self.submenu("Clear", [Action("Location", "g", .option) { l.clear(.location) },
-                                           Action("Rotation", "r", .option) { l.clear(.rotation) },
-                                           Action("Scale", "s", .option) { l.clear(.scale) }]),
-                    Self.submenu("Snap", snap),
-                    .separator(),
-                    Action("Duplicate Objects", "d", .shift) { [weak self] in self?.duplicate() },
-                    Action("Delete") { l.deleteSelected() },
-                    .separator(),
-                    Self.submenu("Show/Hide", [Action("Show Hidden", "h", .option) { l.unhideAll() },
-                                               Action("Hide Selected", "h") { l.hideSelected() }])]
-        case .mesh:
-          items += [Self.submenu("Transform", transform),
-                    Action("Extrude", "e") { [weak self] in self?.extrude() },
-                    Action("Inset Faces", "i") { [weak self] in self?.begin(.inset) },
-                    Action("Subdivide") { l.editMesh { mesh, _ in mesh.subdivide() } },
-                    Action("Loop Cut", "r", .control) { [weak self] in self?.armLoopCut() },
-                    Action("Fill", "f") { l.editMesh { mesh, _ in _ = mesh.fill() } },
-                    Action("Duplicate", "d", .shift) { [weak self] in self?.duplicate() },
-                    .separator(), Self.submenu("Merge", merges), Self.submenu("Delete", deletes),
-                    Self.submenu("Snap", snap)]
-        case .mode:
-          let object = Action("Object Mode") { l.exitEdit() }
-          object.state = edit ? .off : .on
-          let editing = Action("Edit Mode") { l.enterEdit() }
-          editing.state = edit ? .on : .off
-          items += [object, editing]
-        case .layer:
-          items.append(header("Edit Layer"))
-          for layer in l.layers
-          {
-            let item = Action(layer.name) { l.work(in: layer.identifier) }
-            item.state = layer.identifier == l.department ? .on : .off
-            items.append(item)
-          }
+      Entry.menu(entries(kind))
+    }
+  #endif
 
-          items.append(.separator())
-          items.append(Self.submenu("New Department Layer", Kraken.Authoring.Department.allCases.map
-          { department in Action(department.rawValue) { l.newDepartment(department) } }))
-      }
+  func saveAs()
+  {
+    layout.askSaveAs()
+  }
 
-      items.forEach(menu.addItem)
-      return menu
+  private func armLoopCut()
+  {
+    loopCutArmed = true
+    updateLoopCut()
+  }
+
+  private func mergeAtCursor()
+  {
+    let cursor = layout.cursor
+
+    layout.editMesh
+    { mesh, world in
+      let p = world.inverse * SIMD4(cursor, 1)
+      mesh.merge(at: SIMD3<Float>(SIMD3(p.x, p.y, p.z)))
+    }
+  }
+
+  func add(_ kind: Kraken.AddKind, options: Kraken.AddOptions = .standard)
+  {
+    guard layout.mode == .edit else
+    {
+      layout.add(kind, options: options)
+      return
     }
 
-    private func header(_ title: String) -> NSMenuItem
-    {
-      let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-      item.isEnabled = false
-      return item
-    }
+    let cursor = layout.cursor
+    let hydra = layout.hydra
 
-    func popUp(_ kind: Menu, at p: CGPoint)
-    {
-      Kraken.MenuPanel.show(menu(kind), at: p, in: self)
-    }
+    hydra.performOnFrameQueue
+    { [self] in
+      let data = Kraken.SceneEdit.primitive(hydra.stage, kind, options)
+      let flat = Array(data.points)
+      let counts = Array(data.counts).map(Int.init)
+      let indices = Array(data.indices).map(Int.init)
+      let valid = data.valid
 
-    func saveAs()
-    {
-      layout.askSaveAs()
-    }
+      DispatchQueue.main.async
+      { [weak self] in
+        guard let self, valid else { return }
 
-    private func armLoopCut()
-    {
-      loopCutArmed = true
-      updateLoopCut()
-    }
-
-    private func mergeAtCursor()
-    {
-      let cursor = layout.cursor
-      layout.editMesh
-      { mesh, world in
-        let p = world.inverse * SIMD4(cursor, 1)
-        mesh.merge(at: SIMD3<Float>(SIMD3(p.x, p.y, p.z)))
-      }
-    }
-
-    func add(_ kind: Kraken.AddKind)
-    {
-      guard layout.mode == .edit else
-      {
-        layout.add(kind)
-        return
-      }
-
-      let cursor = layout.cursor
-      let hydra = layout.hydra
-      hydra.performOnFrameQueue
-      { [self] in
-        let data = Kraken.SceneEdit.primitive(hydra.stage, kind)
-        let flat = Array(data.points), counts = Array(data.counts).map(Int.init), indices = Array(data.indices).map(Int.init)
-        let valid = data.valid
-        DispatchQueue.main.async
-        { [weak self] in
-          guard let self, valid else { return }
-          self.layout.editMesh
-          { mesh, world in
-            let inverse = world.inverse
-            let points = stride(from: 0, to: flat.count - 2, by: 3).map
-            { i -> SIMD3<Float> in
-              let p = inverse * SIMD4(cursor + SIMD3(Double(flat[i]), Double(flat[i + 1]), Double(flat[i + 2])), 1)
-              return SIMD3<Float>(SIMD3(p.x, p.y, p.z))
-            }
-
-            var offset = 0
-            var loops: [[Int]] = []
-            for count in counts
-            {
-              loops.append(Array(indices[offset ..< offset + count]))
-              offset += count
-            }
-
-            let made = mesh.add(points: points, faces: loops)
-            mesh.select(faces: made)
+        self.layout.editMesh
+        { mesh, world in
+          let inverse = world.inverse
+          let points = stride(from: 0, to: flat.count - 2, by: 3).map
+          { i -> SIMD3<Float> in
+            let p = inverse * SIMD4(cursor + SIMD3(Double(flat[i]), Double(flat[i + 1]), Double(flat[i + 2])), 1)
+            return SIMD3<Float>(SIMD3(p.x, p.y, p.z))
           }
+
+          var offset = 0
+          var loops: [[Int]] = []
+          for count in counts
+          {
+            loops.append(Array(indices[offset ..< offset + count]))
+            offset += count
+          }
+
+          let made = mesh.add(points: points, faces: loops)
+          mesh.select(faces: made)
         }
       }
     }
   }
-#endif
+}

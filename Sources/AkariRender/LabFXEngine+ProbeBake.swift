@@ -45,28 +45,31 @@ import LabGL
 
 extension Akari.LabFXEngine
 {
-  /// Light probe bake progress bar, drawn from a `callback:` pass.
+  /// the light probe bake progress bar, drawn from a `callback:` pass
   final class ProbeBakeOverlay
   {
     private var shader: GLuint = 0
-    /// Written by `update` on the render thread, read by `draw`.
+
+    /// written by `update` on the render thread and read by `draw`
     private var enabled = false
     private weak var probes: Akari.LightProbes?
 
-    /// Hooks the overlay's draw into the deferred graph's `draw-probe-bake` pass.
+    /// hooks the overlay's draw into the deferred graph's `draw-probe-bake` pass
     func attach(to deferred: inout lab.fx.Runtime)
     {
-      shader = gl.precompileShader(name: "akari-probe-bake",
-                                   vertexGLSL: Self.vertexGLSL,
-                                   fragmentGLSL: Self.fragmentGLSL,
-                                   vertexMSL: Self.msl,
-                                   fragmentMSL: nil)
+      shader = Akari.ShaderSource.shader("akari-probe-bake", vertexGLSL: Self.vertexGLSL, fragmentGLSL: Self.fragmentGLSL,
+                                         msl: Self.msl, owner: self)
+      { owner, fresh in
+        defer { owner.shader = fresh }
+        return owner.shader
+      }
+
       deferred.setPassCallback("draw-probe-bake",
                                callback: akariProbeBakeDrawCallback,
                                userdata: Unmanaged.passUnretained(self).toOpaque())
     }
 
-    /// Tracks the feature flag and the probe state the bar reads.
+    /// tracks the feature flag and the probe state the bar reads
     func update(enabled: Bool, probes: Akari.LightProbes?)
     {
       self.enabled = enabled
@@ -88,6 +91,7 @@ extension Akari.LabFXEngine
     fileprivate func draw(width: Int32, height: Int32)
     {
       guard enabled, shader != 0, let probes else { return }
+
       let total = probes.captureTotal
       guard total > 0, probes.inView, probes.captured < total || !probes.isReady else { return }
 
@@ -128,7 +132,7 @@ extension Akari.LabFXEngine
       return path
     }()
 
-    /// Draws text flat on screen.
+    /// draws text flat on screen
     private func text(_ text: String, x: Float, y: Float, width: Int32, height: Int32)
     {
       guard width > 0, height > 0, let fontPath = Self.fontPath else { return }
@@ -145,7 +149,7 @@ extension Akari.LabFXEngine
       gl.disable(GL_CULL_FACE)
 
       gl.font(path: fontPath, pointSize: 12)
-      gl.begin(mode: GL_FONT)
+      gl.begin(mode: GLenum(GL_FONT))
       gl.color(red: Float(1), green: Float(1), blue: Float(1), alpha: Float(1))
       gl.text(x: px, y: py, z: Float(0), text)
       gl.end()
@@ -153,7 +157,7 @@ extension Akari.LabFXEngine
       gl.enable(GL_CULL_FACE)
     }
 
-    /// Two triangles in clip space.
+    /// two triangles in clip space
     private func quad(_ x0: Float, _ y0: Float, _ x1: Float, _ y1: Float)
     {
       gl.begin(mode: GL_TRIANGLES)
@@ -176,9 +180,9 @@ extension Akari.LabFXEngine
       ].map
       { start in
         (0 ... arcSteps).map
-        { i in
-          let a = start + Float(i) * (Float.pi / 2) / Float(arcSteps)
-          return (cos(a), sin(a))
+        { step in
+          let angle = start + Float(step) * (Float.pi / 2) / Float(arcSteps)
+          return (cos(angle), sin(angle))
         }
       }
     }()
@@ -298,7 +302,7 @@ extension Akari.LabFXEngine
   }
 }
 
-/// `Runtime.setPassCallback` takes a plain C function pointer.
+/// `Runtime.setPassCallback` takes a plain c function pointer
 private func akariProbeBakeDrawCallback(_ userdata: UnsafeMutableRawPointer?, _ width: Int32, _ height: Int32)
 {
   guard let userdata else { return }

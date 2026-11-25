@@ -71,7 +71,7 @@ extension Kraken
       }
     }
 
-    /// Drawn over the viewport, clicks pass through to it.
+    /// drawn over the viewport, clicks pass through to it.
     final class PassepartoutView: NSView
     {
       var aspect = 16.0 / 9.0
@@ -136,8 +136,7 @@ extension Kraken
       }
     }
 
-    /// Drags scrub by a step every few points, shift drags finely,
-    /// a click without a drag swaps in a text field to type into.
+    /// drags scrub a step every few points, shift drags finely, a click swaps in a text field
     final class NumberView: NSView, NSTextFieldDelegate
     {
       var value = 0.0
@@ -146,7 +145,7 @@ extension Kraken
       var format: (Double) -> String = { "\($0)" }
       var label = ""
       var onChange: (Double) -> Void = { _ in }
-      /// The property to key when I is pressed over this field.
+      /// the property to key when i is pressed over this field.
       var keyTarget: KeyTarget?
       var read: (() -> Double)?
       {
@@ -278,7 +277,7 @@ extension Kraken
         self.editor = nil
         editor.delegate = nil
         editor.removeFromSuperview()
-        if !cancelled, let typed = NumberField.parse(editor.stringValue) { set(typed) }
+        if !cancelled, let typed = NumberField.parse(editor.stringValue, in: range) { set(typed) }
         needsDisplay = true
       }
 
@@ -336,6 +335,8 @@ extension Kraken
     {
       let text: Binding<String>
       let width: Double
+      /// called with the text when editing ends
+      var onCommit: ((String) -> Void)?
 
       func makeNSView(context _: Context) -> TextBoxView
       {
@@ -345,6 +346,7 @@ extension Kraken
       func updateNSView(_ view: TextBoxView, context _: Context)
       {
         view.onChange = { text.wrappedValue = $0 }
+        view.onCommit = onCommit
         if view.field.currentEditor() == nil, view.field.stringValue != text.wrappedValue
         {
           view.field.stringValue = text.wrappedValue
@@ -357,11 +359,12 @@ extension Kraken
       }
     }
 
-    /// A dark, borderless text field in a rounded box.
+    /// a dark, borderless text field in a rounded box.
     final class TextBoxView: NSView, NSTextFieldDelegate
     {
       let field = NSTextField()
       var onChange: (String) -> Void = { _ in }
+      var onCommit: ((String) -> Void)?
 
       override var isFlipped: Bool
       {
@@ -401,6 +404,11 @@ extension Kraken
       {
         onChange(field.stringValue)
       }
+
+      func controlTextDidEndEditing(_: Notification)
+      {
+        onCommit?(field.stringValue)
+      }
     }
 
     struct NativeColorWell: NSViewRepresentable
@@ -433,7 +441,7 @@ extension Kraken
     {
       let well = NSColorWell(style: .minimal)
       var onChange: (SIMD3<Float>) -> Void = { _ in }
-      /// The property to key when I is pressed over this field.
+      /// the property to key when i is pressed over this field.
       var keyTarget: KeyTarget?
 
       override func updateTrackingAreas()
@@ -483,63 +491,6 @@ extension Kraken
       {
         guard let c = well.color.usingColorSpace(.sRGB) else { return }
         onChange(SIMD3(Float(c.redComponent), Float(c.greenComponent), Float(c.blueComponent)))
-      }
-    }
-
-    final class SymbolView: NSImageView
-    {
-      var symbol: String?
-    }
-
-    /// Calls back about thirty times a second while running, for
-    /// views that follow playback without a SwiftUI style update.
-    final class Ticker
-    {
-      private var timer: Timer?
-
-      func run(_ running: Bool, _ tick: @escaping @MainActor () -> Void)
-      {
-        guard running != (timer != nil) else { return }
-        timer?.invalidate()
-        timer = nil
-        guard running else { return }
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { _ in MainActor.assumeIsolated { tick() } }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-      }
-
-      deinit
-      {
-        timer?.invalidate()
-      }
-    }
-
-    struct NativeSymbol: NSViewRepresentable
-    {
-      let name: () -> String
-      let size: Double
-      let white: Double
-
-      func makeNSView(context _: Context) -> SymbolView
-      {
-        let view = SymbolView()
-        view.imageScaling = .scaleProportionallyDown
-        return view
-      }
-
-      func updateNSView(_ view: SymbolView, context _: Context)
-      {
-        let name = name()
-        guard name != view.symbol else { return }
-        view.symbol = name
-        let config = NSImage.SymbolConfiguration(pointSize: size, weight: .regular)
-        view.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
-        view.contentTintColor = NSColor(white: white, alpha: 1)
-      }
-
-      func sizeThatFits(_: ProposedViewSize, nsView _: SymbolView, context _: Context) -> ViewSize
-      {
-        ViewSize(size + 4, size + 4)
       }
     }
   #endif

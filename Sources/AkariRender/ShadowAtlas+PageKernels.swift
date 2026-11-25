@@ -546,7 +546,7 @@ extension Akari.ShadowAtlas
     }
     """
 
-  /// A tile is resident once drawn into the page it still owns.
+  /// a tile is resident once drawn into the page it still owns.
   static let pageTableBody = """
       int slot = index / \(tilesPerTilemap);
       int local = index % \(tilesPerTilemap);
@@ -566,9 +566,7 @@ extension Akari.ShadowAtlas
         : vec4(0.0);
     """
 
-  /// Whether this frame draws a tile, in its view's rect, and a
-  /// static redraw in the static one too, the budget left the rest
-  /// for later.
+  /// whether this frame draws a tile in its view's rect, and a static redraw in the static one, the budget left the rest for later
   static let inRenderRectFunction = """
     bool inRenderRect(uint rect, int x, int y)
     {
@@ -581,7 +579,7 @@ extension Akari.ShadowAtlas
     }
     """
 
-  /// The per view indirection the surface shader reads.
+  /// the per view indirection the surface shader reads.
   static let renderMapBody = """
       if (local < \(tilemapRes * tilemapRes))
       {
@@ -661,7 +659,7 @@ extension Akari.ShadowAtlas
       int2 texel = int2(col * \(pageResolution) + int(gid.x), int(gid.y));
     """
 
-  /// Sets whether a toRender tile has been rendered of each drawn view.
+  /// sets whether a toRender tile has been rendered of each drawn view.
   static let retireDrawnBody = """
       if (gid >= \(maxViews * tilemapRes * tilemapRes)u) return;
       int view = int(gid / \(tilemapRes * tilemapRes)u);
@@ -916,7 +914,7 @@ extension Akari.ShadowAtlas
     }
     """
 
-  /// Copies each listed page's static depth into the atlas, the base the dynamic casters draw over.
+  /// copies each listed page's static depth into the atlas, the base the dynamic casters draw over.
   static let pageCopyGLSL = """
     #version 430
     layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;

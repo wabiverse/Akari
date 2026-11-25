@@ -40,43 +40,43 @@
 #ifndef HDAKARI_BRIDGE_DELEGATE_CALLS_H
 #define HDAKARI_BRIDGE_DELEGATE_CALLS_H
 
-/* The Swift implemented surface of HdRenderDelegate. */
+/* the parts of `HdRenderDelegate` implemented in swift */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** Invoked once per string the Swift delegate enumerates. */
+/** called once for each string the swift delegate lists */
 typedef void (*AKStringCallback)(const char *value, void *context);
 
 /**
- * The supported Hydra prim type tokens, delivered via a callback.
+ * the supported hydra prim type tokens, handed out through a callback.
  *
- * @param delegate  retained `Akari.RenderDelegate` (opaque).
- * @param cb        called once per supported token.
- * @param context   passed through to `cb` (the adapter's TfTokenVector).
+ * @param delegate  the retained `Akari.RenderDelegate` as an opaque pointer.
+ * @param cb        called once for each supported token.
+ * @param context   passed through to `cb`, the adapter's `TfTokenVector`.
  */
 void AKRenderDelegateSupportedRprimTypes(void *delegate, AKStringCallback cb, void *context);
 void AKRenderDelegateSupportedSprimTypes(void *delegate, AKStringCallback cb, void *context);
 void AKRenderDelegateSupportedBprimTypes(void *delegate, AKStringCallback cb, void *context);
 
 /**
- * The packed AOV descriptor for `name` ("color", "depth", "primId", ...):
- * an AK_AOV_FORMAT code. The adapter maps the code back to an HdAovDescriptor
- * (format + multiSample + clear value).
+ * the packed aov descriptor for `name` as an `AK_AOV_FORMAT` code. the adapter
+ * maps the code back to an `HdAovDescriptor` with its format, multisampling
+ * and clear value.
  *
- * @param delegate  retained `Akari.RenderDelegate` (opaque).
- * @param name      AOV name, e.g. "color".
+ * @param delegate  the retained `Akari.RenderDelegate` as an opaque pointer.
+ * @param name      the aov name, such as color, depth or `primId`.
  */
 int32_t AKRenderDelegateDefaultAovDescriptor(void *delegate, const char *name);
 
 /**
- * Factory functions for CreateRprim/CreateSprim/CreateBprim. Returns the
- * renderer's class name for a prim type, or NULL to decline the prim. The
- * C++ adapter maps each known name onto the Hydra subclass to construct.
+ * the factories behind `CreateRprim`, `CreateSprim` and `CreateBprim`. each
+ * returns the renderer's class name for a prim type, or null to decline it.
+ * the c++ adapter maps each known name onto the hydra subclass it constructs.
  *
- * @param delegate  retained `Akari.RenderDelegate` (opaque).
- * @param typeId    Hydra prim type token, e.g. "mesh".
+ * @param delegate  the retained `Akari.RenderDelegate` as an opaque pointer.
+ * @param typeId    the hydra prim type token, such as mesh.
  */
 const char *AKRenderDelegateRprimClassName(void *delegate, const char *typeId);
 const char *AKRenderDelegateSprimClassName(void *delegate, const char *typeId);

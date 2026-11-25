@@ -55,21 +55,21 @@
 PXR_NAMESPACE_OPEN_SCOPE
 
 /**
- * Replaces a color AOV render buffer's texture with a wrap of an
- * externally owned native texture, the handoff for LabGL's final
- * color buffer. The buffer takes over Hgi ownership of the wrap
- * (destroying it on realloc / deallocate does not destroy the Metal
- * object, which stays owned by LabGL). The wrap is described from
- * the AOV's own dims/format, so the creator's texture must match
- * the AOV descriptor.
+ * replaces a color aov render buffer's texture with a wrap of an externally
+ * owned native texture, which is how labgl hands over its final color buffer.
+ * the buffer takes over hgi ownership of the wrap, and destroying it on a
+ * reallocation does not destroy the metal object, which labgl still owns.
+ * the wrap is described from the aov's own size and format, so the creator's
+ * texture must match the aov descriptor.
  *
- * @param renderBuffer  `HdAkariRenderBuffer` for the color AOV.
- * @param hgi           the `HgiMetal` shared with Hydra.
- * @param rawResource   Backend native texture handle from LabGL.
+ * @param renderBuffer  the `HdAkariRenderBuffer` for the color aov.
+ * @param hgi           the `HgiMetal` shared with hydra.
+ * @param rawResource   the native texture handle from labgl.
  */
 void AkariRenderBufferSetExternalTexture(HdAkariRenderBuffer *renderBuffer,
                                          HgiMetal *hgi,
                                          uint64_t rawResource);
+
 PXR_NAMESPACE_CLOSE_SCOPE
 
 #endif // HDAKARI_RENDER_BUFFER_BRIDGE_H

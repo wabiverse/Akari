@@ -44,7 +44,7 @@ import simd
 
 public extension Akari
 {
-  /// A 4x4 matrix, column-major.
+  /// a 4x4 matrix, column-major.
   struct Matrix4: Sendable
   {
     public var simd: simd_float4x4
@@ -61,7 +61,7 @@ public extension Akari
         : simd_float4x4()
     }
 
-    /// A copy of the 16 floats, for APIs that take an array.
+    /// a copy of the 16 floats, for apis that take an array.
     public var m: [Float]
     {
       withUnsafeFloats(Array.init)
@@ -74,14 +74,14 @@ public extension Akari
 
     public static let identity = Matrix4(matrix_identity_float4x4)
 
-    /// Zero for a singular matrix.
+    /// zero for a singular matrix.
     public func inverse() -> Matrix4
     {
       let inv = Matrix4(simd.inverse)
       return inv.withUnsafeFloats { $0.allSatisfy(\.isFinite) } ? inv : Matrix4(simd_float4x4())
     }
 
-    /// Composed transform, `rhs` applies first.
+    /// composed transform, `rhs` applies first.
     public static func * (lhs: Matrix4, rhs: Matrix4) -> Matrix4
     {
       Matrix4(lhs.simd * rhs.simd)
@@ -92,14 +92,14 @@ public extension Akari
       simd[column][row]
     }
 
-    /// Applies the transform to a point, dividing through by w.
+    /// applies the transform to a point, dividing through by w.
     public func transform(_ p: SIMD3<Float>) -> SIMD3<Float>
     {
       let v = simd * SIMD4(p, 1)
       return abs(v.w) > 1e-9 ? SIMD3(v.x, v.y, v.z) / v.w : SIMD3(v.x, v.y, v.z)
     }
 
-    /// Right handed view matrix looking from `eye` toward `target`.
+    /// right handed view matrix looking from `eye` toward `target`.
     public static func lookAt(eye: SIMD3<Float>, target: SIMD3<Float>, up: SIMD3<Float>) -> Matrix4
     {
       let f = Akari.Matrix.normalize(target - eye)
@@ -153,7 +153,7 @@ public extension Akari
       )))
     }
 
-    /// Maps clip space onto an atlas sub rect, `origin` and `size` in UV.
+    /// maps clip space onto an atlas sub rect, `origin` and `size` in uv.
     public static func atlasRect(origin: SIMD2<Float>, size: SIMD2<Float>) -> Matrix4
     {
       Matrix4(simd_float4x4(columns: (
@@ -164,8 +164,7 @@ public extension Akari
       )))
     }
 
-    /// Remaps projection depth so the depth buffer's
-    /// precision stays near uniform with distance.
+    /// remaps projection depth so the depth buffer's precision stays near even with distance
     public static func reversedDepth(_ projection: Matrix4) -> Matrix4
     {
       var p = projection.simd
@@ -190,7 +189,7 @@ public extension Akari
 
 public extension Akari
 {
-  /// Akari matrix math utilities.
+  /// akari matrix math utilities.
   enum Matrix
   {
     static func normalize(_ v: SIMD3<Float>) -> SIMD3<Float>
@@ -211,8 +210,7 @@ public extension Akari
       (a * b).sum()
     }
 
-    /// Determinant of the 3x3 upper-left of a row-major 4x4. Goes
-    /// negative when the transform mirrors, flipping its winding.
+    /// the determinant of a row major matrix's upper 3x3, negative when it mirrors and flips the winding
     static func determinant3x3(_ m: UnsafePointer<Float>) -> Float
     {
       m[0] * (m[5] * m[10] - m[6] * m[9])
@@ -220,9 +218,7 @@ public extension Akari
         + m[2] * (m[4] * m[9] - m[5] * m[8])
     }
 
-    /// Inverse transpose of the 3x3 upper-left of a row-major 4x4,
-    /// returned as a column-major 3x3 (9 floats). Used to bake per
-    /// mesh model normals into world space during geometry recording.
+    /// the inverse transpose of a row major matrix's upper 3x3 as a column major 3x3, for moving normals into world space
     static func normalMatrix3x3(_ m: UnsafePointer<Float>) -> [Float]
     {
       // extract 3x3 into column-major.

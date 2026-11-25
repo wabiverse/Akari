@@ -94,7 +94,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 namespace {
 
-/// Merged meshes stop growing here.
+/// merged meshes stop growing past this many faces
 constexpr size_t kMaxMergedFaces = 262144;
 
 const std::string &MergedPrefix()
@@ -137,22 +137,90 @@ bool Append(VtValue const &value, size_t expected, VtValue &out)
   if (!value.IsHolding<VtArray<T>>()) return false;
   if (out.IsEmpty()) out = VtArray<T>();
   if (!out.IsHolding<VtArray<T>>()) return false;
+
   VtArray<T> const &in = value.UncheckedGet<VtArray<T>>();
   VtArray<T> merged = out.UncheckedGet<VtArray<T>>();
   out = VtValue();
+
+  const T last = in.empty() ? T() : in.back();
   Grow(merged, expected);
-  for (size_t i = 0; i < expected; ++i) merged.push_back(i < in.size() ? in[i] : in.empty() ? T() : in.back());
+  for (size_t i = 0; i < expected; ++i) merged.push_back(i < in.size() ? in[i] : last);
+
   out = VtValue(std::move(merged));
   return true;
 }
 
-/// Appends one member's values of a varying primvar, `expected` of them.
+/// appends `expected` of one member's values for a varying primvar
 bool AppendAny(VtValue const &value, size_t expected, VtValue &out)
 {
   return Append<float>(value, expected, out) || Append<GfVec2f>(value, expected, out) ||
          Append<GfVec3f>(value, expected, out) || Append<GfVec4f>(value, expected, out) ||
          Append<double>(value, expected, out) || Append<GfVec3d>(value, expected, out) ||
          Append<int>(value, expected, out);
+}
+
+/// appends one member's world space normals per face corner, flat where it authors none, and returns whether it authored them
+bool AppendCornerNormals(HdPrimvarsSchema &primvars, VtVec3fArray const &points, VtIntArray const &counts,
+                         VtIntArray const &indices, bool leftHanded, GfMatrix4d const &xf, VtVec3fArray &out)
+{
+  HdPrimvarSchema primvar = primvars.GetPrimvar(HdTokens->normals);
+  const TfToken interpolation = TypedValue<TfToken>(primvar.GetInterpolation());
+  const VtValue value = Value(primvar.GetFlattenedPrimvarValue());
+  VtVec3fArray const normals = value.IsHolding<VtVec3fArray>() ? value.UncheckedGet<VtVec3fArray>() : VtVec3fArray();
+
+  const bool perPoint = interpolation == HdPrimvarSchemaTokens->vertex || interpolation == HdPrimvarSchemaTokens->varying;
+  const bool perCorner = interpolation == HdPrimvarSchemaTokens->faceVarying;
+  const bool perFace = interpolation == HdPrimvarSchemaTokens->uniform;
+  const bool constant = interpolation == HdPrimvarSchemaTokens->constant;
+
+  size_t needed = 0;
+  if (perPoint) needed = points.size();
+  else if (perCorner) needed = indices.size();
+  else if (perFace) needed = counts.size();
+  else if (constant) needed = 1;
+
+  const bool authored = needed > 0 && normals.size() >= needed;
+  const GfMatrix4d normalXf = xf.GetInverse().GetTranspose();
+  const size_t start = out.size();
+  Grow(out, indices.size());
+
+  auto point = [&](size_t corner) {
+    const int i = indices[corner];
+    return i >= 0 && size_t(i) < points.size() ? GfVec3d(points[size_t(i)]) : GfVec3d(0.0);
+  };
+
+  size_t corner = 0;
+  for (size_t f = 0; f < counts.size() && corner < indices.size(); ++f) {
+    const size_t count = std::min(size_t(std::max(counts[f], 0)), indices.size() - corner);
+
+    // a face without normals of its own faces the way it winds
+    GfVec3d flat(0.0);
+    for (size_t k = 0; k < count && !authored; ++k) {
+      const GfVec3d a = point(corner + k), b = point(corner + (k + 1) % count);
+      flat += GfVec3d((a[1] - b[1]) * (a[2] + b[2]), (a[2] - b[2]) * (a[0] + b[0]), (a[0] - b[0]) * (a[1] + b[1]));
+    }
+
+    if (leftHanded) flat = -flat;
+
+    for (size_t k = 0; k < count; ++k, ++corner) {
+      GfVec3d n = flat;
+      if (authored) {
+        size_t at = 0;
+        if (perPoint) at = size_t(std::max(indices[corner], 0));
+        else if (perCorner) at = corner;
+        else if (perFace) at = f;
+        n = at < normals.size() ? GfVec3d(normals[at]) : GfVec3d(0.0);
+      }
+
+      const GfVec3d world = normalXf.TransformDir(n);
+      const double length = world.GetLength();
+      out.push_back(length > 1e-12 ? GfVec3f(world / length) : GfVec3f(0.0f, 1.0f, 0.0f));
+    }
+  }
+
+  // every corner gets one, even past faces the counts leave out
+  out.resize(start + indices.size(), GfVec3f(0.0f, 1.0f, 0.0f));
+  return authored;
 }
 
 } // namespace
@@ -176,8 +244,7 @@ namespace {
 
 using Group = HdAkariPrototypeMergingSceneIndex::Group;
 
-/// A merged mesh's data, composed from its members the first time any of it
-/// is asked for.
+/// a merged mesh's data, built from its members the first time any of it is asked for
 class MergedDataSource final : public HdContainerDataSource
 {
 public:
@@ -201,6 +268,7 @@ public:
 
     const TfTokenVector names = GetNames();
     if (std::find(names.begin(), names.end(), name) == names.end()) return nullptr;
+
     std::call_once(_once, [this] { _merged = _Merge(); });
     return _merged ? _merged->Get(name) : nullptr;
   }
@@ -221,18 +289,32 @@ private:
     HdBoolDataSourceHandle doubleSided;
     HdTokenDataSourceHandle scheme;
 
-    struct Varying { TfToken interpolation; TfToken role; VtValue merged; bool ok = true; };
+    struct Varying
+    {
+      TfToken interpolation;
+      TfToken role;
+      VtValue merged;
+      bool ok = true;
+    };
+
     std::vector<TfToken> order;
     std::unordered_map<TfToken, Varying, TfToken::HashFunctor> varying;
     std::vector<std::pair<TfToken, HdDataSourceBaseHandle>> constants;
 
+    // a polygon mesh keeps its members normals, one per corner in world space
+    bool polygonal = false;
+    bool anyNormals = false;
+    VtVec3fArray cornerNormals;
+
     for (SdfPath const &member : _members) {
       HdContainerDataSourceHandle ds = _input->GetPrim(member).dataSource;
       if (!ds) continue;
+
       HdMeshSchema mesh = HdMeshSchema::GetFromParent(ds);
       HdMeshTopologySchema topology = mesh.GetTopology();
       const VtIntArray memberCounts = TypedValue<VtIntArray>(topology.GetFaceVertexCounts());
       const VtIntArray memberIndices = TypedValue<VtIntArray>(topology.GetFaceVertexIndices());
+
       HdPrimvarsSchema primvars = HdPrimvarsSchema::GetFromParent(ds);
       const VtValue pointsValue = Value(primvars.GetPrimvar(HdTokens->points).GetPrimvarValue());
       if (!pointsValue.IsHolding<VtVec3fArray>()) continue;
@@ -243,11 +325,13 @@ private:
         doubleSided = mesh.GetDoubleSided();
         scheme = mesh.GetSubdivisionScheme();
         orientation = TypedValue<TfToken>(topology.GetOrientation(), HdTokens->rightHanded);
+        polygonal = TypedValue<TfToken>(scheme, PxOsdOpenSubdivTokens->none) == PxOsdOpenSubdivTokens->none;
       }
 
       const int base = int(points.size());
       const int faceBase = int(counts.size());
       const GfMatrix4d xf = TypedValue<GfMatrix4d>(HdXformSchema::GetFromParent(ds).GetMatrix(), GfMatrix4d(1.0));
+
       Grow(points, memberPoints.size());
       for (GfVec3f const &p : memberPoints) {
         const GfVec3d world = xf.Transform(GfVec3d(p));
@@ -257,12 +341,19 @@ private:
 
       Grow(counts, memberCounts.size());
       for (int c : memberCounts) counts.push_back(c);
+
       Grow(indices, memberIndices.size());
       for (int i : memberIndices) indices.push_back(i + base);
       for (int h : TypedValue<VtIntArray>(topology.GetHoleIndices())) holes.push_back(h + faceBase);
 
+      if (polygonal) {
+        const bool leftHanded = TypedValue<TfToken>(topology.GetOrientation(), HdTokens->rightHanded) == HdTokens->leftHanded;
+        anyNormals |= AppendCornerNormals(primvars, memberPoints, memberCounts, memberIndices, leftHanded, xf, cornerNormals);
+      }
+
       for (TfToken const &name : primvars.GetPrimvarNames()) {
         if (name == HdTokens->points || name == HdTokens->normals) continue;
+
         HdPrimvarSchema primvar = primvars.GetPrimvar(name);
         const TfToken interpolation = TypedValue<TfToken>(primvar.GetInterpolation());
         if (interpolation == HdPrimvarSchemaTokens->constant) {
@@ -273,6 +364,7 @@ private:
         size_t expected = memberPoints.size();
         if (interpolation == HdPrimvarSchemaTokens->faceVarying) expected = memberIndices.size();
         else if (interpolation == HdPrimvarSchemaTokens->uniform) expected = memberCounts.size();
+
         auto [it, inserted] = varying.try_emplace(name);
         if (inserted) {
           order.push_back(name);
@@ -295,9 +387,11 @@ private:
         .SetInterpolation(HdPrimvarSchema::BuildInterpolationDataSource(HdPrimvarSchemaTokens->vertex))
         .SetRole(HdPrimvarSchema::BuildRoleDataSource(HdPrimvarSchemaTokens->point))
         .Build()};
+
     for (TfToken const &name : order) {
       Varying const &v = varying[name];
       if (!v.ok || v.merged.IsEmpty()) continue;
+
       names.push_back(name);
       values.push_back(HdPrimvarSchema::Builder()
                          .SetPrimvarValue(HdRetainedSampledDataSource::New(v.merged))
@@ -306,8 +400,18 @@ private:
                          .Build());
     }
 
+    if (polygonal && anyNormals && cornerNormals.size() == indices.size()) {
+      names.push_back(HdTokens->normals);
+      values.push_back(HdPrimvarSchema::Builder()
+                         .SetPrimvarValue(HdRetainedTypedSampledDataSource<VtVec3fArray>::New(cornerNormals))
+                         .SetInterpolation(HdPrimvarSchema::BuildInterpolationDataSource(HdPrimvarSchemaTokens->faceVarying))
+                         .SetRole(HdPrimvarSchema::BuildRoleDataSource(HdPrimvarSchemaTokens->normal))
+                         .Build());
+    }
+
     for (auto const &[name, value] : constants) {
       if (std::find(names.begin(), names.end(), name) != names.end()) continue;
+
       names.push_back(name);
       values.push_back(value);
     }
@@ -324,6 +428,7 @@ private:
       HdExtentSchema::GetSchemaToken(), HdInstancedBySchema::GetSchemaToken(),
       HdMaterialBindingsSchema::GetSchemaToken(), HdPurposeSchema::GetSchemaToken(),
       HdVisibilitySchema::GetSchemaToken()};
+
     const HdDataSourceBaseHandle fieldValues[] = {
       HdMeshSchema::Builder()
         .SetTopology(topology)
@@ -343,6 +448,7 @@ private:
       first->Get(HdMaterialBindingsSchema::GetSchemaToken()),
       first->Get(HdPurposeSchema::GetSchemaToken()),
       HdVisibilitySchema::Builder().SetVisibility(HdRetainedTypedSampledDataSource<bool>::New(true)).Build()};
+
     return HdRetainedContainerDataSource::New(std::size(fields), fields, fieldValues);
   }
 
@@ -352,11 +458,12 @@ private:
   HdContainerDataSourceHandle _merged;
 };
 
-/// The prototype root a mesh is instanced under, empty when it isn't.
+/// the prototype root a mesh is instanced under, empty when it isn't instanced
 SdfPath PrototypeRootOf(SdfPath const &path, HdContainerDataSourceHandle const &ds)
 {
   HdInstancedBySchema instancedBy = HdInstancedBySchema::GetFromParent(ds);
   if (!instancedBy.GetPrototypeRoots()) return SdfPath();
+
   for (SdfPath const &root : instancedBy.GetPrototypeRoots()->GetTypedValue(0.0f)) {
     if (path.HasPrefix(root)) return root;
   }
@@ -370,24 +477,27 @@ VtArray<SdfPath> InstancersOf(HdContainerDataSourceHandle const &ds)
   return instancedBy.GetPaths() ? instancedBy.GetPaths()->GetTypedValue(0.0f) : VtArray<SdfPath>();
 }
 
-/// What has to match for two meshes to merge: their instancer, material,
-/// purpose, sidedness, winding and constant primvars, and which varying
-/// primvars they carry. Zero when the mesh can't merge at all.
+/// meshes merge when instancer, material, purpose, sidedness, winding and primvars match, zero when a mesh can't merge
 uint64_t MergeKey(HdContainerDataSourceHandle const &ds)
 {
   if (!ds) return 0;
+
   HdExtComputationPrimvarsSchema computed = HdExtComputationPrimvarsSchema::GetFromParent(ds);
   if (computed && !computed.GetExtComputationPrimvarNames().empty()) return 0;
+
   HdBoolDataSourceHandle visible = HdVisibilitySchema::GetFromParent(ds).GetVisibility();
   if (visible && !visible->GetTypedValue(0.0f)) return 0;
+
   HdPrimvarsSchema primvars = HdPrimvarsSchema::GetFromParent(ds);
   if (!primvars.GetPrimvar(HdTokens->points)) return 0;
 
   uint64_t key = 1469598103934665603ull;
   for (SdfPath const &instancer : InstancersOf(ds)) key = Mix(key, instancer.GetHash());
+
   HdMaterialBindingSchema binding = HdMaterialBindingsSchema::GetFromParent(ds).GetMaterialBinding();
   if (binding.GetPath()) key = Mix(key, binding.GetPath()->GetTypedValue(0.0f).GetHash());
   key = Mix(key, TypedValue<TfToken>(HdPurposeSchema::GetFromParent(ds).GetPurpose()).Hash());
+
   HdMeshSchema mesh = HdMeshSchema::GetFromParent(ds);
   key = Mix(key, TypedValue<bool>(mesh.GetDoubleSided()) ? 1 : 2);
   key = Mix(key, TypedValue<TfToken>(mesh.GetTopology().GetOrientation()).Hash());
@@ -400,7 +510,9 @@ uint64_t MergeKey(HdContainerDataSourceHandle const &ds)
     HdPrimvarSchema primvar = primvars.GetPrimvar(name);
     const TfToken interpolation = TypedValue<TfToken>(primvar.GetInterpolation());
     key = Mix(Mix(key, name.Hash()), interpolation.Hash());
-    if (interpolation == HdPrimvarSchemaTokens->constant) key = Mix(key, Value(primvar.GetPrimvarValue()).GetHash());
+    if (interpolation == HdPrimvarSchemaTokens->constant) {
+      key = Mix(key, Value(primvar.GetPrimvarValue()).GetHash());
+    }
   }
 
   return key ? key : 1;
@@ -433,17 +545,20 @@ HdAkariPrototypeMergingSceneIndex::_GetRoot(SdfPath const &rootPath) const
     std::lock_guard<std::mutex> lock(_mutex);
     const auto found = _roots.find(rootPath);
     if (found != _roots.end()) return found->second;
+
     const auto building = _building.find(rootPath);
     if (building != _building.end()) pending = building->second;
   }
 
   if (pending.valid()) return pending.get();
   if (!_IsRoot(rootPath)) return nullptr;
+
   std::promise<std::shared_ptr<Root>> promise;
   {
     std::lock_guard<std::mutex> lock(_mutex);
     const auto found = _roots.find(rootPath);
     if (found != _roots.end()) return found->second;
+
     const auto building = _building.find(rootPath);
     if (building != _building.end()) pending = building->second;
     else _building.emplace(rootPath, promise.get_future().share());
@@ -455,15 +570,18 @@ HdAkariPrototypeMergingSceneIndex::_GetRoot(SdfPath const &rootPath) const
   const VtArray<SdfPath> instancers = InstancersOf(input->GetPrim(rootPath).dataSource);
   auto root = std::make_shared<Root>();
   root->path = rootPath;
+
   std::vector<std::pair<SdfPath, HdContainerDataSourceHandle>> meshes;
   std::vector<SdfPath> stack = {rootPath};
   while (!stack.empty()) {
     const SdfPath path = stack.back();
     stack.pop_back();
     const HdSceneIndexPrim prim = input->GetPrim(path);
-    // a nested instancer's prototypes are roots of their own.
+
+    // a nested instancer's prototypes are roots of their own
     if (path != rootPath && prim.primType == HdPrimTypeTokens->instancer) continue;
     if (prim.primType == HdPrimTypeTokens->mesh) meshes.emplace_back(path, prim.dataSource);
+
     SdfPathVector children = input->GetChildPrimPaths(path);
     stack.insert(stack.end(), children.rbegin(), children.rend());
   }
@@ -475,15 +593,19 @@ HdAkariPrototypeMergingSceneIndex::_GetRoot(SdfPath const &rootPath) const
         auto const &[path, ds] = meshes[i];
         if (InstancersOf(ds) != instancers || PrototypeRootOf(path, ds) != rootPath) continue;
         if (const uint64_t key = MergeKey(ds)) {
-          keys[i] = {key, TypedValue<VtIntArray>(HdMeshSchema::GetFromParent(ds).GetTopology().GetFaceVertexCounts()).size()};
+          const VtIntArray faceCounts =
+            TypedValue<VtIntArray>(HdMeshSchema::GetFromParent(ds).GetTopology().GetFaceVertexCounts());
+          keys[i] = {key, faceCounts.size()};
         }
       }
     }, /*grainSize=*/32);
   });
+
   std::unordered_map<uint64_t, size_t> open;
   for (size_t i = 0; i < meshes.size(); ++i) {
     const auto [key, faces] = keys[i];
     if (!key) continue;
+
     SdfPath const &path = meshes[i].first;
     auto slot = open.find(key);
     if (slot == open.end() || root->groups[slot->second]->faces + faces > kMaxMergedFaces) {
@@ -497,7 +619,8 @@ HdAkariPrototypeMergingSceneIndex::_GetRoot(SdfPath const &rootPath) const
     group.faces += faces;
     root->memberGroup[path] = slot->second;
   }
-  // a lone mesh gains nothing from merging.
+
+  // a lone mesh gains nothing from merging
   for (auto &group : root->groups) {
     if (group->members.size() == 1) root->memberGroup.erase(group->members.front());
   }
@@ -505,6 +628,7 @@ HdAkariPrototypeMergingSceneIndex::_GetRoot(SdfPath const &rootPath) const
   root->groups.erase(std::remove_if(root->groups.begin(), root->groups.end(),
                                     [](auto const &group) { return group->members.size() < 2; }),
                      root->groups.end());
+
   for (size_t i = 0; i < root->groups.size(); ++i) {
     Group &group = *root->groups[i];
     group.path = rootPath.AppendChild(TfToken(MergedPrefix() + std::to_string(i)));
@@ -523,6 +647,7 @@ HdAkariPrototypeMergingSceneIndex::_FindBuiltRoot(SdfPath const &path) const
 {
   std::lock_guard<std::mutex> lock(_mutex);
   if (_roots.empty()) return nullptr;
+
   for (SdfPath p = path; !p.IsEmpty() && !p.IsAbsoluteRootPath(); p = p.GetParentPath()) {
     const auto found = _roots.find(p);
     if (found != _roots.end()) return found->second;
@@ -537,6 +662,7 @@ HdSceneIndexPrim HdAkariPrototypeMergingSceneIndex::GetPrim(SdfPath const &primP
     if (std::shared_ptr<Root> root = _GetRoot(primPath.GetParentPath())) {
       for (auto const &group : root->groups) {
         if (group->path != primPath) continue;
+
         std::lock_guard<std::mutex> lock(_mutex);
         return {HdPrimTypeTokens->mesh, group->data};
       }
@@ -547,8 +673,10 @@ HdSceneIndexPrim HdAkariPrototypeMergingSceneIndex::GetPrim(SdfPath const &primP
 
   HdSceneIndexPrim prim = _GetInputSceneIndex()->GetPrim(primPath);
   if (prim.primType != HdPrimTypeTokens->mesh || !prim.dataSource) return prim;
+
   const SdfPath rootPath = PrototypeRootOf(primPath, prim.dataSource);
   if (rootPath.IsEmpty()) return prim;
+
   std::shared_ptr<Root> root = _GetRoot(rootPath);
   if (root && root->memberGroup.count(primPath)) prim.primType = TfToken();
   return prim;
@@ -558,6 +686,7 @@ SdfPathVector HdAkariPrototypeMergingSceneIndex::GetChildPrimPaths(SdfPath const
 {
   SdfPathVector children = _GetInputSceneIndex()->GetChildPrimPaths(primPath);
   if (IsMergedName(primPath)) return {};
+
   if (std::shared_ptr<Root> root = _GetRoot(primPath)) {
     for (auto const &group : root->groups) children.push_back(group->path);
   }
@@ -585,6 +714,7 @@ void HdAkariPrototypeMergingSceneIndex::_Rebuild(std::vector<SdfPath> const &roo
       WorkWithScopedParallelism([&]() { roots[i] = _GetRoot(rootPaths[i]); });
     }
   });
+
   for (size_t i = 0; i < rootPaths.size(); ++i) {
     std::shared_ptr<Root> const &old = olds[i];
     std::shared_ptr<Root> const &root = roots[i];
@@ -630,16 +760,19 @@ void HdAkariPrototypeMergingSceneIndex::_PrimsAdded(HdSceneIndexBase const &,
   HdSceneIndexObserver::RemovedPrimEntries removed;
   _Rebuild(stale, &rebuilt, &removed);
 
-  // members arrive without a type, so no rprim is made for them only to go.
+  // members arrive without a type so no rprim gets made for them only to be removed again
   HdSceneIndexObserver::AddedPrimEntries added;
   added.reserve(entries.size() + rebuilt.size());
+
   std::unordered_set<SdfPath, SdfPath::Hash> retyped;
   for (auto const &entry : rebuilt) retyped.insert(entry.primPath);
+
   for (auto const &entry : entries) {
     if (!retyped.count(entry.primPath)) added.push_back(entry);
   }
 
   added.insert(added.end(), rebuilt.begin(), rebuilt.end());
+
   if (!removed.empty()) _SendPrimsRemoved(removed);
   _SendPrimsAdded(added);
 }
@@ -664,8 +797,10 @@ void HdAkariPrototypeMergingSceneIndex::_PrimsRemoved(HdSceneIndexBase const &,
 
   _SendPrimsRemoved(entries);
   if (stale.empty()) return;
+
   std::sort(stale.begin(), stale.end());
   stale.erase(std::unique(stale.begin(), stale.end()), stale.end());
+
   HdSceneIndexObserver::AddedPrimEntries added;
   HdSceneIndexObserver::RemovedPrimEntries removed;
   _Rebuild(stale, &added, &removed);
@@ -707,8 +842,10 @@ void HdAkariPrototypeMergingSceneIndex::_PrimsDirtied(HdSceneIndexBase const &,
 
   if (!dirtied.empty()) _SendPrimsDirtied(dirtied);
   if (stale.empty()) return;
+
   std::sort(stale.begin(), stale.end());
   stale.erase(std::unique(stale.begin(), stale.end()), stale.end());
+
   HdSceneIndexObserver::AddedPrimEntries added;
   HdSceneIndexObserver::RemovedPrimEntries removed;
   _Rebuild(stale, &added, &removed);
@@ -722,6 +859,7 @@ void HdAkariPrototypeMergingSceneIndex::_PrimsRenamed(HdSceneIndexBase const &se
   HdSceneIndexObserver::RemovedPrimEntries removed;
   HdSceneIndexObserver::AddedPrimEntries added;
   HdSceneIndexObserver::ConvertPrimsRenamedToRemovedAndAdded(sender, entries, &removed, &added);
+
   if (!removed.empty()) _PrimsRemoved(sender, removed);
   if (!added.empty()) _PrimsAdded(sender, added);
 }
