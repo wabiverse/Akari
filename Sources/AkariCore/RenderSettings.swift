@@ -113,9 +113,9 @@ public struct RenderSettings: Sendable
   /// final render samples, 64 by default
   public var renderSamples: Int = 64
   /// how far subdivision surfaces refine in the viewport.
-  public var subdivision: Int = 1
+  public var subdivision: Int = 0
   /// how far subdivision surfaces refine in final renders.
-  public var renderSubdivision: Int = 2
+  public var renderSubdivision: Int = 0
 
   /// the hydra complexity that refines subdivision surfaces to a level from 0 to 8.
   public static func complexity(subdivision level: Int) -> Float

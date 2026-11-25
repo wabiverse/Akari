@@ -117,7 +117,7 @@ struct Kraken: App
                                selectionOutlineWidth: 8,
                                rendererPluginId: Tf.Token(Akari.rendererPluginId))
 
-    // subdivision surfaces refine once by default, and `--refine-level` overrides it.
+    // subdivision surfaces draw their cage by default, and `--refine-level` overrides it.
     hydra.complexity = RenderSettings.complexity(subdivision: engine.settings.subdivision)
     StageManager.frameStartView(hydra)
 

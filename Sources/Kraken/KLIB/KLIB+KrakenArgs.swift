@@ -86,8 +86,8 @@ public struct KrakenArgs
   {
     public var shading: ViewportShading?
     public var overlays = true
-    /// subdivision surfaces refine once unless asked otherwise
-    public var refineLevel = 1
+    /// subdivision surfaces draw their cage unless asked otherwise, as other usd apps do
+    public var refineLevel = 0
     public var frame: Double?
     public var play = false
   }
@@ -139,7 +139,7 @@ public struct KrakenArgs
     viewport
       --shading <mode>              start in solid, material, rendered or wireframe shading
       --no-overlays                 start with the overlays hidden
-      --refine-level <0-8>          the viewport max subdivision, 1 by default, render properties simplify sets the rest
+      --refine-level <0-8>          the viewport max subdivision, 0 by default, render properties simplify sets the rest
       --frame <frame>               start on this frame
       --play                        start playing
       --sculpt-reference <image>    an image the sculpting tab shows over the sculpt and projects paint from
