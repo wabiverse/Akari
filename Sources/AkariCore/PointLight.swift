@@ -64,6 +64,12 @@ public extension Akari
       /// a rect light's half extents in world units, emitting away from their cross product, zero for the rest.
       public var halfWidth: SIMD3<Float> = .zero
       public var halfHeight: SIMD3<Float> = .zero
+      /// a glowing mesh's outline in world units, lighting exactly like its whole surface, its rect is the same area for passes that shade rects
+      public var outline: [SIMD3<Float>] = []
+      /// whether the outline lights from both its sides, as a double sided glowing mesh does
+      public var twoSided = false
+      /// the most outline points the lighting pass reads
+      public static let maxOutlinePoints = 32
       /// how far it moved since the last frame, its shadow maps may still be from there.
       public var moved: Float = 0
       /// false when its glow shouldn't show to the camera, it still lights.

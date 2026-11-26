@@ -93,6 +93,10 @@ public extension Akari.Geom
       public var transparent = false
       /// black and emissive, casts no shadow.
       public var emitter = false
+      /// an emitter's constant radiance, what it lights the scene with, zero when it doesn't.
+      public var emission = SIMD3<Float>.zero
+      /// how much of its diffuse and specular lighting an emitter gives, usdlux's multipliers.
+      public var lightLobes = SIMD2<Float>(1, 1)
       /// drawn only from the side its winding faces, as the mesh authors.
       public var singleSided = false
       /// whether the material can cut holes in the shadow.

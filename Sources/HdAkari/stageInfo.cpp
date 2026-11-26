@@ -156,6 +156,13 @@ HdAkariInspectStage(UsdStage *stage)
     info.renderCamera = renderCameras.front().GetString();
   }
 
+  GfVec2i resolution(0);
+  if (settings && settings.GetResolutionAttr().HasAuthoredValue() && settings.GetResolutionAttr().Get(&resolution) &&
+      resolution[0] > 0 && resolution[1] > 0) {
+    info.renderWidth = resolution[0];
+    info.renderHeight = resolution[1];
+  }
+
   for (UsdPrim const &prim : stage->Traverse()) {
     if (prim.IsA<UsdGeomCamera>()) {
       info.cameras.push_back(prim.GetPath().GetString());
@@ -643,6 +650,25 @@ HdAkariPrimSubdivisionLevel(SdfPath const &path, int *level)
 
   *level = std::clamp(value, 0, 8);
   return true;
+}
+
+void
+HdAkariPrimLightLobes(SdfPath const &path, float *diffuse, float *specular)
+{
+  UsdStageWeakPtr stage;
+  {
+    std::lock_guard<std::mutex> lock(syncStageLock);
+    stage = syncStage;
+  }
+
+  if (!stage) return;
+  const UsdPrim prim = stage->GetPrimAtPath(path);
+  if (!prim) return;
+
+  // usdlux's diffuse and specular multipliers, as a mesh light api glowing mesh carries them
+  static const TfToken diffuseName("inputs:diffuse"), specularName("inputs:specular");
+  if (const UsdAttribute attr = prim.GetAttribute(diffuseName)) attr.Get(diffuse);
+  if (const UsdAttribute attr = prim.GetAttribute(specularName)) attr.Get(specular);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

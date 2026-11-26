@@ -606,7 +606,13 @@ public extension Akari
       let rows = [m.TransformDir(Pixar.GfVec3d(1, 0, 0)),
                   m.TransformDir(Pixar.GfVec3d(0, 1, 0)),
                   m.TransformDir(Pixar.GfVec3d(0, 0, 1))]
-      var w = rows.map { [$0[0], $0[1], $0[2]] }
+      // a camera under a scaled parent has scaled axes, only their directions pose the view
+      var w = rows.map
+      { axis in
+        let length = max((axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).squareRoot(), 1e-12)
+        return [axis[0] / length, axis[1] / length, axis[2] / length]
+      }
+
       if isZUp
       {
         // undo the quarter turn about x the orbit camera appends for z up stages
@@ -615,9 +621,17 @@ public extension Akari
 
       let r = (0 ..< 3).map { i in (0 ..< 3).map { j in w[j][i] } }
       let degrees = 180 / Double.pi
-      view.rotation = Pixar.GfVec3d(asin(min(max(-r[1][2], -1), 1)) * degrees,
-                                    atan2(r[0][2], r[2][2]) * degrees,
-                                    atan2(r[1][0], r[1][1]) * degrees)
+      let pitch = asin(min(max(-r[1][2], -1), 1)) * degrees
+
+      // straight up or down the yaw and roll share an axis, so the roll folds into the yaw instead of flipping on signed zeros
+      if (r[1][0] * r[1][0] + r[1][1] * r[1][1]).squareRoot() < 1e-6
+      {
+        view.rotation = Pixar.GfVec3d(pitch, atan2(-r[2][0], r[0][0]) * degrees, 0)
+      }
+      else
+      {
+        view.rotation = Pixar.GfVec3d(pitch, atan2(r[0][2], r[2][2]) * degrees, atan2(r[1][0], r[1][1]) * degrees)
+      }
       view.focus = m.ExtractTranslation()
       view.distance = 0
 

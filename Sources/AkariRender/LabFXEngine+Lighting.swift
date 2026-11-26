@@ -127,7 +127,10 @@ extension Akari.LabFXEngine
     }
   }
 
-  /// uploads every lit point light for the lighting pass, six texels per light
+  /// texels per light, six for every light then a glowing mesh's outline points
+  static let pointLightTexels = 6 + Akari.Lux.PointLight.maxOutlinePoints
+
+  /// uploads every lit point light for the lighting pass, a row of texels per light
   private func uploadPointLights()
   {
     if pointLights.texture == 0
@@ -137,7 +140,7 @@ extension Akari.LabFXEngine
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_NEAREST))
       gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GLint(GL_NEAREST))
       gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA32F,
-                    width: 6, height: GLsizei(Self.maxPointLights), border: 0,
+                    width: GLsizei(Self.pointLightTexels), height: GLsizei(Self.maxPointLights), border: 0,
                     format: GL_RGBA, type: GL_FLOAT, pixels: nil)
     }
 
@@ -147,27 +150,70 @@ extension Akari.LabFXEngine
     { slot, light in
       let shadowed = slot < pointLights.shadowed.count
 
-      // a tube's half axis and radius, or a rect's half width and -1, then a rect's half height
-      let shape = light.halfWidth != .zero ? SIMD4(light.halfWidth, -1) : SIMD4(light.halfAxis, light.tubeRadius)
+      // a tube's half axis and radius, or a rect's half width and -1, -2 when an outline shades in its place, then a rect's half height
+      let outline = light.outline.prefix(Akari.Lux.PointLight.maxOutlinePoints)
+      let shape = light.halfWidth != .zero ? SIMD4(light.halfWidth, outline.isEmpty ? -1 : -2) : SIMD4(light.halfAxis, light.tubeRadius)
+      let points: [Float] = outline.flatMap { [$0.x, $0.y, $0.z, 0] }
+      let padding = [Float](repeating: 0, count: (Akari.Lux.PointLight.maxOutlinePoints - outline.count) * 4)
+      let shapeTexels: [Float] = [shape.x, shape.y, shape.z, shape.w,
+                                  light.halfHeight.x, light.halfHeight.y, light.halfHeight.z, light.moved,
+                                  light.cameraVisible ? 1 : 0, Float(outline.count), light.twoSided ? 1 : 0, 0]
 
-      return [light.position.x, light.position.y, light.position.z, light.intensity,
-              light.color.x, light.color.y, light.color.z, light.radius,
-              light.diffuse, light.specular,
-              shadowed ? shadowAtlas.lodBias(slot: slot) : 0,
-              shadowed && shadowAtlas.mainSlots.contains(slot) ? 1 : 0,
-              shape.x, shape.y, shape.z, shape.w,
-              light.halfHeight.x, light.halfHeight.y, light.halfHeight.z, light.moved,
-              light.cameraVisible ? 1 : 0, 0, 0, 0]
+      let head: [Float] = [light.position.x, light.position.y, light.position.z, light.intensity,
+                           light.color.x, light.color.y, light.color.z, light.radius,
+                           light.diffuse, light.specular,
+                           shadowed ? shadowAtlas.lodBias(slot: slot) : 0,
+                           shadowed && shadowAtlas.mainSlots.contains(slot) ? 1 : 0]
+      return head + shapeTexels + points + padding
     }
 
     if !texels.isEmpty
     {
       gl.bindTexture(target: GL_TEXTURE_2D, texture: pointLights.texture)
       gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: 0,
-                       width: 6, height: GLsizei(pointLights.lit.count),
+                       width: GLsizei(Self.pointLightTexels), height: GLsizei(pointLights.lit.count),
                        format: GL_RGBA, type: GL_FLOAT, pixels: texels)
     }
 
     setSampler(.pointLightData, pointLights.texture)
+    bindLTC()
+  }
+
+  /// the side of the ltc tables, a cell per roughness and view angle
+  static let ltcSize = 64
+
+  /// loads Tools/LTCFit's tables once and binds them, area lights fall back to the closest point highlight without them
+  private func bindLTC()
+  {
+    if pointLights.ltc.matrix == 0
+    {
+      let n = Self.ltcSize
+      guard
+        let url = Bundle.akari.url(forResource: "LTC_GGX", withExtension: "bin"),
+        let data = try? Data(contentsOf: url),
+        data.count == n * n * 8 * MemoryLayout<Float>.size
+      else { return }
+
+      var names = [GLuint](repeating: 0, count: 2)
+      gl.genTextures(count: 2, textures: &names)
+      data.withUnsafeBytes
+      { bytes in
+        for (index, name) in names.enumerated()
+        {
+          gl.bindTexture(target: GL_TEXTURE_2D, texture: name)
+          gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MIN_FILTER, param: GLint(GL_LINEAR))
+          gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_MAG_FILTER, param: GLint(GL_LINEAR))
+          gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_WRAP_S, param: GLint(GL_CLAMP_TO_EDGE))
+          gl.texParameter(target: GL_TEXTURE_2D, pname: GL_TEXTURE_WRAP_T, param: GLint(GL_CLAMP_TO_EDGE))
+          gl.texImage2D(target: GL_TEXTURE_2D, level: 0, internalFormat: GL_RGBA32F, width: GLsizei(n), height: GLsizei(n),
+                        border: 0, format: GL_RGBA, type: GL_FLOAT, pixels: bytes.baseAddress! + index * n * n * 4 * MemoryLayout<Float>.size)
+        }
+      }
+
+      pointLights.ltc = (names[0], names[1])
+    }
+
+    setSampler(.ltcMatrix, pointLights.ltc.matrix)
+    setSampler(.ltcAmplitude, pointLights.ltc.amplitude)
   }
 }

@@ -76,7 +76,7 @@ extension Akari.LabFXEngine
 
     // the ptex cache is a fixed size on top of the scene, so the triangles do not make room for it.
     let footprint = (result == KERN_SUCCESS ? Int(info.phys_footprint) : 0) - ptex.allocated
-    let target = Int(Double(ProcessInfo.processInfo.physicalMemory) * 0.65) - 1536 << 20
+    let target = Int(Akari.GPU.Capabilities.current.memoryBudget) - 1536 << 20
 
     return split(max((target - footprint) / 150, disk) + geometry.record.triangles)
   }

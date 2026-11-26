@@ -70,6 +70,8 @@
 #include "HdAkari/materialBinding.h"
 #include "HdAkari/akariImaging.h" // swift to c++ interop, see `Sources/AkariImaging`
 
+#include <nanocolor/nanocolor.h>
+
 #include <algorithm>
 #include <climits>
 #include <cmath>
@@ -79,6 +81,7 @@
 #include <initializer_list>
 #include <filesystem>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -441,11 +444,37 @@ bool DecodeTile(std::string const &tilePath, bool decodeSRGB, std::vector<float>
 
   outPixels.resize(size_t(srcW) * size_t(srcH) * size_t(nComp));
 
+  // an 8 bit color map is srgb encoded, as usd's auto color space reads it, whether or not the file says so
+  const bool eightBit = srcType == HioTypeUnsignedByte || srcType == HioTypeUnsignedByteSRGB;
+  const bool linearize = decodeSRGB && eightBit;
+
   const size_t texelBytes = size_t(nComp) * compBytes;
   const size_t texelCount = size_t(srcW) * size_t(srcH);
   for (size_t t = 0; t < texelCount; ++t) {
-    ConvertTexelToFloat(rawPixels.data() + t * texelBytes, srcType, nComp, decodeSRGB,
+    ConvertTexelToFloat(rawPixels.data() + t * texelBytes, srcType, nComp, decodeSRGB && !linearize,
                         outPixels.data() + t * size_t(nComp));
+  }
+
+  // nanocolor takes the color channels from srgb to linear rec.709 and leaves alpha linear
+  if (linearize) {
+    static const std::pair<const NcColorSpace *, const NcColorSpace *> spaces = [] {
+      NcInitColorSpaceLibrary();
+      return std::make_pair(NcGetNamedColorSpace("srgb_rec709_scene"), NcGetNamedColorSpace("lin_rec709_scene"));
+    }();
+
+    const NcColorSpace *srgb = spaces.first, *linear = spaces.second;
+    if (srgb && linear) {
+      if (nComp == 3) {
+        NcTransformColors(linear, srgb, reinterpret_cast<NcRGB *>(outPixels.data()), texelCount);
+      } else if (nComp == 4) {
+        NcTransformColorsWithAlpha(linear, srgb, reinterpret_cast<NcRGBA *>(outPixels.data()), texelCount);
+      } else {
+        for (size_t t = 0; t < texelCount; ++t) {
+          float &v = outPixels[t * size_t(nComp)];
+          v = NcTransformColor(linear, srgb, NcRGB{v, v, v}).r;
+        }
+      }
+    }
   }
 
   outW = srcW;

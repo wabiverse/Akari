@@ -231,6 +231,7 @@ public extension Akari.Color.ViewTransform
       case "Standard": self = .clamping
       case "Filmic": self = .filmic
       case "Khronos PBR Neutral": self = .khronosPBRNeutral
+      case "sRGB", "Standard (sRGB)": self = .sRGB
       default: return nil
     }
   }

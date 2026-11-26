@@ -66,6 +66,10 @@ struct HdAkariStageInfo
   /// the camera the stage's render settings render through, empty without one
   std::string renderCamera;
 
+  /// the image size the stage's render settings ask for, zero without one
+  int renderWidth = 0;
+  int renderHeight = 0;
+
   double startTimeCode = 0;
   double endTimeCode = 0;
   double timeCodesPerSecond = 24;
@@ -98,6 +102,9 @@ HDAKARI_API void HdAkariSetSubdivisionRender(bool render);
 
 /// the refine level the mesh at `path` asks for this sync, its own akari subdivision levels winning over the global ones
 bool HdAkariPrimSubdivisionLevel(SdfPath const &path, int *level);
+
+/// the diffuse and specular multipliers a glowing mesh at `path` lights with, left as they are when it authors none
+void HdAkariPrimLightLobes(SdfPath const &path, float *diffuse, float *specular);
 
 /// asks hydra to sync the mesh at `path` again for edits it doesn't track, from the thread hydra renders on
 HDAKARI_API void HdAkariMarkMeshDirty(std::string const &path);

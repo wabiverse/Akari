@@ -691,6 +691,9 @@ HdAkariSurface HdAkariClassifySurface(HdAkariMaterialTextures const &textures, G
   const bool outshines = textures.colorPath.empty() && textures.emissivePath.empty()
                       && glow > 1.0f && glow > 8.0f * albedo;
   surface.emitter = glowing && (black || surface.transparent || outshines);
+
+  // an emitter glowing one constant color lights the scene with it.
+  if (surface.emitter && textures.emissivePath.empty()) surface.emission = e;
   return surface;
 }
 
@@ -734,6 +737,7 @@ void HdAkariSyncMaterial(HdSceneDelegate *sceneDelegate, SdfPath const &id,
   data.transparent = surface.transparent;
   data.shadowCutout = surface.shadowCutout;
   data.emitter = surface.emitter;
+  data.emission = surface.emission;
   if (surface.hidden) data.visible = false;
 
   // bakes or looks up this material's shared atlas cell

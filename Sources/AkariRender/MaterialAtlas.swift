@@ -52,8 +52,8 @@ public extension Akari
     private var colorTexture: GLuint = 0
     private var normalTexture: GLuint = 0
     private var emissiveTexture: GLuint = 0
-    /// the textures uploaded as BC7, a quarter of RGBA8's memory, their mips built here.
-    private var compressedTextures = Set<GLuint>()
+    /// the block format each compressed texture uploads as, a quarter of rgba8's memory, their mips built here
+    private var compressedTextures: [GLuint: Akari.GPU.Capabilities.TextureCompression] = [:]
     /// each atlas texture's storage size, so a resized atlas gets new storage.
     private var storageSize: [GLuint: SIMD2<Int>] = [:]
     /// untextured materials constants, `HdAkariConstantTexels()` RGBA32F texels a row.
@@ -61,6 +61,10 @@ public extension Akari
     private var constantsRows = 0
     /// small stand ins until a textured material bakes a cell, so everything binding the atlas has a texture
     private var placeholders = Set<GLuint>()
+
+    /// constant rows whose glow already lights the scene as a mesh light, so light gathering leaves it out
+    public var directRows: Set<Int> = []
+    private var uploadedDirectRows: Set<Int> = []
 
     /// packs material rows across a texture line to stay far under metal's texture height limit however many materials there are
     static let constantsRowsPerLine = 128
@@ -87,6 +91,14 @@ public extension Akari
               let region = atlas.BakedRegion(Int32(i))
               guard let pixels = atlas.BakedPixels(Int32(i), Int32(index)) else { continue }
               upload(self[keyPath: texture], pixels: pixels, region: region)
+            }
+
+            // labgl only writes level 0 of an uncompressed texture, so its mips are built on the gpu from the uploaded level
+            let name = self[keyPath: texture]
+            if compressedTextures[name] == nil
+            {
+              gl.bindTexture(target: GL_TEXTURE_2D, texture: name)
+              gl.generateMipmap(GL_TEXTURE_2D)
             }
           }
 
@@ -146,6 +158,20 @@ public extension Akari
         range.count = Int32(count)
       }
 
+      // a row starting or stopping to light the scene goes up again with its mark
+      if directRows != uploadedDirectRows
+      {
+        let changed = directRows.symmetricDifference(uploadedDirectRows).filter { $0 < count }
+        uploadedDirectRows = directRows
+        if let lo = changed.min(), let hi = changed.max()
+        {
+          let start = range.count > 0 ? min(Int(range.first), lo) : lo
+          let end = range.count > 0 ? max(Int(range.first + range.count), hi + 1) : hi + 1
+          range.first = Int32(start)
+          range.count = Int32(end - start)
+        }
+      }
+
       guard range.count > 0 else { return constantsTexture }
 
       // upload full rows if any part changed, pad any extra space with zeros.
@@ -161,6 +187,12 @@ public extension Akari
         atlas.CopyConstants(Int32(lineFirst), Int32(lineRows), $0.baseAddress!)
       }
 
+      // the last texel's alpha marks a glow that lights the scene directly
+      for row in directRows where row >= lineFirst && row < lineFirst + lineRows
+      {
+        rows[(row - lineFirst) * texels * 4 + texels * 4 - 1] = 1
+      }
+
       gl.bindTexture(target: GL_TEXTURE_2D, texture: constantsTexture)
       gl.texSubImage2D(target: GL_TEXTURE_2D, level: 0, xOffset: 0, yOffset: GLint(firstLine),
                        width: GLsizei(lineTexels), height: GLsizei(lineCount),
@@ -168,14 +200,14 @@ public extension Akari
       return constantsTexture
     }
 
-    /// gives `texture` empty storage for the whole atlas, bc7 where the backend has it
+    /// gives `texture` empty storage for the whole atlas, in the best block format this device samples
     private func ensureStorage(_ texture: ReferenceWritableKeyPath<MaterialAtlas, GLuint>, width: Int, height: Int)
     {
       var name = self[keyPath: texture]
       if name != 0, placeholders.remove(name) == nil, storageSize[name] == SIMD2(width, height) { return }
       if name != 0
       {
-        compressedTextures.remove(name)
+        compressedTextures[name] = nil
         storageSize[name] = nil
         gl.deleteTextures(count: 1, textures: &name)
       }
@@ -184,11 +216,20 @@ public extension Akari
       self[keyPath: texture] = name
       storageSize[name] = SIMD2(width, height)
       let block = 4 << (Self.levels - 1)
-      if width % block == 0, height % block == 0, labgl.textureCompressionSupported() != 0,
-         labgl.textureImageBC7(name, width: Int32(width), height: Int32(height), levels: Int32(Self.levels)) != 0
+      if width % block == 0, height % block == 0
       {
-        compressedTextures.insert(name)
-        return
+        let (w, h, levels) = (Int32(width), Int32(height), Int32(Self.levels))
+        switch Akari.GPU.Capabilities.current.textureCompression
+        {
+          case .bc7 where labgl.textureImageBC7(name, width: w, height: h, levels: levels) != 0:
+            compressedTextures[name] = .bc7
+            return
+          case .astc where ASTC.isAvailable && labgl.textureImageASTC(name, width: w, height: h, levels: levels) != 0:
+            compressedTextures[name] = .astc
+            return
+          default:
+            break
+        }
       }
 
       gl.bindTexture(target: GL_TEXTURE_2D, texture: name)
@@ -205,15 +246,16 @@ public extension Akari
       }
     }
 
-    /// uploads one baked region and its mips, whole cells keep every level on whole bc7 blocks
+    /// uploads one baked region, with its mips when block compressed, whole cells keep every level on whole 4x4 blocks
     private func upload(_ texture: GLuint, pixels: UnsafePointer<UInt8>, region: Pixar.HdAkariAtlasRegion)
     {
       let width = Int(region.width), height = Int(region.height)
-      let compressed = compressedTextures.contains(texture)
+      let format = compressedTextures[texture]
+      let compressed = format != nil
       if !compressed { gl.bindTexture(target: GL_TEXTURE_2D, texture: texture) }
       var mip: [UInt8] = []
       var blocks: [UInt8] = []
-      for level in 0 ..< Self.levels
+      for level in 0 ..< (compressed ? Self.levels : 1)
       {
         let w = width >> level, h = height >> level
         guard w > 0, h > 0 else { break }
@@ -229,16 +271,35 @@ public extension Akari
         }
 
         let encode = { (source: UnsafePointer<UInt8>) in
-          if compressed
+          if let format
           {
+            // both formats pack a 4x4 block into 16 bytes, so the blocks take a byte per texel
             blocks = [UInt8](repeating: 0, count: w * h)
             blocks.withUnsafeMutableBufferPointer
             {
-              BC7.encode(source, stride: w, width: w, height: h, into: $0.baseAddress!)
+              if format == .astc
+              {
+                if !ASTC.encode(source, stride: w, width: w, height: h, into: $0.baseAddress!)
+                {
+                  print("[akari/atlas] astc encode of a \(w)x\(h) region failed, it samples as black")
+                }
+              }
+              else
+              {
+                BC7.encode(source, stride: w, width: w, height: h, into: $0.baseAddress!)
+              }
             }
 
-            _ = labgl.textureSubImageBC7(texture, level: Int32(level), x: Int32(x), y: Int32(y),
-                                         width: Int32(w), height: Int32(h), blocks: blocks)
+            if format == .astc
+            {
+              _ = labgl.textureSubImageASTC(texture, level: Int32(level), x: Int32(x), y: Int32(y),
+                                            width: Int32(w), height: Int32(h), blocks: blocks)
+            }
+            else
+            {
+              _ = labgl.textureSubImageBC7(texture, level: Int32(level), x: Int32(x), y: Int32(y),
+                                           width: Int32(w), height: Int32(h), blocks: blocks)
+            }
           }
           else
           {

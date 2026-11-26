@@ -137,7 +137,7 @@ public:
     const bool changed = m.transform != xf || m.displayColor != color || m.opacity != opacity ||
                          m.roughness != roughness || m.metallic != metallic || m.visible != visible ||
                          m.transparent != surface.transparent || m.emitter != surface.emitter ||
-                         m.shadowCutout != shadowCutout;
+                         m.emission != surface.emission || m.shadowCutout != shadowCutout;
 
     m.transform = xf;
     m.displayColor = color;
@@ -146,6 +146,7 @@ public:
     m.metallic = metallic;
     m.transparent = surface.transparent;
     m.emitter = surface.emitter;
+    m.emission = surface.emission;
     m.shadowCutout = shadowCutout;
     m.visible = visible;
 

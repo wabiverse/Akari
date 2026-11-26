@@ -93,21 +93,20 @@ extension Akari.LabFXEngine
 
 public extension Akari.RenderEngine
 {
-  /// adopts the view transform, look, exposure and gamma the stage was authored with.
+  /// adopts the view transform, look, exposure and gamma the stage was authored with, the defaults when it authors none
   func adoptColorManagement(of stage: UsdStage)
   {
     let info = Pixar.HdAkariInspectStage(stage)
-    guard info.hasColorManagement else { return }
+    let defaults = Akari.Color.Pipeline()
 
+    // a scene without color management starts from the defaults rather than keeping the last scene's
     var settings = settings
-    if let transform = Akari.Color.ViewTransform(transformName: String(info.viewTransform))
-    {
-      settings.color.viewTransform = transform
-    }
-
-    settings.color.look = Akari.Color.Look(lookName: String(info.look)) ?? .punchy
-    settings.color.exposure = Float(info.exposure)
-    settings.color.gamma = Float(info.gamma)
+    settings.color.viewTransform = info.hasColorManagement
+      ? Akari.Color.ViewTransform(transformName: String(info.viewTransform)) ?? defaults.viewTransform
+      : defaults.viewTransform
+    settings.color.look = info.hasColorManagement ? Akari.Color.Look(lookName: String(info.look)) ?? defaults.look : defaults.look
+    settings.color.exposure = info.hasColorManagement ? Float(info.exposure) : defaults.exposure
+    settings.color.gamma = info.hasColorManagement ? Float(info.gamma) : defaults.gamma
 
     self.settings = settings
   }

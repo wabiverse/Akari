@@ -338,10 +338,14 @@ extension Kraken
                        selection: state.selection(\.color.viewTransform))
             }
 
-            Properties.row("Look")
+            // a look grades agx alone, the other views ignore it
+            if state.current.color.viewTransform == .agx
             {
-              Dropdown(options: Akari.Color.Look.allCases,
-                       selection: state.selection(\.color.look))
+              Properties.row("Look")
+              {
+                Dropdown(options: Akari.Color.Look.allCases,
+                         selection: state.selection(\.color.look))
+              }
             }
 
             Properties.slider("Exposure", state.binding(\.color.exposure), in: -4 ... 4, step: 0.1)

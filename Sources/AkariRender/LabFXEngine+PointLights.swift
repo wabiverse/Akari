@@ -70,8 +70,14 @@ extension Akari.LabFXEngine
     /// lights seen moving, usually the ones that follow a character
     var following: Set<LightKey> = []
 
+    /// the glowing meshes that light the scene, by their mesh's path key
+    var meshLights: [LightKey: MeshLight] = [:]
+
     /// the lights packed for the deferred pass
     var texture: GLuint = 0
+
+    /// the linearly transformed cosine tables area light highlights shade with, its inverse matrices then its amplitudes
+    var ltc: (matrix: GLuint, amplitude: GLuint) = (0, 0)
     var onScreen = OnScreen()
   }
 

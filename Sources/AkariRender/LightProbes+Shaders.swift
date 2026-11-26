@@ -180,6 +180,9 @@ extension Akari.LightProbes
         float4 c1 = constants.t.read(uint2(base + 1u, line));
         c2 = constants.t.read(uint2(base + 2u, line));
         mat = float4(c1.r, c1.g, c0.a, c1.b);
+
+        // a glow that lights the scene as a mesh light already shades directly, gathering it too would count it twice
+        if (constants.t.read(uint2(base + 3u, line)).a > 0.5) c2.rgb = float3(0.0);
       }
       if (mat.b < (mat.a > 0.0 ? mat.a : 0.5)) discard_fragment();
       FragOut out;

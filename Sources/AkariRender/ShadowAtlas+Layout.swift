@@ -39,7 +39,6 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
-import Metal
 
 extension Akari.ShadowAtlas
 {
@@ -59,19 +58,7 @@ extension Akari.ShadowAtlas
   }()
 
   /// the maximum number of concurrent output streams the gpu supports.
-  static let maxAmplificationViews: Int = {
-    guard let device = MTLCreateSystemDefaultDevice() else { return 2 }
-
-    for maxViewports in [8, 4, 2]
-    {
-      if device.supportsVertexAmplificationCount(maxViewports)
-      {
-        return maxViewports
-      }
-    }
-
-    return 2
-  }()
+  static let maxAmplificationViews = Akari.GPU.Capabilities.current.maxAmplificationViews
 
   /// bound by the deferred shader's four `pointShadow` targets.
   static let maxPunctualLights = 16
@@ -101,7 +88,7 @@ extension Akari.ShadowAtlas
 
   /// pages per atlas layer, one per amplified view.
   static let pagesPerLayer = maxAmplificationViews
-  static let maxPage = 2048
+  static let maxPage = Akari.GPU.Capabilities.current.shadowPages
   static let poolLayers = maxPage / pagesPerLayer
   /// the radix a page id's packed x and y use
   static let pagePackRadix = 64

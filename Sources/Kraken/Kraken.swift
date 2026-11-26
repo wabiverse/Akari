@@ -175,7 +175,7 @@ struct Kraken: App
     }
     scene = Kraken.SceneFile(fileURL: newScene.fileURL)
 
-    Console.success("first light, rendering with \(Akari.rendererPluginId)", from: .akari)
+    Console.success("first light, rendering with \(Akari.rendererPluginId) on \(Akari.GPU.Capabilities.current)", from: .akari)
   }
 
   var body: some Scene

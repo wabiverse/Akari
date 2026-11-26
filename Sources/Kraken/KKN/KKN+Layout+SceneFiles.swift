@@ -148,6 +148,9 @@ extension Kraken.Layout
           self.status = url.map { "Opened \($0.lastPathComponent)" } ?? "New scene"
           self.primsChanged()
           self.refreshLayers()
+
+          // the scene's color management went to the engine, the panels show it
+          self.settings?.refresh()
           self.adoptStage?(url, probeTimes)
           done?()
         }

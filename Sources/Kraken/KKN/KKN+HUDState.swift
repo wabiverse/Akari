@@ -82,6 +82,12 @@ extension Kraken
       }
     }
 
+    /// rereads the engine's settings after something other than the hud changed them, like a scene adopting its color management
+    func refresh()
+    {
+      current = engine.settings
+    }
+
     /// changes the engine's settings as they are now, so edits made elsewhere stay.
     func edit(_ change: (inout RenderSettings) -> Void)
     {

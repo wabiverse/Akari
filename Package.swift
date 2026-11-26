@@ -24,7 +24,7 @@ let package = Package(
     .package(url: "https://github.com/wabiverse/MetaOpenColorIO.git", from: "1.0.0"),
     .package(url: "https://github.com/wabiverse/Lattice.git", from: "1.0.2"),
     .package(url: "https://codeberg.org/furbytm/LabCamera.git", from: "1.0.0"),
-    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.3.2"),
+    .package(url: "https://github.com/furbytm/SwiftLabGL.git", from: "0.3.3"),
     .package(url: "https://github.com/furbytm/Nanocolor.git", from: "1.0.0"),
     .package(url: "https://github.com/wabiverse/MetaOpenImageIO.git", from: "1.0.1"),
     .package(url: "https://github.com/wabiverse/MetaTIFF.git", from: "1.0.1"),
@@ -122,6 +122,7 @@ let package = Package(
         .product(name: "Ptex", package: "MetaPtex"),
         .product(name: "OpenSubdiv", package: "MetaOpenSubdiv"),
         .product(name: "LabGL", package: "SwiftLabGL"),
+        .product(name: "Nanocolor", package: "Nanocolor"),
       ],
       resources: [
         .process("Resources")

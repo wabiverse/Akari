@@ -89,7 +89,7 @@ extension Akari
     /// atlas size in bytes, 512 mb on a 16 gb machine and scaling with memory
     static var cacheBytes: Int
     {
-      min(max(Int(ProcessInfo.processInfo.physicalMemory / 32), 256 << 20), 4 << 30)
+      min(max(Int(Akari.GPU.Capabilities.current.memory / 32), 256 << 20), 4 << 30)
     }
 
     private static let layerSize = 8192

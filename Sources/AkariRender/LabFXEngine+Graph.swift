@@ -126,6 +126,8 @@ extension Akari.LabFXEngine
     case pointLightColorRadius3 = "u_pointLightColorRadius3"
     case pointLightCount = "u_pointLightCount"
     case pointLightData = "u_pointLightData"
+    case ltcMatrix = "u_ltcMatrix"
+    case ltcAmplitude = "u_ltcAmplitude"
     case pointLightPosIntensity0 = "u_pointLightPosIntensity0"
     case pointLightPosIntensity1 = "u_pointLightPosIntensity1"
     case pointLightPosIntensity2 = "u_pointLightPosIntensity2"

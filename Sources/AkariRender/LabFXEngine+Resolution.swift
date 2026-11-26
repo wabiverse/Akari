@@ -75,7 +75,7 @@ extension Akari.LabFXEngine
     static func scales(upTo ceiling: Float, downTo floor: Float) -> [Float]
     {
       (RenderSettings.supersamplingSteps.filter { $0 > 1 && $0 <= ceiling }.reversed() + [1, 0.85, 0.75, 0.67, 0.6, 0.5, 0.42, 0.34])
-        .filter { $0 >= floor - 1e-3 }
+        .filter { $0 >= floor - 1e-3 && $0 <= ceiling + 1e-3 }
     }
 
     var scales: [Float] = []
@@ -155,15 +155,17 @@ extension Akari.LabFXEngine
       }
     }
 
+    // metalfx only counts where its scaler fits in memory beside the scene, elsewhere the taa pass upscales
+    let capabilities = Akari.GPU.Capabilities.current
     let step = RenderSettings.supersamplingStep(settings.supersampling)
     let chained = step > 1 &&
       settings.upscaler == .metalFX &&
       settings.features.contains(.temporalAA) &&
-      !upscaling.failed && labgl.upscaleSupported() != 0
+      !upscaling.failed && capabilities.temporalUpscalingFits
 
     supersampleScale = chained ? step : 1
 
-    let ceiling = chained ? 1 : step
+    let ceiling = min(chained ? 1 : step, capabilities.renderScaleCeiling)
     guard settings.features.contains(.dynamicResolution)
     else
     {
@@ -176,7 +178,7 @@ extension Akari.LabFXEngine
 
     // metalfx upscales up to 3x and the rest up to 2x, following only the chosen upscaler so pauses don't rebuild its scaler
     let temporal = settings.upscaler == .metalFX && settings.features.contains(.temporalAA) &&
-      !upscaling.failed && labgl.upscaleSupported() != 0
+      !upscaling.failed && capabilities.temporalUpscalingFits
     let scales = DynamicResolution.scales(upTo: ceiling, downTo: temporal ? supersampleScale / 3 : max(supersampleScale / 3, 0.5))
     if scales != res.scales
     {

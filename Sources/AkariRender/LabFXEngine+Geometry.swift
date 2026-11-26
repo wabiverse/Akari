@@ -329,6 +329,7 @@ extension Akari.LabFXEngine
     styles.opacity = [:]
     styles.solidShadow = []
     pointLights.slots = []
+    pointLights.meshLights = [:]
     pointLights.mains = []
     pointLights.mainSince = [:]
     pointLights.importance = [:]

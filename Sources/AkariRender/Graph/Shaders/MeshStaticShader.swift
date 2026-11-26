@@ -184,8 +184,9 @@ extension Akari.RenderGraph
         vec3 B = (dp2 * duv1.x - dp1 * duv2.x) * handedness;
         T -= N * dot(N, T);
         B -= N * dot(N, B);
-        float frame = max(dot(T, T), dot(B, B));
-        vec3 normalEye = frame > 1e-30 ? normalize((T * tn.x + B * tn.y) * inversesqrt(frame) + N * tn.z) : N;
+        // each axis on its own, the atlas stretches a non square texture's u and v by different amounts
+        float tt = dot(T, T), bb = dot(B, B);
+        vec3 normalEye = min(tt, bb) > 1e-30 ? normalize(T * (tn.x * inversesqrt(tt)) + B * (tn.y * inversesqrt(bb)) + N * tn.z) : N;
 
         vec4 emissive = texture(u_emissive_atlas, var.uv);
         vec3 emission = row >= 0 ? c2.rgb : emissive.rgb / max(emissive.a, 1.0 / 255.0);
@@ -299,8 +300,9 @@ extension Akari.RenderGraph
         float3 B = (dp2 * duv1.x - dp1 * duv2.x) * handedness;
         T -= N * dot(N, T);
         B -= N * dot(N, B);
-        float frame = max(dot(T, T), dot(B, B));
-        float3 normalEye = frame > 1e-30 ? normalize((T * tn.x + B * tn.y) * rsqrt(frame) + N * tn.z) : N;
+        // each axis on its own, the atlas stretches a non square texture's u and v by different amounts
+        float tt = dot(T, T), bb = dot(B, B);
+        float3 normalEye = min(tt, bb) > 1e-30 ? normalize(T * (tn.x * rsqrt(tt)) + B * (tn.y * rsqrt(bb)) + N * tn.z) : N;
 
         float4 emissive = texture(u_emissive_atlas, var.uv);
         float3 emission = row >= 0 ? c2.rgb : emissive.rgb / max(emissive.a, 1.0 / 255.0);

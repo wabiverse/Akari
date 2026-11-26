@@ -731,6 +731,9 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
   HdAkariSyncMaterial(sceneDelegate, id, atlas, meshUtil, data, &cage, &primitiveParams, refined);
   PackCornerColors(sceneDelegate, id, meshUtil, data.triangleIndices, primitiveParams, data.uvs, refined);
 
+  // a glowing mesh can light only diffuse or only specular, as a cross polarized studio does
+  if (data.emitter) HdAkariPrimLightLobes(id, &data.lightDiffuse, &data.lightSpecular);
+
   // a polygon mesh shades with the normals it authors and flat without them, a subdivision surface makes its own
   if (!_subdivision && cage.GetScheme() == PxOsdOpenSubdivTokens->none) {
     data.normals = CornerNormals(sceneDelegate, id, meshUtil, data.triangleIndices, primitiveParams);

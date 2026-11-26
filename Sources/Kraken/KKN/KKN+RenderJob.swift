@@ -195,8 +195,10 @@ extension Kraken
 
       let defaults = OutputSettings()
       let animated = renderer.hasAuthoredTimeCodeRange
-      resolutionX = arguments.resolution?.width ?? defaults.resolutionX
-      resolutionY = arguments.resolution?.height ?? defaults.resolutionY
+      // the stage's render settings size the image unless the command line does
+      let authored = info.renderWidth > 0 && info.renderHeight > 0
+      resolutionX = arguments.resolution?.width ?? (authored ? Int(info.renderWidth) : defaults.resolutionX)
+      resolutionY = arguments.resolution?.height ?? (authored ? Int(info.renderHeight) : defaults.resolutionY)
       percentage = arguments.percentage ?? defaults.percentage
       frameStart = arguments.frameStart ?? (animated ? Int(info.startTimeCode.rounded()) : defaults.frameStart)
       frameEnd = arguments.frameEnd ?? (animated ? Int(info.endTimeCode.rounded()) : defaults.frameEnd)
@@ -267,6 +269,12 @@ extension Kraken
       soundtrack = track.isEmpty ? nil : track
 
       let defaults = OutputSettings()
+      if info.renderWidth > 0, info.renderHeight > 0
+      {
+        resolutionX = Int(info.renderWidth)
+        resolutionY = Int(info.renderHeight)
+      }
+
       let animated = renderer.hasAuthoredTimeCodeRange
       frameStart = animated ? Int(info.startTimeCode.rounded()) : defaults.frameStart
       frameEnd = animated ? Int(info.endTimeCode.rounded()) : defaults.frameEnd

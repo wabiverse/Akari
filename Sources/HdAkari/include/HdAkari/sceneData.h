@@ -101,6 +101,7 @@ struct HdAkariSurface
   bool hidden = false;       // a constant opacity under its threshold cuts the whole surface away
   bool shadowCutout = true;  // the material can cut holes in the shadow
   bool emitter = false;      // black and emissive, light that casts no shadow
+  GfVec3f emission = GfVec3f(0.0f); // an emitter's constant radiance, what it lights the scene with, zero when textured
 };
 
 /// the triangulated geometry akari keeps for one mesh rprim, updated in sync and read by the draw path
@@ -120,6 +121,9 @@ struct HdAkariMeshData
   float opacity = 1.0f;     // from the bound material's preview surface
   bool transparent = false; // a constant opacity below 1 without a threshold, drawn by the transparency pass
   bool emitter = false;     // black and emissive, light that casts no shadow
+  GfVec3f emission = GfVec3f(0.0f); // an emitter's constant radiance, zero when it doesn't light the scene
+  float lightDiffuse = 1.0f;        // how much of its diffuse and specular lighting an emitter gives, usdlux's multipliers
+  float lightSpecular = 1.0f;
   bool doubleSided = true;  // false draws only the side its winding faces, as the mesh authors
 
   /// whether the material can cut holes in the shadow

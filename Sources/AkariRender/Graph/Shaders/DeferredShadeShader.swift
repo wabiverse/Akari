@@ -87,6 +87,8 @@ extension Akari.RenderGraph
       Uniforms.pointLightCount
       Uniforms.shadowedPointLightCount
       Samplers.pointLightData
+      Samplers.ltcMatrix
+      Samplers.ltcAmplitude
       Uniforms.pointLightPosIntensity0
       Uniforms.pointLightPosIntensity1
       Uniforms.pointLightPosIntensity2
@@ -698,12 +700,50 @@ extension Akari.RenderGraph
         return result;
       }
 
+      // one edge of lambert's polygon integral, the arc between two directions weighted by how it leans over the normal
+      float lambertEdge(float3 a, float3 b, float3 N)
+      {
+        a = normalize(a);
+        b = normalize(b);
+        float3 c = cross(a, b);
+        float lc = length(c);
+        return lc > 1e-7 ? acos(clamp(dot(a, b), -1.0, 1.0)) * dot(N, c) / lc : 0.0;
+      }
+
+      // adds a clipped polygon's next vertex to its running edge integral, the horizon being the z = 0 plane
+      void polygonStep(float3 a, float3 b, thread float3& first, thread float3& last, thread bool& started, thread float& sum)
+      {
+        if (a.z >= 0.0) {
+          if (started) sum += lambertEdge(last, a, float3(0.0, 0.0, 1.0)); else first = a;
+          last = a;
+          started = true;
+        }
+        if ((a.z >= 0.0) != (b.z >= 0.0)) {
+          float3 c = a + (b - a) * (a.z / (a.z - b.z));
+          if (started) sum += lambertEdge(last, c, float3(0.0, 0.0, 1.0)); else first = c;
+          last = c;
+          started = true;
+        }
+      }
+
       float3 pointLightRadiance(float3 worldPos, float3 N, float3 V, float NoV,
                                 float roughness, float3 f0, float3 diffuseColor,
-                                float4x4 shadows, texture2d<float> lightData, constant Uniforms& u)
+                                float4x4 shadows, texture2d<float> lightData,
+                                texture2d<float> ltcMatrix, sampler ltcMatrixSmp,
+                                texture2d<float> ltcAmplitude, sampler ltcAmplitudeSmp, constant Uniforms& u)
       {
         float3 color = float3(0.0);
         int count = int(min(u.u_pointLightCount, 64.0));
+
+        // heitz's linearly transformed cosine turning this roughness and view's ggx lobe into a clamped cosine, for area light highlights
+        float2 ltcUv = float2(sqrt(roughness), sqrt(1.0 - NoV)) * (63.0 / 64.0) + 0.5 / 64.0;
+        float4 ltcM = ltcMatrix.sample(ltcMatrixSmp, ltcUv);
+        float2 ltcA = ltcAmplitude.sample(ltcAmplitudeSmp, ltcUv).xy;
+        float3 T1 = V - N * dot(V, N);
+        T1 = dot(T1, T1) > 1e-10 ? normalize(T1) : normalize(cross(N, abs(N.z) < 0.9 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0)));
+        float3x3 ltcInverse = float3x3(float3(ltcM.x, 0.0, ltcM.y), float3(0.0, 1.0, 0.0), float3(ltcM.z, 0.0, ltcM.w))
+                            * transpose(float3x3(T1, cross(N, T1), N));
+        float3 ltcGain = f0 * (ltcA.x - ltcA.y) + ltcA.y;
         for (int i = 0; i < count; ++i) {
           float4 posIntensity = lightData.read(uint2(0, i));
           float4 colorRadius = lightData.read(uint2(1, i));
@@ -724,6 +764,7 @@ extension Akari.RenderGraph
           float irradiance = 0.0;
           float lineEnergy = 0.0;
           float facing = 1.0;
+          float3 areaSpecular = float3(-1.0);
           if (tube.w > 0.0) {
             // picott's line integral over the part of the tube above the horizon, karis's closest point for the highlight.
             float3 l0 = toLight - tube.xyz, l1 = toLight + tube.xyz;
@@ -745,26 +786,41 @@ extension Akari.RenderGraph
             sinSigmaSqr = min(radius * radius / distSq, 0.9999);
             lineEnergy = 2.0 * length(full) / (PI * tube.w);
           } else if (tube.w < 0.0) {
-            // lambert's exact polygon integral over the rect clipped to the horizon, the closest point to the reflection for the highlight.
+            // lambert's exact polygon integral over the rect clipped to the horizon, the closest point to the reflection for the fresnel.
             float3 hx = tube.xyz, hy = lightData.read(uint2(4, i)).xyz;
-            if (dot(cross(hx, hy), toLight) <= 0.0) continue;
-            float3 corners[4] = { toLight - hx - hy, toLight + hx - hy, toLight + hx + hy, toLight - hx + hy };
-            float3 poly[5];
-            int n = 0;
-            for (int k = 0; k < 4; ++k) {
-              float3 a = corners[k], b = corners[(k + 1) & 3];
-              float da = dot(N, a), db = dot(N, b);
-              if (da >= 0.0) poly[n++] = a;
-              if ((da >= 0.0) != (db >= 0.0)) poly[n++] = a + (b - a) * (da / (da - db));
+            float4 shape = lightData.read(uint2(5, i));
+
+            // a double sided glowing mesh lights from its back as it does from its front
+            if (dot(cross(hx, hy), toLight) <= 0.0) {
+              if (shape.z < 0.5) continue;
+              hx = -hx;
             }
-            float sum = 0.0;
-            for (int k = 0; k < n; ++k) {
-              float3 a = normalize(poly[k]), b = normalize(poly[(k + 1) % n]);
-              float3 c = cross(a, b);
-              float lc = length(c);
-              sum += lc > 1e-7 ? acos(clamp(dot(a, b), -1.0, 1.0)) * dot(N, c) / lc : 0.0;
+            // the diffuse integral in the shading frame and the highlight's in the cosine's, both clipped to their horizon
+            float3x3 shading = transpose(float3x3(T1, cross(N, T1), N));
+            float sum = 0.0, specularSum = 0.0;
+            float3 first = float3(0.0), last = float3(0.0), specularFirst = float3(0.0), specularLast = float3(0.0);
+            bool started = false, specularStarted = false;
+            if (tube.w < -1.5) {
+              // a glowing mesh lights a point exactly as its outline does
+              int points = int(shape.y);
+              for (int k = 0; k < points; ++k) {
+                float3 a = lightData.read(uint2(6 + k, i)).xyz - worldPos;
+                float3 b = lightData.read(uint2(6 + (k + 1) % points, i)).xyz - worldPos;
+                polygonStep(shading * a, shading * b, first, last, started, sum);
+                polygonStep(ltcInverse * a, ltcInverse * b, specularFirst, specularLast, specularStarted, specularSum);
+              }
+            } else {
+              float3 corners[4] = { toLight - hx - hy, toLight + hx - hy, toLight + hx + hy, toLight - hx + hy };
+              for (int k = 0; k < 4; ++k) {
+                float3 a = corners[k], b = corners[(k + 1) & 3];
+                polygonStep(shading * a, shading * b, first, last, started, sum);
+                polygonStep(ltcInverse * a, ltcInverse * b, specularFirst, specularLast, specularStarted, specularSum);
+              }
             }
+            if (started) sum += lambertEdge(last, first, float3(0.0, 0.0, 1.0));
+            if (specularStarted) specularSum += lambertEdge(specularLast, specularFirst, float3(0.0, 0.0, 1.0));
             irradiance = 0.5 * abs(sum);
+            areaSpecular = ltcGain * (0.5 * abs(specularSum) / PI);
             float3 nL = normalize(cross(hx, hy));
             facing = saturate(dot(nL, normalize(toLight)));
             float rn = dot(nL, R);
@@ -799,6 +855,9 @@ extension Akari.RenderGraph
           float3 kD = float3(1.0) - F;
           float3 Fr = D * Vis * F * (PI * sinSigmaSqr * NoLs * normalization * facing);
           float3 Fd = (kD * diffuseColor / PI) * irradiance;
+
+          // a rect or glowing mesh highlights with the exact ggx integral over its polygon, the rest with the closest point
+          if (areaSpecular.x >= 0.0) Fr = areaSpecular;
 
           color += (Fd * lobes.x + Fr * lobes.y) * colorRadius.xyz * posIntensity.w * window * (i < int(u.u_shadowedPointLightCount) ? shadows[i >> 2][i & 3] : 1.0);
         }
@@ -947,7 +1006,8 @@ extension Akari.RenderGraph
                                                pointShadowUpsample(gbufferPixel, posEye, normalEye, u_pointShadow0_texture,
                                                                    u_pointShadow1_texture, u_pointShadow2_texture,
                                                                    u_pointShadow3_texture, u_pointShadowGuide_texture, _u),
-                                               u_pointLightData, _u);
+                                               u_pointLightData, u_ltcMatrix, u_ltcMatrix_smp,
+                                               u_ltcAmplitude, u_ltcAmplitude_smp, _u);
           color += pointLit;
 
           // every local light's caustics arrive added up as irradiance, its glass shadow already in its point shadow.

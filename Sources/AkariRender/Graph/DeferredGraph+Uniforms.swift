@@ -175,6 +175,8 @@ extension Akari.RenderGraph
     static let normalAtlas = Sampler("u_normal_atlas", .sampler2D)
     static let outlineLabels = Sampler("u_outlineLabels", .sampler2D)
     static let pointLightData = Sampler("u_pointLightData", .sampler2D)
+    static let ltcMatrix = Sampler("u_ltcMatrix", .sampler2D)
+    static let ltcAmplitude = Sampler("u_ltcAmplitude", .sampler2D)
     static let primStyle = Sampler("u_primStyle", .sampler2D)
     static let probeInfo = Sampler("u_probe_info", .sampler2D)
     static let probeSphere = Sampler("u_probe_sphere", .sampler2D)

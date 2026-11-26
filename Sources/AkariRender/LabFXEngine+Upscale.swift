@@ -115,7 +115,7 @@ extension Akari.LabFXEngine
     let resizing = Self.resizingArea || Date().timeIntervalSince(upscaling.resizedAt) < 0.5
     upscaling.mode = if settings.upscaler != .metalFX || renderScale > 1 || tiny || upscaling.failed || motionBlur.subframes > 0
       || resizing
-      || labgl.upscaleSupported() == 0 || (settings.features.contains(.temporalAA) && !neuralUpscaleSafe)
+      || !Akari.GPU.Capabilities.current.temporalUpscalingFits || (settings.features.contains(.temporalAA) && !neuralUpscaleSafe)
     {
       .taa
     }
@@ -157,13 +157,7 @@ extension Akari.LabFXEngine
     // only judged once the scene geometry has settled, a load still syncing would let it in and keep it
     return Date() >= upscaling.neuralHeldUntil
       && (upscaling.mode != .taa || geometry.record.triangles > 0 && Date().timeIntervalSince(geometry.record.rebuiltAt) > 5
-        && Self.footprint() + (2 << 30) < Self.memoryBudget)
-  }
-
-  /// how much of the machine's memory the scene may take
-  static var memoryBudget: UInt64
-  {
-    UInt64(Double(ProcessInfo.processInfo.physicalMemory) * 0.65)
+        && Self.footprint() + Akari.GPU.Capabilities.temporalUpscalingReserve < Akari.GPU.Capabilities.current.memoryBudget)
   }
 
   /// the process's physical footprint, which is what the system counts against it

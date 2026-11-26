@@ -150,8 +150,15 @@ extension Akari.LabFXEngine
     let snapshot = scene.LightSnapshot().filter { Pixar.HdAkariPathKey($0.id) != environment.rectSunKey }
     let domeSun = dome.flatMap { dome in dome.sun.map { ($0.irradiance * dome.color).max() } }
     let sunFloor = (environment.distantSun?.irradiance.max() ?? domeSun ?? 0) * 0.05
-    let keys = snapshot.map { Pixar.HdAkariPathKey($0.id) }
+    var keys = snapshot.map { Pixar.HdAkariPathKey($0.id) }
     var lights = snapshot.map { pointLight($0, sunFloor: sunFloor) }
+
+    // glowing meshes light the scene too, unshadowed for now as their own geometry sits around them
+    let meshLights = meshLightList(around: lights)
+    let unshadowed = Set(meshLights.map(\.key))
+    materialAtlas.directRows = Set(meshLights.compactMap { pointLights.meshLights[$0.key]?.row })
+    keys += meshLights.map(\.key)
+    lights += meshLights.map(\.light)
     trackMovedLights(keys: keys, lights: &lights)
 
     // rank lights by their irradiance at the camera or at the animated geometry, whichever is higher
@@ -176,7 +183,7 @@ extension Akari.LabFXEngine
 
     // practical lights sit inside their own fixtures, so only lights reaching past a meter cast shadows and they take the first slots
     let minShadowReach = 1 / stageMetersPerUnit
-    let wanted = Set(sorted.filter { lights[$0].reach >= minShadowReach }
+    let wanted = Set(sorted.filter { lights[$0].reach >= minShadowReach && !unshadowed.contains(keys[$0]) }
       .prefix(Akari.ShadowAtlas.maxPunctualLights).map { keys[$0] })
     let slots = assignShadowSlots(wanted, by: sorted.map { keys[$0] })
     let index = Dictionary(keys.indices.map { (keys[$0], $0) }, uniquingKeysWith: { first, _ in first })
@@ -322,11 +329,17 @@ extension Akari.LabFXEngine
       if let raw = rawMesh(mesh)
       {
         changed.append(raw)
+        updateMeshLight(raw)
       }
       else
       {
         removed.append(Pixar.HdAkariPathKey(mesh.id))
       }
+    }
+
+    for key in removed
+    {
+      pointLights.meshLights[key] = nil
     }
 
     return (changed, removed)
@@ -365,6 +378,8 @@ extension Akari.LabFXEngine
 
     raw.transparent = mesh.transparent
     raw.emitter = mesh.emitter
+    raw.emission = SIMD3(mesh.emission[0], mesh.emission[1], mesh.emission[2])
+    raw.lightLobes = SIMD2(mesh.lightDiffuse, mesh.lightSpecular)
     raw.singleSided = !mesh.doubleSided
     raw.shadowCutout = mesh.shadowCutout
     raw.opacity = mesh.opacity
