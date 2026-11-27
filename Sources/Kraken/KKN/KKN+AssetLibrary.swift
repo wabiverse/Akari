@@ -38,6 +38,8 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
+import AkariRender
+import CryptoKit
 import CxxStdlib
 import Foundation
 import HdAkari
@@ -86,8 +88,8 @@ extension Kraken
     /// the variants of its shading variant set, which a material of the same name selects
     var shadingVariants: [String] = []
     var library = ""
-    /// when the layer was last written, so cached thumbnails follow edits
-    var modified = 0.0
+    /// what the layer holds, naming its cached thumbnail
+    var fingerprint = ""
 
     var id: String { file + "<" + prim + ">" }
 
@@ -165,6 +167,20 @@ extension Kraken
       }
     }
 
+    /// a hash of the layer's bytes, or its size and date for a big layer
+    nonisolated static func fingerprint(_ url: URL) -> String
+    {
+      let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+      let size = values?.fileSize ?? 0
+      guard size <= 8 << 20, let data = try? Data(contentsOf: url)
+      else
+      {
+        return "\(size)@\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+      }
+
+      return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// the assets of one layer, the whole layer as one asset when nothing in it says it's an asset
     nonisolated static func describe(_ url: URL, library: String = "", folders: [String] = []) -> [LibraryAsset]
     {
@@ -172,11 +188,10 @@ extension Kraken
 
       // payloads stay unloaded, a kit's geometry is only read once an asset is placed or rendered
       let stage = UsdStage.open(url.path, load: .none)
-      let modified = ((try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate)?
-        .timeIntervalSince1970 ?? 0
+      let fingerprint = Self.fingerprint(url)
       let base = LibraryAsset(name: "", file: url.path, prim: "", kind: .model,
                               isZUp: UsdGeom.getUpAxis(for: stage) == .z,
-                              metersPerUnit: UsdGeom.getMetersPerUnit(for: stage), library: library, modified: modified)
+                              metersPerUnit: UsdGeom.getMetersPerUnit(for: stage), library: library, fingerprint: fingerprint)
       var purposes = Pixar.TfTokenVector()
       purposes.push_back(.default_)
       purposes.push_back(.render)
@@ -382,14 +397,11 @@ extension Kraken
 
     private static let foldersKey = "KrakenAssetLibraries"
 
-    /// the sample library beside the sources in a development build, then the user's own folders
+    /// the sample library shipped in the app bundle, then the user's own folders
     var roots: [(url: URL, name: String)]
     {
       var roots: [(URL, String)] = []
-      let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        .deletingLastPathComponent().deletingLastPathComponent()
-      let sample = repo.appendingPathComponent("Scenes/AssetLibrary")
-      if FileManager.default.fileExists(atPath: sample.path) { roots.append((sample, "Sample Library")) }
+      if let sample = Self.sample { roots.append((sample, "Sample Library")) }
       let support = URL.applicationSupportDirectory.appendingPathComponent("Kraken/Assets")
       if FileManager.default.fileExists(atPath: support.path) { roots.append((support, "My Assets")) }
       let env = ProcessInfo.processInfo.environment["KRAKEN_ASSET_LIBRARY"] ?? ""
@@ -401,6 +413,9 @@ extension Kraken
 
       return roots
     }
+
+    /// the sample library in the app's resources
+    private static let sample = Bundle.akariResource("AssetLibrary", in: "Akari_Kraken")
 
     private init()
     {

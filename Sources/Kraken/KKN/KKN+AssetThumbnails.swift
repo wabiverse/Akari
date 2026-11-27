@@ -73,14 +73,15 @@ extension Kraken
 
     nonisolated static var cache: URL
     {
-      URL.cachesDirectory.appendingPathComponent("Kraken/Thumbnails")
+      let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
+      return caches.appendingPathComponent("foundation.wabi.usd", isDirectory: true).appendingPathComponent("Thumbnails", isDirectory: true)
     }
 
-    /// the cached render of an asset, named by where it lives and when it last changed
+    /// the cached render of an asset, named by what its layer holds
     nonisolated static func cached(_ asset: LibraryAsset) -> URL
     {
       var hash: UInt64 = 0xCBF2_9CE4_8422_2325
-      for byte in "\(asset.id)|\(asset.modified)".utf8
+      for byte in "\(asset.fingerprint)<\(asset.prim)>".utf8
       {
         hash = (hash ^ UInt64(byte)) &* 0x100_0000_01B3
       }

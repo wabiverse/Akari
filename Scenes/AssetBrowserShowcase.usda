@@ -13,7 +13,7 @@ def Xform "World" (
 )
 {
     def Xform "DioramaRoom" (
-        prepend references = @./AssetLibrary/Rooms/DioramaRoom.usda@
+        prepend references = @../Sources/Kraken/AssetLibrary/Rooms/DioramaRoom.usda@
     )
     {
         matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0.08724377721238241, 0, 1) )
@@ -63,7 +63,7 @@ def Xform "World" (
     def "WoodenChair" (
         active = false
         instanceable = true
-        prepend references = @./AssetLibrary/Furniture/WoodenChair.usda@
+        prepend references = @../Sources/Kraken/AssetLibrary/Furniture/WoodenChair.usda@
     )
     {
         matrix4d xformOp:transform = ( (0.7071067811865476, 0, -0.7071067811865475, 0), (0, 1, 0, 0), (0.7071067811865475, 0, 0.7071067811865476, 0), (-0.5188094108710463, 0.08724377721238241, -0.5237379966403376, 1) )
@@ -72,7 +72,7 @@ def Xform "World" (
 
     def "PictureFrame" (
         instanceable = true
-        prepend references = @./AssetLibrary/Picture Frames/PictureFrame.usda@
+        prepend references = @../Sources/Kraken/AssetLibrary/Picture Frames/PictureFrame.usda@
     )
     {
         matrix4d xformOp:transform = ( (0, 0, -1, 0), (0, 1, 0, 0), (1, 0, 0, 0), (-0.9399999976158142, 0.9711654618871821, 0.0163712961225031, 1) )
@@ -81,7 +81,7 @@ def Xform "World" (
 
     def "PottedPlant" (
         instanceable = true
-        prepend references = @./AssetLibrary/Plants/PottedPlant.usda@
+        prepend references = @../Sources/Kraken/AssetLibrary/Plants/PottedPlant.usda@
     )
     {
         matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.5695368985404072, 0.08724377721238241, -0.7058000186085706, 1) )
@@ -90,7 +90,7 @@ def Xform "World" (
 
     def "Sidetable" (
         instanceable = true
-        prepend references = @./AssetLibrary/Furniture/Sidetable.usda@
+        prepend references = @../Sources/Kraken/AssetLibrary/Furniture/Sidetable.usda@
     )
     {
         matrix4d xformOp:transform = ( (0, 0, -1, 0), (0, 1, 0, 0), (1, 0, 0, 0), (-0.6799999976158146, 0.08724377721238241, 0.2217986929694249, 1) )
@@ -99,7 +99,7 @@ def Xform "World" (
 
     def "WoodenChair_001" (
         instanceable = true
-        prepend references = @./AssetLibrary/Furniture/WoodenChair.usda@
+        prepend references = @../Sources/Kraken/AssetLibrary/Furniture/WoodenChair.usda@
     )
     {
         matrix4d xformOp:transform = ( (0.7071067811865476, 0, -0.7071067811865475, 0), (0, 1, 0, 0), (0.7071067811865475, 0, 0.7071067811865476, 0), (-0.5644364933527896, 0.08724377721238241, -0.48397667051255017, 1) )

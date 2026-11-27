@@ -62,6 +62,30 @@ public extension Bundle
     return Bundle(path: "\(base)/Contents/Resources") ?? Bundle(path: base)
   }
 
+  /**
+   * Finds a resource a target copies into its resource bundle,
+   * whichever layout the build left it in. */
+  static func akariResource(_ resource: String, in name: String) -> URL?
+  {
+    let roots = [Bundle.main.resourceURL, Bundle.main.bundleURL, Bundle.main.executableURL?.deletingLastPathComponent()]
+      .compactMap(\.self)
+    let containers = ["", "\(name).bundle", "\(name).resources"]
+    let nests = ["", "Contents/Resources"]
+    for root in roots
+    {
+      for container in containers
+      {
+        for nest in nests
+        {
+          let url = root.appendingPathComponent(container).appendingPathComponent(nest).appendingPathComponent(resource)
+          if FileManager.default.fileExists(atPath: url.path) { return url.standardizedFileURL }
+        }
+      }
+    }
+
+    return nil
+  }
+
   static let akari: Bundle = {
     // a bundled app keeps compiled resources under contents resources, so look there before the module bundle
     if let bundle = akariBundle("Akari_AkariRender")

@@ -155,7 +155,9 @@ let package = Package(
       ],
       resources: [
         // the kraken script module sources, compiled with each script
-        .copy("ScriptKit")
+        .copy("ScriptKit"),
+        // the sample asset library the asset browser ships with
+        .copy("AssetLibrary"),
       ],
       cxxSettings: [
         .define("_LIBCPP_ABI_NO_COMPRESSED_PAIR_PADDING")

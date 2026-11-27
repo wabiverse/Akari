@@ -103,6 +103,9 @@ protected:
 private:
   TfToken _type;
   uint64_t _dataGeneration = 0; // bumped each sync so gpu caches invalidate
+  VtVec3iArray _topologyTriangles;
+  VtVec2fArray _topologyUvs;
+  uint64_t _topologyRevision = 0;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

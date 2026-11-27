@@ -204,6 +204,15 @@ HdAkariSphere::Sync(HdSceneDelegate *sceneDelegate,
   // bump the revision so the gpu buffer cache knows to rebuild
   data.dataRevision = ++_dataGeneration;
 
+  // new triangles or atlas uvs lay the shape out again
+  if (_topologyRevision == 0 || data.triangleIndices != _topologyTriangles || data.uvs != _topologyUvs) {
+    _topologyTriangles = data.triangleIndices;
+    _topologyUvs = data.uvs;
+    _topologyRevision = data.dataRevision;
+  }
+
+  data.topologyRevision = _topologyRevision;
+
   if (instanced) {
     HdAkariInstanceSet set = HdAkariInstances(sceneDelegate->GetRenderIndex(), instancerId, id);
     data.instances = std::move(set.transforms);

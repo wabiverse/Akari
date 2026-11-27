@@ -59,30 +59,10 @@ extension Kraken
     /// the kraken module sources shipped with the app
     nonisolated static func moduleSources() -> [URL]
     {
-      var folders: [URL] = []
-      if let bundle = Bundle.akariBundle("Akari_Kraken"), let url = bundle.url(forResource: "ScriptKit", withExtension: nil)
-      {
-        folders.append(url)
-      }
+      guard let folder = Bundle.akariResource("ScriptKit", in: "Akari_Kraken") else { return [] }
 
-      if let resources = Bundle.main.resourceURL
-      {
-        // swift bundler nests the executables resources a level deeper
-        folders.append(resources.appendingPathComponent("ScriptKit"))
-        folders.append(resources.appendingPathComponent("Contents/Resources/ScriptKit"))
-      }
-
-      // running from a source checkout
-      folders.append(URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("ScriptKit"))
-      for folder in folders
-      {
-        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))?
-          .filter { $0.pathExtension == "swift" }.sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
-        if !files.isEmpty { return files }
-      }
-
-      return []
+      let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+      return files.filter { $0.pathExtension == "swift" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     /// runs a tool and gives back its output and exit status
