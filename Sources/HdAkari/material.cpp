@@ -69,6 +69,7 @@
 #include "HdAkari/material.h"
 #include "HdAkari/materialBinding.h"
 #include "HdAkari/renderParam.h"
+#include "HdAkari/stageInfo.h"
 #include "HdAkari/textureAtlas.h"
 
 #include <algorithm>
@@ -132,10 +133,14 @@ HdAkariMaterial::Sync(HdSceneDelegate *sceneDelegate,
     atlas->ForgetCell(key);
   }
 
+  // hydra's scene indices take dirty notices, not the legacy change tracker
   HdRenderIndex &index = sceneDelegate->GetRenderIndex();
+  SdfPathVector users;
   for (SdfPath const &id : HdAkariMaterialUsers(key)) {
-    if (index.HasRprim(id)) index.GetChangeTracker().MarkRprimDirty(id, HdChangeTracker::DirtyMaterialId);
+    if (index.HasRprim(id)) users.push_back(id);
   }
+
+  HdAkariMarkMaterialUsersDirty(users);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

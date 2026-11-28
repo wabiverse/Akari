@@ -1,0 +1,99 @@
+#usda 1.0
+(
+    customLayerData = {
+        dictionary colorManagement = {
+            double exposure = 0
+            string viewTransform = "sRGB"
+        }
+    }
+    defaultPrim = "Studio"
+    doc = "A dark display case, a low sheen plinth in a black room lit from above, with rim lights picking out the silhouette."
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Studio" (
+    assetInfo = {
+        dictionary previews = {
+            dictionary thumbnails = {
+                dictionary default = {
+                    asset defaultImage = @./Previews/Vitrine.png@
+                }
+            }
+        }
+    }
+)
+{
+    def Scope "Looks"
+    {
+        def Material "Plinth"
+        {
+            token outputs:surface.connect = </Studio/Looks/Plinth/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.025, 0.025, 0.027)
+                float inputs:metallic = 0
+                float inputs:roughness = 0.6
+                token outputs:surface
+            }
+        }
+    }
+
+    def Cube "Plinth" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </Studio/Looks/Plinth>
+        double size = 1
+        float3 xformOp:scale = (1.2, 1.2, 1)
+        double3 xformOp:translate = (0, 0, -0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def DiskLight "Top"
+    {
+        color3f inputs:color = (1, 0.95, 0.88)
+        float inputs:intensity = 16
+        float inputs:radius = 0.35
+        matrix4d xformOp:transform = ( (0.8137334712067349, 0.5812381937190964, 0, 0), (-0.55560805312766, 0.777851274378724, 0.2936785423674775, -0), (0.17069718549972976, -0.23897605969962163, 0.9559042387984864, 0), (0.25000000000000006, -0.35, 1.6, 0.9999999999999999) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def RectLight "RimLeft"
+    {
+        color3f inputs:color = (0.9, 0.95, 1)
+        float inputs:height = 1
+        float inputs:intensity = 9
+        float inputs:width = 0.25
+        matrix4d xformOp:transform = ( (-0.6643638388299198, -0.7474093186836596, -2.7755575615628914e-17, 0), (0.2866183898843168, -0.25477190211939277, 0.9235481451827989, -0), (-0.6902684899626333, 0.6135719910778964, 0.3834824944236851, 0), (-0.9, 0.8, 0.7, 0.9999999999999999) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def RectLight "RimRight"
+    {
+        color3f inputs:color = (0.9, 0.95, 1)
+        float inputs:height = 1
+        float inputs:intensity = 9
+        float inputs:width = 0.25
+        matrix4d xformOp:transform = ( (-0.6643638388299198, 0.7474093186836596, 2.7755575615628914e-17, 0), (-0.2866183898843168, -0.25477190211939277, 0.9235481451827989, 0), (0.6902684899626333, 0.6135719910778964, 0.3834824944236851, -0), (0.9, 0.8, 0.7, 0.9999999999999999) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def RectLight "Front"
+    {
+        color3f inputs:color = (1, 1, 1)
+        float inputs:height = 0.6
+        float inputs:intensity = 0.5
+        float inputs:width = 1
+        matrix4d xformOp:transform = ( (1, 0, -0, 0), (0, 0.4008188340197077, 0.9161573349021892, 0), (0, -0.9161573349021892, 0.4008188340197077, 0), (0, -1.6000000000000003, 0.9, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def DomeLight "Darkroom"
+    {
+        float inputs:intensity = 0
+    }
+}
+

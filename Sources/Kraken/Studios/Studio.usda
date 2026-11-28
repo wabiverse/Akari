@@ -1,0 +1,91 @@
+#usda 1.0
+(
+    customLayerData = {
+        dictionary colorManagement = {
+            double exposure = 0
+            string viewTransform = "sRGB"
+        }
+    }
+    defaultPrim = "Studio"
+    doc = "A middle gray cyclorama sweep with a soft key, a fill and a rim light, a neutral catalog look for any material."
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Studio" (
+    assetInfo = {
+        dictionary previews = {
+            dictionary thumbnails = {
+                dictionary default = {
+                    asset defaultImage = @./Previews/Studio.png@
+                }
+            }
+        }
+    }
+)
+{
+    def Scope "Looks"
+    {
+        def Material "Sweep"
+        {
+            token outputs:surface.connect = </Studio/Looks/Sweep/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.18, 0.18, 0.18)
+                float inputs:metallic = 0
+                float inputs:roughness = 0.85
+                token outputs:surface
+            }
+        }
+    }
+
+    def Mesh "Sweep" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        uniform bool doubleSided = 1
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 1, 3, 2, 2, 3, 5, 4, 4, 5, 7, 6, 6, 7, 9, 8, 8, 9, 11, 10, 10, 11, 13, 12, 12, 13, 15, 14, 14, 15, 17, 16, 16, 17, 19, 18, 18, 19, 21, 20, 20, 21, 23, 22, 22, 23, 25, 24, 24, 25, 27, 26, 26, 27, 29, 28, 28, 29, 31, 30, 30, 31, 33, 32, 32, 33, 35, 34, 34, 35, 37, 36]
+        rel material:binding = </Studio/Looks/Sweep>
+        point3f[] points = [(-3.5, -4, 0), (3.5, -4, 0), (-3.5, 0.3, 0), (3.5, 0.3, 0), (-3.5, 0.38821542, 0.004333746), (3.5, 0.38821542, 0.004333746), (-3.5, 0.4755813, 0.017293248), (3.5, 0.4755813, 0.017293248), (-3.5, 0.56125623, 0.0387537), (3.5, 0.56125623, 0.0387537), (-3.5, 0.6444151, 0.068508424), (3.5, 0.6444151, 0.068508424), (-3.5, 0.72425705, 0.106270865), (3.5, 0.72425705, 0.106270865), (-3.5, 0.8000132, 0.15167736), (3.5, 0.8000132, 0.15167736), (-3.5, 0.870954, 0.2042906), (3.5, 0.870954, 0.2042906), (-3.5, 0.9363961, 0.2636039), (3.5, 0.9363961, 0.2636039), (-3.5, 0.9957094, 0.32904604), (3.5, 0.9957094, 0.32904604), (-3.5, 1.0483227, 0.3999868), (3.5, 1.0483227, 0.3999868), (-3.5, 1.0937291, 0.47574294), (3.5, 1.0937291, 0.47574294), (-3.5, 1.1314915, 0.5555849), (3.5, 1.1314915, 0.5555849), (-3.5, 1.1612463, 0.6387438), (3.5, 1.1612463, 0.6387438), (-3.5, 1.1827067, 0.7244187), (3.5, 1.1827067, 0.7244187), (-3.5, 1.1956663, 0.81178457), (3.5, 1.1956663, 0.81178457), (-3.5, 1.2, 0.9), (3.5, 1.2, 0.9), (-3.5, 1.2, 3), (3.5, 1.2, 3)]
+        uniform token subdivisionScheme = "none"
+    }
+
+    def RectLight "Key"
+    {
+        color3f inputs:color = (1, 0.97, 0.93)
+        float inputs:height = 0.9
+        float inputs:intensity = 9
+        float inputs:width = 1.2
+        matrix4d xformOp:transform = ( (0.7633862853691143, -0.6459422414661737, -2.7755575615628907e-17, 0), (0.3720746376634297, 0.4397245717840531, 0.8174367039575348, 0), (-0.5280168968110514, -0.6240199689585151, 0.5760184328847832, 0), (-1.1000000000000003, -1.3000000000000003, 1.4000000000000001, 0.9999999999999998) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def RectLight "Fill"
+    {
+        color3f inputs:color = (0.93, 0.96, 1)
+        float inputs:height = 1.2
+        float inputs:intensity = 2.2
+        float inputs:width = 1.6
+        matrix4d xformOp:transform = ( (0.5999999999999999, 0.7999999999999999, -1.3877787807814457e-17, 0), (-0.19402850002906635, 0.14552137502179976, 0.9701425001453319, -0), (0.7761140001162655, -0.5820855000871991, 0.24253562503633294, 0), (1.6, -1.1999999999999997, 0.7, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def RectLight "Rim"
+    {
+        color3f inputs:color = (1, 1, 1)
+        float inputs:height = 0.25
+        float inputs:intensity = 7
+        float inputs:width = 1.4
+        matrix4d xformOp:transform = ( (-0.9138115486202569, 0.40613846605344756, 2.77555756156289e-17, 0), (-0.30257884624574033, -0.6808024040529157, 0.6670488201326547, 0), (0.2709141845914385, 0.6095569153307366, 0.745014007626456, -0), (0.40000000000000013, 0.9, 1.3, 1) )
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+    }
+
+    def DomeLight "Ambient"
+    {
+        float inputs:intensity = 0.12
+    }
+}
+

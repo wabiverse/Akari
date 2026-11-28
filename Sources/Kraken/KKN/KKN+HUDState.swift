@@ -39,6 +39,7 @@
  * ----------------------------------------------------------------- */
 
 import AkariCore
+import AkariHydra
 import AkariRender
 import HdAkari
 import HydraKit
@@ -50,6 +51,18 @@ import class SwiftCrossUI.Published
 
 extension Kraken
 {
+  /// a hydra renderer plugin as the render engine dropdown lists it
+  struct Renderer: Equatable, CustomStringConvertible
+  {
+    var id: String
+    var name: String
+
+    var description: String
+    {
+      name
+    }
+  }
+
   /// the live render settings the hud edits, each edit written straight through to the engine.
   @MainActor
   final class HUDState: ObservableObject
@@ -192,6 +205,68 @@ extension Kraken
           self.applyPreset(quality)
         }
       )
+    }
+
+    /// the hydra renderers this build registered, by the name each plugin gives itself
+    let renderers: [Renderer] = Pixar.UsdImagingGLEngine.GetRendererPlugins().map
+    {
+      Renderer(id: $0.string, name: String(Pixar.UsdImagingGLEngine.GetRendererDisplayName($0)))
+    }
+
+    /// the renderer the viewport draws with
+    @Published private(set) var renderer = Renderer(id: Akari.rendererPluginId, name: "Akari")
+
+    /// the render engine dropdown, picking one hands the viewport's hydra engine to that renderer
+    var rendererSelection: Binding<Renderer?>
+    {
+      Binding(
+        get: { self.renderers.first { $0.id == self.renderer.id } ?? self.renderer },
+        set: { picked in
+          guard let picked, picked != self.renderer else { return }
+          self.renderer = picked
+          self.use(picked)
+        }
+      )
+    }
+
+    /// a scene open makes a new hydra engine that always starts on akari, so the dropdown follows it there
+    func sceneReplaced()
+    {
+      guard renderer.id != Akari.rendererPluginId else { return }
+      renderer = renderers.first { $0.id == Akari.rendererPluginId } ?? Renderer(id: Akari.rendererPluginId, name: "Akari")
+      let hydra = hydra
+      hydra.performOnFrameQueue { hydra.drawsSelectionOutline = false }
+    }
+
+    /// the new renderer starts from a fresh task controller, so presentation and the aovs the viewport reads are set again
+    private func use(_ renderer: Renderer)
+    {
+      let hydra = hydra
+      nonisolated(unsafe) let akari = engine
+      let id = renderer.id
+      hydra.performOnFrameQueue
+      {
+        let imaging = hydra.getEngine()
+        let switched = withAkariRenderer(akari) { imaging.SetRendererPlugin(Tf.Token(id)) }
+        guard switched else { return }
+
+        // the viewport presents the color aov itself, left on hydra would hand it to a gl context there isn't
+        imaging.setEnablePresentation(false)
+        imaging.setRendererAovs([.color, .primId, .instanceId, .depth])
+        imaging.setViewportRenderOutput(.color)
+        imaging.setSelectionColor(hydra.selectionOutlineColor)
+
+        // every renderer lights the scene with its own usd lights, no light is added at the camera
+        let lights = Pixar.GlfSimpleLightVector()
+        var material = Pixar.GlfSimpleMaterial()
+        material.SetAmbient(Pixar.GfVec4f(0.2, 0.2, 0.2, 1))
+        material.SetSpecular(Pixar.GfVec4f(0.1, 0.1, 0.1, 1))
+        material.SetShininess(32)
+        imaging.setLightingState(lights: lights, material: material, sceneAmbient: Pixar.GfVec4f(0.01, 0.01, 0.01, 1))
+
+        // akari outlines the selection itself, any other renderer gets hydra's outline
+        hydra.drawsSelectionOutline = id != Akari.rendererPluginId
+      }
     }
 
     /// the focus object's name, as the field shows it.

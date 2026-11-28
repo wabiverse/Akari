@@ -63,7 +63,7 @@ extension Akari.LabFXEngine
     if scene.Id() != lastSceneId { adoptScene(scene.Id()) }
     guard geometry.staticCapture != nil else { return }
 
-    updateOutline(selection, projection: unjitteredProjection, sceneProjection: projection)
+    updateOutline(selection, view: view, projection: unjitteredProjection, sceneProjection: projection)
     loadCamera(view: view, projection: projection)
     bindMaterialAtlas(renderParam)
 
@@ -153,9 +153,8 @@ extension Akari.LabFXEngine
     var keys = snapshot.map { Pixar.HdAkariPathKey($0.id) }
     var lights = snapshot.map { pointLight($0, sunFloor: sunFloor) }
 
-    // glowing meshes light the scene too, unshadowed for now as their own geometry sits around them
+    // glowing meshes shadow like any area light, the glow itself stays out of the shadow maps
     let meshLights = meshLightList(around: lights)
-    let unshadowed = Set(meshLights.map(\.key))
     materialAtlas.directRows = Set(meshLights.compactMap { pointLights.meshLights[$0.key]?.row })
     keys += meshLights.map(\.key)
     lights += meshLights.map(\.light)
@@ -183,7 +182,7 @@ extension Akari.LabFXEngine
 
     // practical lights sit inside their own fixtures, so only lights reaching past a meter cast shadows and they take the first slots
     let minShadowReach = 1 / stageMetersPerUnit
-    let wanted = Set(sorted.filter { lights[$0].reach >= minShadowReach && !unshadowed.contains(keys[$0]) }
+    let wanted = Set(sorted.filter { lights[$0].reach >= minShadowReach }
       .prefix(Akari.ShadowAtlas.maxPunctualLights).map { keys[$0] })
     let slots = assignShadowSlots(wanted, by: sorted.map { keys[$0] })
     let index = Dictionary(keys.indices.map { (keys[$0], $0) }, uniquingKeysWith: { first, _ in first })

@@ -268,6 +268,12 @@ HdAkariValueNumbers(VtValue const &v, double *out)
   return 0;
 }
 
+bool
+HdAkariIsLayer(SdfLayerRefPtr const &layer)
+{
+  return bool(layer);
+}
+
 std::string
 HdAkariDescribeValue(VtValue const &v)
 {

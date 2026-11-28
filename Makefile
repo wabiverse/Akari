@@ -10,6 +10,10 @@ PLATFORM ?=
 # Device ID to build or run for (swift-bundler devices list)
 DEVICE_ID ?=
 CODESIGN_IDENTITY ?=
+# a development profile for the device, made in the developer portal, else swift-bundler makes one through xcode
+IOS_DEV_PROFILE ?=
+# device builds claim the larger memory limit and address space, Kraken.entitlements, which the profile has to grant
+DEVICE_SIGNING = $(if $(and $(CODESIGN_IDENTITY),$(filter iOS,$(PLATFORM))),--entitlements Kraken.entitlements $(if $(IOS_DEV_PROFILE),--provisioning-profile $(IOS_DEV_PROFILE)))
 # Build configuration to use (override via command line: make bundle BUILD_CONFIG=debug)
 BUILD_CONFIG ?= release
 # USD scene for akari to render (override via command line: make run USD_SCENE=/path/to/scene.usd)
@@ -34,13 +38,13 @@ install:
 bundle: install
 	@echo "📦 Bundling $(APP_NAME)..."
 	SWIFT_COLLECTIVE_DYNAMIC_LIBRARIES=1 SWIFTUSD_BUILD_FROM_SOURCE=1 swift package update
-	SWIFT_COLLECTIVE_DYNAMIC_LIBRARIES=1 SWIFTUSD_BUILD_FROM_SOURCE=1 swift-bundler bundle -c $(BUILD_CONFIG) $(if $(PLATFORM),-p $(PLATFORM)) $(if $(DEVICE_ID),--device $(DEVICE_ID)) $(if $(CODESIGN_IDENTITY),--identity $(CODESIGN_IDENTITY) --codesign) $(APP_NAME)
+	SWIFT_COLLECTIVE_DYNAMIC_LIBRARIES=1 SWIFTUSD_BUILD_FROM_SOURCE=1 swift-bundler bundle -c $(BUILD_CONFIG) $(if $(PLATFORM),-p $(PLATFORM)) $(if $(DEVICE_ID),--device $(DEVICE_ID)) $(if $(CODESIGN_IDENTITY),--identity $(CODESIGN_IDENTITY) --codesign) $(DEVICE_SIGNING) $(APP_NAME)
 
 run: install
 	@echo "▶️  Running $(APP_NAME)..."
 	@if [ "$(PLATFORM)" = "iOS" ]; then \
 		SWIFT_COLLECTIVE_DYNAMIC_LIBRARIES=1 SWIFTUSD_BUILD_FROM_SOURCE=1 swift package update; \
-		SWIFT_COLLECTIVE_DYNAMIC_LIBRARIES=1 SWIFTUSD_BUILD_FROM_SOURCE=1 swift-bundler run $(if $(IS_SKIP_TRUE),--skip-build) -c $(BUILD_CONFIG) $(if $(PLATFORM),-p $(PLATFORM)) $(if $(DEVICE_ID),--device $(DEVICE_ID)) $(if $(CODESIGN_IDENTITY),--identity $(CODESIGN_IDENTITY) --codesign) $(APP_NAME); \
+		SWIFT_COLLECTIVE_DYNAMIC_LIBRARIES=1 SWIFTUSD_BUILD_FROM_SOURCE=1 swift-bundler run $(if $(IS_SKIP_TRUE),--skip-build) -c $(BUILD_CONFIG) $(if $(PLATFORM),-p $(PLATFORM)) $(if $(DEVICE_ID),--device $(DEVICE_ID)) $(if $(CODESIGN_IDENTITY),--identity $(CODESIGN_IDENTITY) --codesign) $(DEVICE_SIGNING) $(APP_NAME); \
 	else \
 		SWIFT_COLLECTIVE_DYNAMIC_LIBRARIES=1 SWIFTUSD_BUILD_FROM_SOURCE=1 swift package update; \
 		SWIFT_COLLECTIVE_DYNAMIC_LIBRARIES=1 SWIFTUSD_BUILD_FROM_SOURCE=1 swift-bundler run $(if $(IS_SKIP_TRUE),--skip-build) -c $(BUILD_CONFIG) $(APP_NAME) $(if $(USD_SCENE),-- --usd $(USD_SCENE)); \

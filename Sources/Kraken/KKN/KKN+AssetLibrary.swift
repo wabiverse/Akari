@@ -47,6 +47,9 @@ import HydraKit
 import simd
 import protocol SwiftCrossUI.ObservableObject
 import class SwiftCrossUI.Published
+#if !os(macOS)
+  import UIKit
+#endif
 
 extension Kraken
 {
@@ -141,11 +144,25 @@ extension Kraken
       }
 
       let rootDepth = root.standardizedFileURL.pathComponents.count
-      return entries(files).sorted { $0.path < $1.path }.flatMap
+      return entries(adoptingSidecars(files)).sorted { $0.path < $1.path }.flatMap
       { url -> [LibraryAsset] in
         let folders = Array(url.standardizedFileURL.deletingLastPathComponent().pathComponents.dropFirst(rootDepth))
         return describe(url, library: library, folders: folders)
       }
+    }
+
+    /// a `name.akari.usda` beside an asset stands in for it, a layer stack of kraken's own opinions over the untouched asset
+    nonisolated static func adoptingSidecars(_ files: [URL]) -> [URL]
+    {
+      let suffix = ".akari.usda"
+      let sidecars = Set(files.compactMap
+      { url -> String? in
+        let name = url.lastPathComponent
+        return name.hasSuffix(suffix) ? url.deletingLastPathComponent().appendingPathComponent(String(name.dropLast(suffix.count))).path : nil
+      })
+
+      guard !sidecars.isEmpty else { return files }
+      return files.filter { $0.lastPathComponent.hasSuffix(suffix) || !sidecars.contains($0.deletingPathExtension().path) }
     }
 
     /// the layers an asset opens by, its interface file, or the layer named after its folder when there is one
@@ -377,7 +394,7 @@ extension Kraken
     }
 
     /// an asset path from asset info, absolute against the layer it came from
-    nonisolated private static func anchored(_ path: String, to file: String) -> String
+    nonisolated static func anchored(_ path: String, to file: String) -> String
     {
       if path.hasPrefix("/") { return path }
       return URL(fileURLWithPath: file).deletingLastPathComponent().appendingPathComponent(path).standardizedFileURL.path
@@ -402,8 +419,7 @@ extension Kraken
     {
       var roots: [(URL, String)] = []
       if let sample = Self.sample { roots.append((sample, "Sample Library")) }
-      let support = URL.applicationSupportDirectory.appendingPathComponent("Kraken/Assets")
-      if FileManager.default.fileExists(atPath: support.path) { roots.append((support, "My Assets")) }
+      if FileManager.default.fileExists(atPath: Self.mine.path) { roots.append((Self.mine, "My Assets")) }
       let env = ProcessInfo.processInfo.environment["KRAKEN_ASSET_LIBRARY"] ?? ""
       for path in env.split(separator: ":") + (UserDefaults.standard.stringArray(forKey: Self.foldersKey) ?? []).map({ Substring($0) })
       {
@@ -411,16 +427,70 @@ extension Kraken
         roots.append((url, AssetScan.readable(folder: url.lastPathComponent)))
       }
 
+      #if !os(macOS)
+        for url in picked
+        {
+          roots.append((url, AssetScan.readable(folder: url.lastPathComponent)))
+        }
+      #endif
+
       return roots
     }
 
     /// the sample library in the app's resources
     private static let sample = Bundle.akariResource("AssetLibrary", in: "Akari_Kraken")
 
+    /// the user's own assets, on ios in the documents the files app shows
+    static var mine: URL
+    {
+      #if os(macOS)
+        URL.applicationSupportDirectory.appendingPathComponent("Kraken/Assets")
+      #else
+        URL.documentsDirectory.appendingPathComponent("Assets", isDirectory: true)
+      #endif
+    }
+
+    #if !os(macOS)
+      private static let bookmarksKey = "KrakenAssetLibraryBookmarks"
+
+      /// the folders picked in the files app, open for as long as kraken runs
+      private var picked: [URL] = []
+    #endif
+
     private init()
     {
+      #if !os(macOS)
+        try? FileManager.default.createDirectory(at: Self.mine, withIntermediateDirectories: true)
+        openPicked()
+
+        // assets dropped in from the files app show up when kraken comes back
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main)
+        { [weak self] _ in
+          MainActor.assumeIsolated { self?.rescan() }
+        }
+      #endif
+
       rescan()
     }
+
+    #if !os(macOS)
+      /// opens the folders picked before, ios only lets kraken back into them through their bookmarks
+      private func openPicked()
+      {
+        var bookmarks = UserDefaults.standard.array(forKey: Self.bookmarksKey) as? [Data] ?? []
+        picked = []
+        for i in bookmarks.indices
+        {
+          var stale = false
+          guard let url = try? URL(resolvingBookmarkData: bookmarks[i], bookmarkDataIsStale: &stale) else { continue }
+          _ = url.startAccessingSecurityScopedResource()
+          if stale, let fresh = try? url.bookmarkData() { bookmarks[i] = fresh }
+          picked.append(url)
+        }
+
+        UserDefaults.standard.set(bookmarks, forKey: Self.bookmarksKey)
+      }
+    #endif
 
     func rescan()
     {
@@ -445,13 +515,73 @@ extension Kraken
       }
     }
 
-    /// keeps a folder as a library from now on
+    /// keeps a folder as a library from now on, with everything below it that its layers reference
     func add(folder: URL)
     {
-      var folders = UserDefaults.standard.stringArray(forKey: Self.foldersKey) ?? []
-      guard !folders.contains(folder.path) else { return }
-      folders.append(folder.path)
-      UserDefaults.standard.set(folders, forKey: Self.foldersKey)
+      #if os(macOS)
+        var folders = UserDefaults.standard.stringArray(forKey: Self.foldersKey) ?? []
+        guard !folders.contains(folder.path) else { return }
+        folders.append(folder.path)
+        UserDefaults.standard.set(folders, forKey: Self.foldersKey)
+      #else
+        guard !picked.contains(where: { $0.standardizedFileURL == folder.standardizedFileURL }) else { return }
+        _ = folder.startAccessingSecurityScopedResource()
+        guard let bookmark = try? folder.bookmarkData() else { return }
+        var bookmarks = UserDefaults.standard.array(forKey: Self.bookmarksKey) as? [Data] ?? []
+        bookmarks.append(bookmark)
+        UserDefaults.standard.set(bookmarks, forKey: Self.bookmarksKey)
+        picked.append(folder)
+      #endif
+
+      rescan()
+    }
+
+    /// how an asset leaves the library, nothing for the samples kraken ships with
+    enum Removal
+    {
+      /// what was imported into my assets, deleted from disk with everything that came in with it
+      case delete(URL)
+      /// a folder kept as a library, forgotten with its files left where they are
+      case forget(URL)
+    }
+
+    func removal(for asset: LibraryAsset) -> Removal?
+    {
+      let file = URL(fileURLWithPath: asset.file).standardizedFileURL.path
+      let mine = Self.mine.standardizedFileURL
+      if file.hasPrefix(mine.path + "/")
+      {
+        let imported = file.dropFirst(mine.path.count + 1).split(separator: "/").first.map(String.init) ?? ""
+        return imported.isEmpty ? nil : .delete(mine.appendingPathComponent(imported))
+      }
+
+      var folders = (UserDefaults.standard.stringArray(forKey: Self.foldersKey) ?? []).map { URL(fileURLWithPath: $0) }
+      #if !os(macOS)
+        folders += picked
+      #endif
+      return folders.first { file.hasPrefix($0.standardizedFileURL.path + "/") }.map { .forget($0) }
+    }
+
+    func remove(_ removal: Removal)
+    {
+      switch removal
+      {
+        case let .delete(url):
+          try? FileManager.default.removeItem(at: url)
+        case let .forget(folder):
+          let kept = (UserDefaults.standard.stringArray(forKey: Self.foldersKey) ?? [])
+            .filter { URL(fileURLWithPath: $0).standardizedFileURL != folder.standardizedFileURL }
+          UserDefaults.standard.set(kept, forKey: Self.foldersKey)
+          #if !os(macOS)
+            if let index = picked.firstIndex(where: { $0.standardizedFileURL == folder.standardizedFileURL })
+            {
+              picked[index].stopAccessingSecurityScopedResource()
+              picked.remove(at: index)
+              UserDefaults.standard.set(picked.compactMap { try? $0.bookmarkData() }, forKey: Self.bookmarksKey)
+            }
+          #endif
+      }
+
       rescan()
     }
 

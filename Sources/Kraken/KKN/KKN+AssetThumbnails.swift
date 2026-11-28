@@ -38,11 +38,16 @@
  *  . x x x . o o o . x x x . : : : .    o  x  o    . : : : .
  * ----------------------------------------------------------------- */
 
+import AkariCore
+import AkariHydra
+import AkariRender
 import CxxStdlib
 import Foundation
 import HdAkari
 import HydraKit
 import simd
+import protocol SwiftCrossUI.ObservableObject
+import class SwiftCrossUI.Published
 #if os(macOS)
   import AppKit
 #else
@@ -59,7 +64,7 @@ extension Kraken
 
   /// the asset browser's pictures, an asset's own preview or one akari renders in the background, cached until the asset changes
   @MainActor
-  final class AssetThumbnails
+  final class AssetThumbnails: ObservableObject
   {
     static let shared = AssetThumbnails()
 
@@ -68,8 +73,23 @@ extension Kraken
     private var pending: [LibraryAsset] = []
     private var rendering = false
     private var failed: Set<String> = []
+    /// the assets the running render is drawing
+    private var inFlight: Set<String> = []
+    /// the viewport's hydra engine, a render in the app shares its gpu
+    private weak var host: Hydra.RenderEngine?
+
+    /// the running render's progress, how many of its thumbnails are done out of how many
+    @Published private(set) var rendered = 0
+    @Published private(set) var queued = 0
 
     nonisolated static let size = 256
+
+    /// how many assets one render takes, a few at a time in the app so their textures never all load at once
+    #if os(macOS)
+      private static let batchSize = Int.max
+    #else
+      private static let batchSize = 8
+    #endif
 
     nonisolated static var cache: URL
     {
@@ -100,6 +120,19 @@ extension Kraken
       images[asset.id]
     }
 
+    /// whether the asset's thumbnail is still to be rendered
+    func waits(_ asset: LibraryAsset) -> Bool
+    {
+      images[asset.id] == nil && (inFlight.contains(asset.id) || pending.contains { $0.id == asset.id })
+    }
+
+    /// renders in the app beside the viewport, where no worker process can be started
+    func attach(_ hydra: Hydra.RenderEngine)
+    {
+      host = hydra
+      renderPending()
+    }
+
     /// loads what's on disk and renders the rest
     func prepare(_ assets: [LibraryAsset])
     {
@@ -108,7 +141,7 @@ extension Kraken
       {
         if let file = asset.thumbnail, FileManager.default.fileExists(atPath: file) { toLoad.append((asset.id, file)) }
         else if FileManager.default.fileExists(atPath: Self.cached(asset).path) { toLoad.append((asset.id, Self.cached(asset).path)) }
-        else if !failed.contains(asset.id), !pending.contains(where: { $0.id == asset.id }) { pending.append(asset) }
+        else if !failed.contains(asset.id), !inFlight.contains(asset.id), !pending.contains(where: { $0.id == asset.id }) { pending.append(asset) }
       }
 
       load(toLoad)
@@ -132,63 +165,141 @@ extension Kraken
 
     // MARK: rendering
 
-    /// renders every waiting asset as one frame each of a background render's animation
+    /// renders every waiting asset as one frame each of an animation, in a worker process on macos and in the app elsewhere
     private func renderPending()
     {
+      guard !rendering, !pending.isEmpty else { return }
       #if os(macOS)
-        guard !rendering, !pending.isEmpty, let executable = Bundle.main.executableURL else { return }
-        rendering = true
-        let batch = pending
-        pending = []
-        let folder = Self.cache
-        let stamp = String(Int(Date().timeIntervalSince1970 * 1000), radix: 36)
-        let stagePath = folder.appendingPathComponent("batch_\(stamp).usda").path
-        let output = folder.appendingPathComponent("batch_\(stamp)_####").path
+        guard let executable = Bundle.main.executableURL else { return }
+      #else
+        guard let host else { return }
+      #endif
 
-        DispatchQueue.global(qos: .utility).async
-        {
-          try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-          Self.writeBatch(batch, to: stagePath)
+      rendering = true
+      let batch = Array(pending.prefix(Self.batchSize))
+      pending.removeFirst(batch.count)
+      inFlight = Set(batch.map(\.id))
+      queued = rendered + batch.count + pending.count
+      AssetLibrary.shared.changed()
 
-          let process = Process()
-          process.executableURL = executable
-          process.arguments = ["--usd", stagePath, "-b", "-a", "-s", "1", "-e", "\(batch.count)", "-F", "PNG",
-                               "-o", output, "--resolution", "\(Self.size)x\(Self.size)", "--camera", "/Thumbs/Camera"]
-          process.standardOutput = FileHandle.nullDevice
-          process.standardError = FileHandle.nullDevice
-          do
-          {
-            try process.run()
-            process.waitUntilExit()
-          }
-          catch
-          {
-            Console.warn("couldn't render asset thumbnails, \(error.localizedDescription)")
-          }
+      let folder = Self.cache
+      let stamp = String(Int(Date().timeIntervalSince1970 * 1000), radix: 36)
+      let stagePath = folder.appendingPathComponent("batch_\(stamp).usda").path
+      let output = folder.appendingPathComponent("batch_\(stamp)_####").path
 
-          var done: [(String, String)] = []
-          var missed: [String] = []
-          for (i, asset) in batch.enumerated()
-          {
-            let frame = URL(fileURLWithPath: output.replacingOccurrences(of: "####", with: String(format: "%04d", i + 1)) + ".png")
-            let target = Self.cached(asset)
-            try? FileManager.default.removeItem(at: target)
-            if (try? FileManager.default.moveItem(at: frame, to: target)) != nil { done.append((asset.id, target.path)) }
-            else { missed.append(asset.id) }
-          }
+      DispatchQueue.global(qos: .utility).async
+      {
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        Self.writeBatch(batch, to: stagePath)
 
-          try? FileManager.default.removeItem(atPath: stagePath)
-          let loaded = done, misses = missed
+        // each frame moves into the cache and shows as soon as it's written
+        let collect: @Sendable (Int) -> Void = { i in
+          guard batch.indices.contains(i) else { return }
+          let frame = URL(fileURLWithPath: output.replacingOccurrences(of: "####", with: String(format: "%04d", i + 1)) + ".png")
+          let target = Self.cached(batch[i])
+          guard FileManager.default.fileExists(atPath: frame.path) else { return }
+          try? FileManager.default.removeItem(at: target)
+          guard (try? FileManager.default.moveItem(at: frame, to: target)) != nil else { return }
+
+          let loaded = [(batch[i].id, target.path)]
           DispatchQueue.main.async
           {
-            self.rendering = false
-            self.failed.formUnion(misses)
+            self.rendered += 1
             self.load(loaded)
-            self.renderPending()
           }
         }
-      #endif
+
+        #if os(macOS)
+          Self.renderInWorker(executable, stagePath, output: output, frames: batch.count)
+          for i in batch.indices
+          {
+            collect(i)
+          }
+        #else
+          Self.renderHere(stagePath, output: output, frames: batch.count, sharing: host, written: collect)
+        #endif
+
+        try? FileManager.default.removeItem(atPath: stagePath)
+        let misses = batch.filter { !FileManager.default.fileExists(atPath: Self.cached($0).path) }.map(\.id)
+        DispatchQueue.main.async
+        {
+          self.rendering = false
+          self.inFlight = []
+          if self.pending.isEmpty
+          {
+            self.rendered = 0
+            self.queued = 0
+          }
+
+          self.failed.formUnion(misses)
+          AssetLibrary.shared.changed()
+          self.renderPending()
+        }
+      }
     }
+
+    #if os(macOS)
+      /// renders the batch stage in a background kraken, one png per frame
+      nonisolated private static func renderInWorker(_ executable: URL, _ stagePath: String, output: String, frames: Int)
+      {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["--usd", stagePath, "-b", "-a", "-s", "1", "-e", "\(frames)", "-F", "PNG",
+                             "-o", output, "--resolution", "\(size)x\(size)", "--camera", "/Thumbs/Camera"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do
+        {
+          try process.run()
+          process.waitUntilExit()
+        }
+        catch
+        {
+          Console.warn("couldn't render asset thumbnails, \(error.localizedDescription)")
+        }
+      }
+    #else
+      /// renders the batch stage in the app with its own akari engine on the viewport's gpu, reporting each frame once written
+      nonisolated private static func renderHere(_ stagePath: String, output: String, frames: Int, sharing host: Hydra.RenderEngine,
+                                                 written: @escaping @Sendable (Int) -> Void)
+      {
+        let stage = UsdStage.open(stagePath)
+        let engine = Akari.RenderEngine(settings: RenderSettings(quality: .high))
+        engine.labfx.setStageUpAxis(isZUp: false)
+        engine.labfx.setStageMetersPerUnit(1)
+        engine.adoptColorManagement(of: stage)
+
+        // made on the viewport's frame queue like the material preview, so the two share its gpu
+        nonisolated(unsafe) var made: Hydra.RenderEngine?
+        host.frameQueue.sync
+        {
+          made = withAkariRenderer(engine)
+          {
+            Hydra.RenderEngine(stage: stage, rendererPluginId: Tf.Token(Akari.rendererPluginId), sharing: host)
+          }
+        }
+
+        guard let hydra = made else { return }
+
+        var settings = OutputSettings()
+        settings.resolutionX = size
+        settings.resolutionY = size
+        settings.frameStart = 1
+        settings.frameEnd = frames
+        settings.cameraPath = "/Thumbs/Camera"
+        settings.path = output
+        settings.format = .png
+
+        let renderer = Akari.FinalRender(hydra: hydra, akari: engine)
+        withExtendedLifetime((engine, hydra))
+        {
+          renderer.runBlocking(.animation, output: settings)
+          { progress in
+            if let frame = progress.finishedFrame { written(frame - 1) }
+          }
+        }
+      }
+    #endif
 
     /// a stage with each asset alone in view on its own frame, scaled to fit the one camera
     nonisolated private static func writeBatch(_ batch: [LibraryAsset], to path: String)

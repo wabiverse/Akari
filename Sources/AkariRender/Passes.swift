@@ -294,8 +294,7 @@ public extension Akari
       // runs the deferred graph, outlines the selection, presents and wraps the color, id and depth into the aovs
       ctx.labfx.present(target: ctx.target,
                         projection: ctx.unjitteredCamera.projection,
-                        hgi: ctx.gpu.hgi,
-                        lightProbes: ctx.settings.features.contains(.lightProbes) && !ctx.isFinalRender)
+                        hgi: ctx.gpu.hgi)
     }
   }
 

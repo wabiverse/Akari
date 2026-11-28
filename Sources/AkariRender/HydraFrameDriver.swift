@@ -87,6 +87,8 @@ public extension Akari
 
     private var objectSelection: (paths: [String], version: Int)?
     private var primPaths: [(id: Int32, path: String)]?
+    /// the scene's prim id revision the prim paths were read at
+    private var primPathsRevision: UInt64?
     private var unresolved = (version: 0, tries: 0, frame: 0)
 
     /// outlines these objects instead of the hydra pick, passing `nil` hands the outline back.
@@ -256,6 +258,15 @@ public extension Akari
       statsLock.lock()
       let objects = objectSelection
       statsLock.unlock()
+
+      // a mesh added, removed or renumbered moves the ids, so the labels are looked up again right away
+      let revision = akari.primIdRevision
+      if revision != primPathsRevision
+      {
+        primPathsRevision = revision
+        primPaths = nil
+        selectionKey = nil
+      }
 
       let key = objects.map { SelectionKey(primId: -1, objects: $0.version) }
         ?? SelectionKey(primId: engine.selectedPrimId,

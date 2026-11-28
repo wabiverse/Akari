@@ -89,6 +89,12 @@ public extension Akari.GPU
       memory >= 7 << 30 ? 2048 : memory >= 5 << 30 ? 1024 : 512
     }
 
+    /// the largest side a material texture atlas grows to, each of its rgba8 layers a quarter gb at 8192
+    public var atlasSide: Int
+    {
+      memory >= 12 << 30 ? 16384 : memory >= 6 << 30 ? 8192 : 4096
+    }
+
     /// the largest render scale the scene buffers allocate at, a 4 gb phone cannot hold dozens of them at its native size
     public var renderScaleCeiling: Float
     {

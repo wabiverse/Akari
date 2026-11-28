@@ -213,10 +213,16 @@ extension Kraken
 
     var body: some View
     {
-      ScrollView
+      PropertiesScroll
       {
         VStack(alignment: .leading, spacing: 4)
         {
+          Properties.row("Render Engine")
+          {
+            Dropdown(options: state.renderers, selection: state.rendererSelection)
+          }
+          .padding(.top, 4)
+
           Properties.row("Quality")
           {
             Dropdown(options: RenderQuality.allCases, selection: state.qualitySelection)
@@ -383,7 +389,7 @@ extension Kraken
 
     var body: some View
     {
-      ScrollView
+      PropertiesScroll
       {
         VStack(alignment: .leading, spacing: 4)
         {

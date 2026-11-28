@@ -1,0 +1,69 @@
+#usda 1.0
+(
+    customLayerData = {
+        dictionary colorManagement = {
+            double exposure = 0.2
+            string viewTransform = "sRGB"
+        }
+    }
+    defaultPrim = "Studio"
+    doc = """The copy stand's lighting baked into a radiance hdri by the MetPhotometricReference rig, studio lighting that travels with an asset as a dome, so it lights any size of subject at its real scale."""
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Studio" (
+    assetInfo = {
+        dictionary akari = {
+            string subjectScale = "real"
+        }
+        dictionary previews = {
+            dictionary thumbnails = {
+                dictionary default = {
+                    asset defaultImage = @./Previews/Reference Dome.png@
+                }
+            }
+        }
+    }
+)
+{
+    # only the rig's dome, its stand and charts stay out
+    def Xform "Rig" (
+        prepend references = @CopyStand/DCSG_MMAGrayscale_Umbrellas_Stager_PhysicalLights_HDRI_061526.usdz@
+    )
+    {
+        over "DCSG_MMAGrayscale_Umbrellas_Stager_PhysicalLights_Only_050726_n3d" (
+            active = false
+        )
+        {
+        }
+
+        over "default_group_n3d" (
+            active = false
+        )
+        {
+        }
+
+        over "render_camera_n3d" (
+            active = false
+        )
+        {
+        }
+
+        over "render_camera_n3d2" (
+            active = false
+        )
+        {
+        }
+
+        # the same hdri, read from beside the rig rather than from inside its package
+        over "light_set"
+        {
+            over "d2210194_1d47_4c61_bb44_352b2c8bafdb"
+            {
+                asset inputs:texture:file = @./CopyStand/CopyStandHDRI.exr@
+                bool akari:light:cameraVisible = false
+            }
+        }
+    }
+}

@@ -76,6 +76,7 @@ extension Akari.LabFXEngine
     case domeColor = "u_domeColor"
     case iblTint = "u_iblTint"
     case domeEnabled = "u_domeEnabled"
+    case domeBackground = "u_domeBackground"
     case domeFromSky = "u_domeFromSky"
     case domeFromWorld = "u_domeFromWorld"
     case domeMap = "u_domeMap"
@@ -279,7 +280,6 @@ extension Akari.LabFXEngine
     case pointShadowBlurV = "point shadow blur v"
     case pointShadows = "point shadows"
     case prefilter
-    case probeBakeOverlay = "probe-bake-overlay"
     case resolve
     case sky
     case ssgi
@@ -409,7 +409,6 @@ extension Akari.LabFXEngine
     case traceGlassLocal = "trace-glass-local"
     case traceGlassSun = "trace-glass-sun"
     case drawOutlineMask = "draw-outline-mask"
-    case drawProbeBake = "draw-probe-bake"
     case drawStaticInstancedGeometry = "draw-static-instanced-geometry"
     case metalfxUpscale = "metalfx-upscale"
     case volumeIntegrate = "volume-integrate"

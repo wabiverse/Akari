@@ -211,6 +211,7 @@ struct HdAkariDomeData
   float exposure = 0.0f;
   std::string textureFile;
   bool visible = true;
+  bool cameraVisible = true; // false keeps it out of the background, it still lights
 };
 
 /// a distant light like the sun or moon, `angle` is its apparent diameter in degrees

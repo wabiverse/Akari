@@ -125,6 +125,7 @@ extension Kraken
       let created = FileManager.default.fileExists(atPath: url.path)
         ? Pixar.SdfLayer.FindOrOpen(std.string(url.path), Pixar.SdfLayer.FileFormatArguments())
         : Pixar.SdfLayer.CreateNew(std.string(url.path), Pixar.SdfLayer.FileFormatArguments())
+      guard Pixar.HdAkariIsLayer(created) else { return nil }
       let layer = created.pointee
       _ = layer.Save(false)
       if !layers(stage).contains(where: { URL(fileURLWithPath: $0.identifier).lastPathComponent == file })

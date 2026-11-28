@@ -82,6 +82,8 @@ extension Kraken
     var isHeader = false
     var children: [MenuEntry] = []
     var action: () -> Void = {}
+    /// shown in red where the platform marks actions that destroy something
+    var isDestructive = false
     /// a system symbol shown beside the title, empty for none
     var symbol = ""
 
@@ -232,7 +234,8 @@ extension Kraken
 
       // menus are only built and picked on the main thread.
       nonisolated(unsafe) let run = action
-      return UIAction(title: title, image: symbol.isEmpty ? nil : UIImage(systemName: symbol), state: checked == true ? .on : .off) { _ in run() }
+      return UIAction(title: title, image: symbol.isEmpty ? nil : UIImage(systemName: symbol),
+                      attributes: isDestructive ? .destructive : [], state: checked == true ? .on : .off) { _ in run() }
     }
 
     /// shows the entries from a point in `view`, a popover sheet that steps into submenus.
@@ -243,7 +246,8 @@ extension Kraken
       for entry in entries where !entry.isSeparator && !entry.isHeader
       {
         let mark = entry.checked == true ? "✓ " : ""
-        sheet.addAction(UIAlertAction(title: mark + entry.title + (entry.isSubmenu ? " ›" : ""), style: .default)
+        sheet.addAction(UIAlertAction(title: mark + entry.title + (entry.isSubmenu ? " ›" : ""),
+                                      style: entry.isDestructive ? .destructive : .default)
         { _ in
           if entry.isSubmenu { present(entry.children, from: view, at: point, title: entry.title) }
           else { entry.action() }
@@ -279,15 +283,19 @@ extension Kraken
     let title: @MainActor () -> String
     var size = FormFactor.hitTarget
     var clear = false
+    /// on touch a tap runs this and the menu waits for a long press
+    var tap: (@MainActor () -> Void)?
     let entries: @MainActor () -> [MenuEntry]
 
     init(symbol: @autoclosure @escaping @MainActor () -> String = "", title: @autoclosure @escaping @MainActor () -> String = "",
-         size: Double = FormFactor.hitTarget, clear: Bool = false, entries: @escaping @MainActor () -> [MenuEntry])
+         size: Double = FormFactor.hitTarget, clear: Bool = false, tap: (@MainActor () -> Void)? = nil,
+         entries: @escaping @MainActor () -> [MenuEntry])
     {
       self.symbol = symbol
       self.title = title
       self.size = size
       self.clear = clear
+      self.tap = tap
       self.entries = entries
     }
 
@@ -307,8 +315,8 @@ extension Kraken
     var body: some View
     {
       NativeView(make: { MenuButtonView() },
-                 update: { [symbol, title, size, clear, entries] view in
-                   view.configure(symbol: symbol(), title: title(), corner: clear ? 0 : size * 0.3, entries: entries)
+                 update: { [symbol, title, size, clear, tap, entries] view in
+                   view.configure(symbol: symbol(), title: title(), corner: clear ? 0 : size * 0.3, tap: tap, entries: entries)
                  },
                  size: { [title, size] _ in ViewSize(Self.width(title: title(), size: size), size) })
     }
@@ -319,7 +327,8 @@ extension Kraken
     {
       private var entries: @MainActor () -> [MenuEntry] = { [] }
 
-      func configure(symbol: String, title: String, corner: Double, entries: @escaping @MainActor () -> [MenuEntry])
+      func configure(symbol: String, title: String, corner _: Double, tap _: (@MainActor () -> Void)?,
+                     entries: @escaping @MainActor () -> [MenuEntry])
       {
         self.entries = entries
         image = symbol.isEmpty ? nil : NSImage(systemSymbolName: symbol, accessibilityDescription: title)
@@ -342,10 +351,17 @@ extension Kraken
     {
       private var entries: @MainActor () -> [MenuEntry] = { [] }
       private var shown: (symbol: String, title: String, corner: Double)?
+      private var tap: (@MainActor () -> Void)?
 
-      func configure(symbol: String, title: String, corner: Double, entries: @escaping @MainActor () -> [MenuEntry])
+      func configure(symbol: String, title: String, corner: Double, tap: (@MainActor () -> Void)?,
+                     entries: @escaping @MainActor () -> [MenuEntry])
       {
         self.entries = entries
+
+        // a button with its own tap keeps the menu for a long press, the way uikit buttons offer one
+        if tap != nil, self.tap == nil { addTarget(self, action: #selector(tapped), for: .primaryActionTriggered) }
+        self.tap = tap
+        showsMenuAsPrimaryAction = tap == nil
         guard shown?.symbol != symbol || shown?.title != title || shown?.corner != corner else { return }
         shown = (symbol, title, corner)
         var config = UIButton.Configuration.plain()
@@ -369,7 +385,6 @@ extension Kraken
           return attributes
         }
         configuration = config
-        showsMenuAsPrimaryAction = true
         menu = UIMenu(children: [UIDeferredMenuElement.uncached
           { [weak self] done in
             MainActor.assumeIsolated
@@ -377,6 +392,11 @@ extension Kraken
               done(self.map { Kraken.MenuEntry.menu($0.entries()).children } ?? [])
             }
           }])
+      }
+
+      @objc private func tapped()
+      {
+        tap?()
       }
     }
   #endif

@@ -505,6 +505,9 @@ HdAkariMesh::Sync(HdSceneDelegate *sceneDelegate,
 
   HdAkariSyncStyle(sceneDelegate, id, GetPrimId(), scene);
 
+  // picking and the selection outline go by the prim id, which hydra can renumber with nothing else changing
+  if (*dirtyBits & HdChangeTracker::DirtyPrimID) scene->UpdateMeshPrimId(id, GetPrimId());
+
   // a point instancer's prototype republishes every instance whenever anything changes.
   _UpdateInstancer(sceneDelegate, dirtyBits);
   const SdfPath instancerId = GetInstancerId();

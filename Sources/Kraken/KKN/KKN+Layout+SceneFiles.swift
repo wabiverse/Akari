@@ -151,7 +151,9 @@ extension Kraken.Layout
 
           // the scene's color management went to the engine, the panels show it
           self.settings?.refresh()
+          self.settings?.sceneReplaced()
           self.adoptStage?(url, probeTimes)
+          NotificationCenter.default.post(name: Kraken.sceneOpened, object: nil)
           done?()
         }
       }

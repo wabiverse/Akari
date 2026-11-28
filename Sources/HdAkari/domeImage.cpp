@@ -159,6 +159,34 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
   double sunDir[3] = {0, 0, 0}, sunE[3] = {0, 0, 0}, sunWeight = 0;
   const double pi = 3.14159265358979;
   const size_t texelBytes = size_t(comps) * compBytes;
+
+  // the direction a texel of a latlong map looks along
+  auto direction = [pi](int x, int y, int width, int height, double d[3]) {
+    const double theta = pi * (y + 0.5) / height;
+    const double a = 2.0 * pi * (x + 0.5) / width - 0.5 * pi;
+    d[0] = std::sin(theta) * std::cos(a);
+    d[1] = std::cos(theta);
+    d[2] = std::sin(theta) * std::sin(a);
+  };
+
+  // only the brightest source is the sun, other bright sources like a studio's second softbox stay in the map
+  double peak[3] = {0, 1, 0};
+  if (sunThreshold > 0.0f) {
+    float brightest = 0.0f;
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        uint8_t const *p = raw.data() + (size_t(y) * w + x) * texelBytes;
+        const float lum = 0.2126f * Component(p, type, 0) + 0.7152f * Component(p, type, std::min(1, comps - 1))
+                        + 0.0722f * Component(p, type, std::min(2, comps - 1));
+        if (lum > brightest) {
+          brightest = lum;
+          direction(x, y, w, h, peak);
+        }
+      }
+    }
+  }
+
+  const double sunCone = std::cos(20.0 * pi / 180.0);
   for (int y = 0; y < h; ++y)
   {
     if (progress && (y & 63) == 0) *progress = 0.25f + 0.7f * float(y) / float(h);
@@ -177,11 +205,11 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
       if (sunThreshold > 0.0f)
       {
         const float lum = 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2];
-        if (lum > sunThreshold)
+        double d[3];
+        direction(x, y, w, h, d);
+        if (lum > sunThreshold && d[0] * peak[0] + d[1] * peak[1] + d[2] * peak[2] > sunCone)
         {
           const double k = (lum - sunThreshold) / lum * omega;
-          const double a = 2.0 * pi * (x + 0.5) / w - 0.5 * pi;
-          const double d[3] = { std::sin(theta) * std::cos(a), std::cos(theta), std::sin(theta) * std::sin(a) };
           for (int c = 0; c < 3; ++c)
           {
             sunE[c] += rgb[c] * k;
@@ -208,15 +236,16 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
 
   raw = std::vector<uint8_t>();
 
+  // the disc that spreads its energy as far, from its mean cosine, a wide one is an area light the map lights with
   const double len = std::sqrt(sunDir[0] * sunDir[0] + sunDir[1] * sunDir[1] + sunDir[2] * sunDir[2]);
-  if (len > 0.0)
+  const double angle = len > 0.0 ? 2.0 * std::acos(std::clamp(2.0 * len / sunWeight - 1.0, -1.0, 1.0)) : 0.0;
+  const bool extracts = len > 0.0 && angle <= 10.0 * pi / 180.0;
+  if (extracts)
   {
     out->hasSun = true;
     out->sunX = float(sunDir[0] / len); out->sunY = float(sunDir[1] / len); out->sunZ = float(sunDir[2] / len);
     out->sunR = float(sunE[0]); out->sunG = float(sunE[1]); out->sunB = float(sunE[2]);
-
-    // the disc that spreads its energy as far, from its mean cosine
-    out->sunAngle = float(2.0 * std::acos(std::clamp(2.0 * len / sunWeight - 1.0, -1.0, 1.0)));
+    out->sunAngle = float(angle);
   }
 
   out->smallWidth = sw;
@@ -237,8 +266,12 @@ Load(std::string const &path, int smallWidth, float sunThreshold, float *progres
           uint16_t const *p = out->pixels.data() + (size_t(y) * ow + x) * 4;
           float rgb[3];
           for (int c = 0; c < 3; ++c) { GfHalf v; v.setBits(p[c]); rgb[c] = float(v); }
+          // only the sun's own texels give their light to the sun
           const float lum = 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2];
-          const float k = sunThreshold > 0.0f && lum > sunThreshold ? sunThreshold / lum : 1.0f;
+          double d[3];
+          direction(x, y, ow, oh, d);
+          const bool sun = extracts && lum > sunThreshold && d[0] * peak[0] + d[1] * peak[1] + d[2] * peak[2] > sunCone;
+          const float k = sun ? sunThreshold / lum : 1.0f;
           for (int c = 0; c < 3; ++c) { sum[c] += rgb[c] * k; full[c] += rgb[c]; }
         }
       }

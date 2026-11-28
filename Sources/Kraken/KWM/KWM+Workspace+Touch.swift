@@ -54,7 +54,7 @@ extension Kraken
   /// the panels the touch layout opens under the viewport, or beside it on a wide screen.
   enum TouchPanel: CaseIterable
   {
-    case scene, properties
+    case scene, properties, add
 
     var title: String
     {
@@ -62,16 +62,33 @@ extension Kraken
       {
         case .scene: "Scene"
         case .properties: "Properties"
+        case .add: "Add"
       }
     }
+  }
 
-    /// the desktop's own icons, the scene's from its properties tab and a new one for the panel of them.
-    var icon: TabIcon.Kind
+  /// a panel's icon, the desktop's own for the scene and properties and a plus for adding.
+  @MainActor
+  struct PanelIcon: View
+  {
+    let panel: TouchPanel
+    /// the add panel views assets rather than adding them
+    var viewing = false
+    var background = 0.1
+    var size = 22.0
+
+    var body: some View
     {
-      switch self
+      switch panel
       {
-        case .scene: .scene
-        case .properties: .properties
+        case .scene:
+          TabIcon(kind: .scene, background: background, size: size)
+        case .properties:
+          TabIcon(kind: .properties, background: background, size: size)
+        case .add:
+          SymbolIcon(viewing ? "eye" : "plus", size: (size * 0.64).rounded(), white: 1)
+            .frame(width: size + 4, height: size + 4)
+            .background(RoundedRectangle(cornerRadius: (size + 4) / 2).fill(viewing ? Color(white: 0.34) : Properties.accent))
       }
     }
   }
@@ -193,6 +210,33 @@ extension Kraken
     }
   }
 
+  /// the light probe bake's progress under the scene's title.
+  @MainActor
+  struct BakeProgress: View
+  {
+    let bake: Akari.RenderEngine.ProbeBake
+    private static let width = 44.0
+
+    var body: some View
+    {
+      HStack(spacing: 6)
+      {
+        Text("Baking light probes \(bake.done)/\(bake.total)")
+          .font(.system(size: 11, weight: .medium))
+          .foregroundColor(Properties.label)
+        ZStack(alignment: .leading)
+        {
+          RoundedRectangle(cornerRadius: 1.5)
+            .fill(Color(white: 1, opacity: 0.12))
+            .frame(width: Self.width, height: 3)
+          RoundedRectangle(cornerRadius: 1.5)
+            .fill(Properties.accent)
+            .frame(width: (Self.width * bake.fraction).rounded(), height: 3)
+        }
+      }
+    }
+  }
+
   /// a dock tab with an icon over its name, a menu tab lays a clear menu button over itself
   @MainActor
   struct DockTab<Icon: View>: View
@@ -204,6 +248,8 @@ extension Kraken
     var width = Touch.rail
     var action: () -> Void = {}
     var menu: (@MainActor () -> [MenuEntry])?
+    /// a tap runs the action and the menu waits for a long press
+    var holds = false
 
     private var face: some View
     {
@@ -218,11 +264,19 @@ extension Kraken
       .background(RoundedRectangle(cornerRadius: 12).fill(active ? Color(white: 0.22) : Color.clear))
     }
 
+    /// what a tap runs when the menu waits for a long press
+    private var tap: (@MainActor () -> Void)?
+    {
+      guard holds else { return nil }
+      let action = action
+      return { action() }
+    }
+
     var body: some View
     {
       if let menu
       {
-        face.overlay { MenuButton(size: Touch.dock - 10, clear: true, entries: menu).frame(width: width) }
+        face.overlay { MenuButton(size: Touch.dock - 10, clear: true, tap: tap, entries: menu).frame(width: width) }
       }
       else
       {
@@ -332,9 +386,11 @@ extension Kraken.Workspace
         }
       }
       .frame(width: size.width, height: size.height)
+      .background(Touch.divider)
       .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
     }
-    .background(Touch.divider)
+    // what the safe area leaves around the layout matches the bars, like the window behind it
+    .background(Touch.chrome)
     .overlay { aboutLayer }
     .onAppear { watchScreen() }
   }
@@ -446,11 +502,15 @@ extension Kraken.Workspace
     {
       MenuButton(symbol: "line.3.horizontal") { appMenu }
       mode
-      Text(title.text)
-        .font(.system(size: title.size, weight: .semibold))
-        .foregroundColor(Properties.text)
-        .lineLimit(1)
-        .frame(minWidth: 0.0, maxWidth: .infinity)
+      VStack(spacing: 3)
+      {
+        Text(title.text)
+          .font(.system(size: title.size, weight: .semibold))
+          .foregroundColor(Properties.text)
+          .lineLimit(1)
+        if let bake = layout.probeBake { Kraken.BakeProgress(bake: bake) }
+      }
+      .frame(minWidth: 0.0, maxWidth: .infinity)
       TouchButton("arrow.uturn.backward") { layout.undo() }
       TouchButton("arrow.uturn.forward") { layout.redo() }
     }
@@ -477,8 +537,19 @@ extension Kraken.Workspace
      Kraken.MenuEntry(title: "Toolbar", checked: layout.showsToolbar) { layout.showsToolbar.toggle() }]
   }
 
-  /// the panels plus the add and render tabs
-  private static let dockTabCount = Kraken.TouchPanel.allCases.count + 2
+  /// adding library assets to the scene, or viewing them in a studio without touching it
+  private var addModes: [Kraken.MenuEntry]
+  {
+    let layout = layout
+    var add = Kraken.MenuEntry(title: "Add to Scene", checked: !layout.viewsAssets) { layout.viewsAssets = false }
+    add.symbol = "plus"
+    var view = Kraken.MenuEntry(title: "View Assets", checked: layout.viewsAssets) { layout.viewsAssets = true }
+    view.symbol = "eye"
+    return [add, view]
+  }
+
+  /// the panels plus the render tab
+  private static let dockTabCount = Kraken.TouchPanel.allCases.count + 1
 
   private func dockItems(width: Double) -> some View
   {
@@ -487,23 +558,24 @@ extension Kraken.Workspace
     func panelTab(_ item: Kraken.TouchPanel) -> some View
     {
       Kraken.DockTab(title: item.title, active: panel == item,
-                     icon: Kraken.TabIcon(kind: item.icon, background: panel == item ? 0.22 : 0.1, size: iconSize), width: width)
+                     icon: Kraken.PanelIcon(panel: item, background: panel == item ? 0.22 : 0.1, size: iconSize), width: width)
       {
         panel = panel == item ? nil : item
       }
     }
 
+    // holding the add tab switches it between adding to the scene and viewing assets
+    let viewing = layout.viewsAssets
+    let addTab = Kraken.DockTab(title: viewing ? "View" : "Add", active: panel == .add,
+                                icon: Kraken.PanelIcon(panel: .add, viewing: viewing, background: panel == .add ? 0.22 : 0.1,
+                                                       size: iconSize),
+                                width: width, action: { panel = panel == .add ? nil : .add }, menu: { addModes }, holds: true)
+
     return Group
     {
       panelTab(.scene)
       panelTab(.properties)
-
-      Kraken.DockTab(title: "Add",
-                     icon: SymbolIcon("plus", size: 14, white: 1)
-                       .frame(width: 26, height: 26)
-                       .background(RoundedRectangle(cornerRadius: 13).fill(Properties.accent)),
-                     width: width,
-                     menu: { layout.viewport?.entries(.add).filter { !$0.isHeader } ?? [] })
+      addTab
 
       Kraken.DockTab(title: "Render", active: renderJob.showsResult,
                      icon: Kraken.TabIcon(kind: .render, background: renderJob.showsResult ? 0.22 : 0.1, size: iconSize),
@@ -527,6 +599,7 @@ extension Kraken.Workspace
         // the sculpt viewport lies over the scene's, which pauses while it shows
         if layout.tab == .sculpting { sculptViewport }
       }
+      .overlay { Kraken.AssetViewerView(viewer: layout.viewer, layout: layout) }
   }
 
   /// the sculpt viewport with its brushes down the left, the look and view down the right and size and strength below
@@ -658,10 +731,18 @@ extension Kraken.Workspace
     {
       HStack(spacing: 8)
       {
-        Kraken.TabIcon(kind: panel.icon, background: 0.188, size: 16)
-        Text(panel.title)
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundColor(Properties.text)
+        if panel == .add
+        {
+          // the panel's own title switches between adding and viewing, as holding its tab does
+          MenuButton(symbol: layout.viewsAssets ? "eye" : "plus", title: layout.viewsAssets ? "View" : "Add", size: 32) { addModes }
+        }
+        else
+        {
+          Kraken.PanelIcon(panel: panel, background: 0.188, size: 16)
+          Text(panel.title)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundColor(Properties.text)
+        }
         Spacer()
         TouchButton("xmark", size: 32) { self.panel = nil }
       }
@@ -672,6 +753,8 @@ extension Kraken.Workspace
       {
         case .scene:
           PrimOutliner(layout: layout)
+        case .add:
+          Kraken.AddPanel(layout: layout)
         case .properties:
           if layout.tab == .sculpting
           {

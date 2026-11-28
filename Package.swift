@@ -15,7 +15,7 @@ let package = Package(
     .executable(name: "Kraken", targets: ["Kraken"])
   ],
   dependencies: [
-    .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.11.2"),
+    .package(url: "https://github.com/wabiverse/swift-usd.git", from: "26.11.3"),
     .package(url: "https://github.com/moreSwift/swift-cross-ui.git", from: "0.11.0"),
     .package(url: "https://github.com/wabiverse/MetaOneTBB.git", from: "1.0.0"),
     .package(url: "https://github.com/wabiverse/MetaOpenVDB.git", from: "1.0.0"),
@@ -158,6 +158,8 @@ let package = Package(
         .copy("ScriptKit"),
         // the sample asset library the asset browser ships with
         .copy("AssetLibrary"),
+        // the lit studios the asset viewer shows artifacts in
+        .copy("Studios"),
       ],
       cxxSettings: [
         .define("_LIBCPP_ABI_NO_COMPRESSED_PAIR_PADDING")

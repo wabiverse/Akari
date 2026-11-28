@@ -92,6 +92,7 @@ extension Akari.LabFXEngine
     var needsRecord = true
     var projection = Akari.Matrix4.identity
     var sceneProjection = Akari.Matrix4.identity
+    var view = Akari.Matrix4.identity
   }
 
   static let outlinePassNames: [Pass] = [
@@ -118,7 +119,7 @@ extension Akari.LabFXEngine
   }
 
   /// uploads the selection's labels when they changed and toggles the outline passes
-  func updateOutline(_ selection: Akari.Selection?, projection: Akari.Matrix4, sceneProjection: Akari.Matrix4)
+  func updateOutline(_ selection: Akari.Selection?, view: Akari.Matrix4, projection: Akari.Matrix4, sceneProjection: Akari.Matrix4)
   {
     if (selection != nil) != outline.passesActive
     {
@@ -136,6 +137,7 @@ extension Akari.LabFXEngine
       outline.needsRecord = true
     }
 
+    outline.view = view
     outline.projection = Akari.Matrix4.reversedDepth(projection)
     outline.sceneProjection = Akari.Matrix4.reversedDepth(sceneProjection)
 
@@ -210,9 +212,11 @@ extension Akari.LabFXEngine
          geometry.dynamicBatch.isEmpty || !outline.selectsAnimated ? nil : geometry.dynamicCapture].compactMap(\.self)
     guard !captures.isEmpty else { return }
 
+    // overlays drawn before this one, like the probe bake progress, leave their own matrices loaded
     gl.matrixMode(GL_PROJECTION)
     gl.loadMatrix(outline.projection.m)
     gl.matrixMode(GL_MODELVIEW)
+    gl.loadMatrix(outline.view.m)
     for capture in captures
     {
       labgl_capturePlaybackIndirect(capture)

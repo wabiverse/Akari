@@ -87,6 +87,25 @@ extension Kraken
       #endif
     }
 
+    /// asks before doing something that can't be undone
+    static func confirm(_ title: String, message: String, action: String, then go: @escaping @MainActor () -> Void)
+    {
+      #if os(macOS)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: action).hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { go() }
+      #else
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: action, style: .destructive) { _ in go() })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert)
+      #endif
+    }
+
     /// picks a scene to open, on ios a folder too so the scene's layers and textures open with it
     static func openScene(near folder: URL?, then open: @escaping @MainActor (URL) -> Void)
     {
@@ -188,6 +207,20 @@ extension Kraken
         }
 
         top.present(controller, animated: true)
+      }
+
+      /// picks a folder to keep reading from, like a library of assets
+      static func chooseFolder(then pick: @escaping @MainActor (URL) -> Void)
+      {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+        Picker.shared.run(picker) { url in pick(url) }
+      }
+
+      /// shows a folder of kraken's documents in the files app
+      static func showInFiles(_ folder: URL)
+      {
+        guard let url = URL(string: "shareddocuments://" + folder.path) else { return }
+        UIApplication.shared.open(url)
       }
 
       static func alert(_ title: String)

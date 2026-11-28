@@ -109,6 +109,9 @@ void HdAkariPrimLightLobes(SdfPath const &path, float *diffuse, float *specular)
 /// asks hydra to sync the mesh at `path` again for edits it doesn't track, from the thread hydra renders on
 HDAKARI_API void HdAkariMarkMeshDirty(std::string const &path);
 
+/// asks hydra to sync these meshes' materials again, after their material changed how they draw
+HDAKARI_API void HdAkariMarkMaterialUsersDirty(SdfPathVector const &paths);
+
 /// the stage's time codes per second, without walking it like `HdAkariInspectStage`
 HDAKARI_API double HdAkariTimeCodesPerSecond(UsdStage *stage);
 

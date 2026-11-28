@@ -131,7 +131,6 @@ public extension Akari
 
     let materialAtlas = Akari.MaterialAtlas()
     let shadowAtlas = Akari.ShadowAtlas()
-    let probeBake = ProbeBakeOverlay()
 
     /// world bounds of the last recorded geometry.
     var sceneBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
@@ -453,8 +452,6 @@ public extension Akari
       // roughness reached at the prefilter's last mip.
       setFloat(.roughnessScale, 1.0)
 
-      probeBake.attach(to: &runtime)
-
       attachVolumetrics()
       attachGlassMaps()
       attachGlassCaustics()
@@ -480,7 +477,6 @@ public extension Akari
 
     private func teardown()
     {
-      probeBake.release()
       shadowAtlas.release()
       froxelVolume.release()
       glassMaps.release()

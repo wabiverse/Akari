@@ -386,6 +386,21 @@ extension Kraken
           let on = args["on"] as? Bool ?? true
           settings.edit { $0.light.showsSky = on }
           return on
+        case "renderer":
+          // names a hydra renderer to draw the viewport with, either way answers with the one in use and the choices
+          guard let settings = layout.settings else { throw Failure("no render settings to change") }
+          if let id = args["id"] as? String
+          {
+            guard let picked = settings.renderers.first(where: { $0.id == id || $0.name == id }) else
+            {
+              throw Failure("no renderer \(id), there's \(settings.renderers.map(\.id).joined(separator: ", "))")
+            }
+
+            settings.rendererSelection.wrappedValue = picked
+          }
+
+          return ["id": settings.renderer.id, "name": settings.renderer.name,
+                  "renderers": settings.renderers.map { ["id": $0.id, "name": $0.name] }]
         case "session":
           // edits go to the session layer which is never saved
           let on = args["on"] as? Bool ?? true

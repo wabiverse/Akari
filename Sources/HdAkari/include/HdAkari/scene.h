@@ -108,11 +108,16 @@ public:
     std::lock_guard<std::mutex> lock(_mutex);
     auto it = _meshes.find(data.id);
     const bool geometryChanged = it == _meshes.end() || data.dataRevision != it->second.dataRevision;
+    const bool renumbered = it == _meshes.end() || data.primId != it->second.primId;
 
     _dirtyMeshes.insert(data.id);
     _meshes[data.id] = std::move(data);
     if (geometryChanged) {
       _revision.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    if (renumbered) {
+      _primIdRevision.fetch_add(1, std::memory_order_relaxed);
     }
   }
 
@@ -154,6 +159,19 @@ public:
       _dirtyMeshes.insert(id);
       _revision.fetch_add(1, std::memory_order_relaxed);
     }
+  }
+
+  /// gives an existing mesh the prim id hydra renumbered it to
+  void UpdateMeshPrimId(SdfPath const &id, int32_t primId)
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    auto it = _meshes.find(id);
+    if (it == _meshes.end() || it->second.primId == primId) return;
+
+    it->second.primId = primId;
+    _dirtyMeshes.insert(id);
+    _revision.fetch_add(1, std::memory_order_relaxed);
+    _primIdRevision.fetch_add(1, std::memory_order_relaxed);
   }
 
   /// moves, shows or hides an existing mesh, false when it isn't stored yet
@@ -287,6 +305,13 @@ public:
     _meshes.erase(it);
     _dirtyMeshes.insert(id);
     _revision.fetch_add(1, std::memory_order_relaxed);
+    _primIdRevision.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  /// bumped whenever a mesh is added, removed or renumbered, so whatever maps prim ids to prims knows to look again
+  uint64_t PrimIdRevision() const
+  {
+    return _primIdRevision.load(std::memory_order_relaxed);
   }
 
   size_t MeshCount() const
@@ -643,6 +668,7 @@ private:
   std::unordered_map<SdfPath, HdAkariMeshData, SdfPath::Hash> _meshes;
   std::unordered_set<SdfPath, SdfPath::Hash> _dirtyMeshes;
   std::atomic<uint64_t> _revision{0};
+  std::atomic<uint64_t> _primIdRevision{0};
 
   std::unordered_map<SdfPath, HdAkariLightData, SdfPath::Hash> _lights;
   std::atomic<uint64_t> _lightRevision{0};

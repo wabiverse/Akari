@@ -264,6 +264,9 @@ private:
 /// the rgba texels in each row of the atlas's constants table.
 inline int HdAkariConstantTexels() { return HdAkariTextureAtlas::kConstantTexels; }
 
+/// the largest atlas side this device's memory allows, at most `kMaxTexturePixels`, set once before anything renders
+HDAKARI_API void HdAkariSetAtlasSideLimit(int side);
+
 PXR_NAMESPACE_CLOSE_SCOPE
 
 inline void HdAkariTextureAtlasRetain(PXR_INTERNAL_NS::HdAkariTextureAtlas *atlas)

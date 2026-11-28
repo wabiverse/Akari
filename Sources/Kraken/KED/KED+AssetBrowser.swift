@@ -62,13 +62,25 @@ extension Kraken
   struct AssetBrowser: View
   {
     let layout: Layout
+    /// a narrow browser without the catalog tree or the shelf's title, for the touch add panel
+    let compact: Bool
     @State private var library = AssetLibrary.shared
+    @State private var thumbnails = AssetThumbnails.shared
     @State private var shelf: AssetShelf
 
-    init(layout: Layout, shelf: AssetShelf)
+    init(layout: Layout, shelf: AssetShelf, compact: Bool = false)
     {
       self.layout = layout
+      self.compact = compact
       _shelf = State(wrappedValue: shelf)
+    }
+
+    /// what the browser is busy with, else how many assets show
+    private var status: String
+    {
+      if library.scanning { return "Scanning…" }
+      if thumbnails.queued > 0 { return "Rendering thumbnails \(thumbnails.rendered)/\(thumbnails.queued)" }
+      return "\(shelf.shown.count) of \(shelf.all.count)"
     }
 
     var body: some View
@@ -77,10 +89,14 @@ extension Kraken
       {
         HStack(spacing: 8)
         {
-          Text(shelf.title)
-            .font(Properties.font)
-            .foregroundColor(Properties.text)
-          Text(library.scanning ? "Scanning…" : "\(shelf.shown.count) of \(shelf.all.count)")
+          if !compact
+          {
+            Text(shelf.title)
+              .font(Properties.font)
+              .foregroundColor(Properties.text)
+          }
+
+          Text(status)
             .font(Properties.font)
             .foregroundColor(Color(white: 0.55))
           Spacer()
@@ -89,17 +105,24 @@ extension Kraken
           #else
             TextField("Search", text: Binding(get: { shelf.search }, set: { shelf.search = $0 }))
               .font(Properties.font)
-              .frame(width: 140)
+              .frame(width: compact ? 120 : 140)
           #endif
           #if os(macOS)
             HeaderButton(title: "Add Folder…") { Self.chooseFolder() }
+            HeaderButton(title: "Rescan") { library.rescan() }
+          #else
+            MenuButton(symbol: "ellipsis.circle", size: 26)
+            {
+              [MenuEntry(title: "Add Folder…") { Dialogs.chooseFolder { AssetLibrary.shared.add(folder: $0) } },
+               MenuEntry(title: "Open Assets Folder in Files") { Dialogs.showInFiles(AssetLibrary.mine) },
+               MenuEntry(title: "Rescan") { AssetLibrary.shared.rescan() }]
+            }
           #endif
-          HeaderButton(title: "Rescan") { library.rescan() }
         }
         .padding(.horizontal, 8)
         .frame(height: 26)
         .background(Properties.menu)
-        NativeView(make: { [layout, shelf] in AssetBrowserView(layout: layout, shelf: shelf) },
+        NativeView(make: { [layout, shelf, compact] in AssetBrowserView(layout: layout, shelf: shelf, catalogs: !compact) },
                    size: { ViewSize($0.width ?? 600, $0.height ?? 200) })
       }
     }
@@ -151,6 +174,7 @@ extension Kraken
     private let layout: Layout
     private let library = AssetLibrary.shared
     private let shelf: AssetShelf
+    private let catalogWidth: CGFloat
     private var timer: Timer?
     private var drawn = -1
     private var drawnFilter = ""
@@ -162,10 +186,15 @@ extension Kraken
     private var press: (point: CGPoint, tile: Int?, row: Int?, offset: CGFloat, dragging: Bool, scrolling: Bool)?
     #if os(macOS)
       private var tracking: NSTrackingArea?
+    #else
+      /// lifts a held tile so it can be carried into the viewport
+      private var lift: Timer?
+      /// the drop a lifted tile makes once it's over the viewport
+      private var carried: AssetDrop?
     #endif
 
     private static let touch = FormFactor.isTouch
-    private static let catalogWidth: CGFloat = touch ? 200 : 170
+    private static let catalogSide: CGFloat = touch ? 200 : 170
     private static let rowHeight: CGFloat = touch ? 34 : 20
     private static let tileWidth: CGFloat = touch ? 120 : 104
     private static let tileHeight: CGFloat = touch ? 142 : 122
@@ -180,11 +209,13 @@ extension Kraken
     private static let font = PlatformFont.systemFont(ofSize: touch ? 13 : 11)
     private static let small = PlatformFont.systemFont(ofSize: touch ? 11 : 9)
 
-    init(layout: Layout, shelf: AssetShelf)
+    init(layout: Layout, shelf: AssetShelf, catalogs: Bool)
     {
       self.layout = layout
       self.shelf = shelf
+      catalogWidth = catalogs ? Self.catalogSide : 0
       super.init()
+      AssetThumbnails.shared.attach(layout.hydra)
 
       // tiles scrolled past the top would otherwise draw over the header above the canvas
       clipsToBounds = true
@@ -225,7 +256,7 @@ extension Kraken
 
     private var tileArea: CGRect
     {
-      CGRect(x: Self.catalogWidth, y: 0, width: max(bounds.width - Self.catalogWidth, 0), height: bounds.height)
+      CGRect(x: catalogWidth, y: 0, width: max(bounds.width - catalogWidth, 0), height: bounds.height)
     }
 
     private var columns: Int
@@ -250,7 +281,7 @@ extension Kraken
 
     private func row(at p: CGPoint) -> Int?
     {
-      guard p.x < Self.catalogWidth else { return nil }
+      guard p.x < catalogWidth else { return nil }
       let i = Int((p.y + catalogOffset - 4) / Self.rowHeight)
       return i >= 0 && i <= rows.count ? i : nil
     }
@@ -271,7 +302,7 @@ extension Kraken
       {
         let p = convert(event.locationInWindow, from: nil)
         let delta = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1 : 24)
-        if p.x < Self.catalogWidth { catalogOffset -= delta } else { tileOffset -= delta }
+        if p.x < catalogWidth { catalogOffset -= delta } else { tileOffset -= delta }
         clampOffsets()
         invalidate()
       }
@@ -301,13 +332,34 @@ extension Kraken
 
     override func pointerDown(at point: CGPoint)
     {
-      press = (point, tile(at: point), row(at: point), point.x < Self.catalogWidth ? catalogOffset : tileOffset, false, false)
+      press = (point, tile(at: point), row(at: point), point.x < catalogWidth ? catalogOffset : tileOffset, false, false)
+
+      #if !os(macOS)
+        lift?.invalidate()
+        if press?.tile != nil
+        {
+          lift = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false)
+          { [weak self] _ in
+            MainActor.assumeIsolated { self?.liftTile() }
+          }
+        }
+      #endif
     }
 
     override func pointerDragged(to point: CGPoint)
     {
       guard var press else { return }
       defer { self.press = press }
+
+      #if !os(macOS)
+        // viewing an asset leaves the scene alone, so a held tile only carries into it while adding
+        if press.dragging, let i = press.tile, i < shelf.shown.count
+        {
+          if !layout.viewsAssets { carry(shelf.shown[i], to: point) }
+          return
+        }
+      #endif
+
       let moved = hypot(point.x - press.point.x, point.y - press.point.y) > 5
       guard moved, !press.dragging else
       {
@@ -325,14 +377,64 @@ extension Kraken
       #endif
 
       // on glass a drag scrolls whichever side it's on
+      #if !os(macOS)
+        lift?.invalidate()
+      #endif
       press.scrolling = true
       scrollBy(press, point)
     }
 
+    #if !os(macOS)
+      /// a tile held still lifts, ready to carry into the viewport
+      private func liftTile()
+      {
+        guard var press, !press.scrolling, !press.dragging, let i = press.tile, i < shelf.shown.count else { return }
+        press.dragging = true
+        self.press = press
+        selected = shelf.shown[i].id
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        invalidate()
+      }
+
+      /// the lifted tile's drop follows the finger over the viewport and is taken back when it leaves
+      private func carry(_ asset: LibraryAsset, to point: CGPoint)
+      {
+        guard let viewport = layout.viewport else { return }
+        let inside = convert(point, to: viewport)
+        guard viewport.bounds.contains(inside)
+        else
+        {
+          putBack(viewport)
+          return
+        }
+
+        if carried == nil
+        {
+          let drop = AssetDrop(layout: layout, asset: asset)
+          drop.view = viewport
+          drop.point = inside
+          viewport.assetDrop = drop
+          carried = drop
+          drop.begin()
+        }
+
+        carried?.move(to: inside, in: viewport)
+        viewport.invalidate()
+      }
+
+      private func putBack(_ viewport: LayoutView?)
+      {
+        carried?.cancel()
+        carried = nil
+        viewport?.assetDrop = nil
+        viewport?.invalidate()
+      }
+    #endif
+
     private func scrollBy(_ press: (point: CGPoint, tile: Int?, row: Int?, offset: CGFloat, dragging: Bool, scrolling: Bool),
                           _ point: CGPoint)
     {
-      if press.point.x < Self.catalogWidth { catalogOffset = press.offset - (point.y - press.point.y) }
+      if press.point.x < catalogWidth { catalogOffset = press.offset - (point.y - press.point.y) }
       else { tileOffset = press.offset - (point.y - press.point.y) }
       clampOffsets()
       invalidate()
@@ -341,10 +443,32 @@ extension Kraken
     override func pointerUp(at _: CGPoint)
     {
       defer { press = nil }
+
+      #if !os(macOS)
+        lift?.invalidate()
+        if let drop = carried
+        {
+          carried = nil
+          drop.release()
+          return
+        }
+
+        // a tile held and let go where it was offers what can be done with it
+        if let press, press.dragging, let i = press.tile, i < shelf.shown.count
+        {
+          MenuEntry.present(actions(for: shelf.shown[i]), from: self, at: CGPoint(x: tileRect(i).midX, y: tileRect(i).midY),
+                            title: shelf.shown[i].name)
+          return
+        }
+      #endif
+
       guard let press, !press.dragging, !press.scrolling else { return }
       if let i = press.tile, i < shelf.shown.count
       {
         selected = shelf.shown[i].id
+
+        // a tap adds or views on touch, a click only picks
+        if Self.touch { layout.tap(shelf.shown[i]) }
       }
       else if let r = press.row
       {
@@ -368,14 +492,56 @@ extension Kraken
       invalidate()
     }
 
+    /// what can be done with an asset from its tile, using it and taking it out of the library
+    private func actions(for asset: LibraryAsset) -> [MenuEntry]
+    {
+      let layout = layout, library = library
+      var entries = [MenuEntry(title: layout.viewsAssets && asset.kind == .model ? "View" : "Add to Scene") { layout.tap(asset) }]
+      switch library.removal(for: asset)
+      {
+        case let .delete(url)?:
+          var delete = MenuEntry(title: "Delete \(url.lastPathComponent)…")
+          {
+            Dialogs.confirm("Delete \(url.lastPathComponent)?",
+                            message: "It's deleted from Kraken's assets folder with everything imported with it. This can't be undone.",
+                            action: "Delete") { library.remove(.delete(url)) }
+          }
+          delete.isDestructive = true
+          entries.append(delete)
+        case let .forget(folder)?:
+          var forget = MenuEntry(title: "Remove \(folder.lastPathComponent) from Library") { library.remove(.forget(folder)) }
+          forget.isDestructive = true
+          entries.append(forget)
+        case nil:
+          break
+      }
+
+      return entries
+    }
+
+    #if os(macOS)
+      override func rightMouseDown(with event: NSEvent)
+      {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let i = tile(at: point), i < shelf.shown.count else { return }
+        selected = shelf.shown[i].id
+        invalidate()
+        MenuEntry.menu(actions(for: shelf.shown[i])).popUp(positioning: nil, at: point, in: self)
+      }
+    #endif
+
     override func pointerCancelled()
     {
       press = nil
+      #if !os(macOS)
+        lift?.invalidate()
+        putBack(layout.viewport)
+      #endif
     }
 
     override func pointerDoubleTapped(at point: CGPoint)
     {
-      guard let i = tile(at: point), i < shelf.shown.count else { return }
+      guard !Self.touch, let i = tile(at: point), i < shelf.shown.count else { return }
       let asset = shelf.shown[i]
       selected = asset.id
       layout.use(asset)
@@ -389,13 +555,13 @@ extension Kraken
       Self.background.setFill()
       bounds.fill()
       drawTiles()
-      drawCatalogs()
+      if catalogWidth > 0 { drawCatalogs() }
     }
 
     private func drawCatalogs()
     {
       Self.side.setFill()
-      CGRect(x: 0, y: 0, width: Self.catalogWidth, height: bounds.height).fill()
+      CGRect(x: 0, y: 0, width: catalogWidth, height: bounds.height).fill()
       let entries: [(title: String, depth: Int, count: Int, children: Bool, path: [String])] =
         [("All", 0, shelf.all.count, false, [])]
           + rows.map { ($0.path.last ?? "", $0.path.count, $0.count, $0.hasChildren, $0.path) }
@@ -403,7 +569,7 @@ extension Kraken
       {
         let y = 4 + CGFloat(i) * Self.rowHeight - catalogOffset
         guard y > -Self.rowHeight, y < bounds.height else { continue }
-        let rect = CGRect(x: 4, y: y, width: Self.catalogWidth - 8, height: Self.rowHeight - 2)
+        let rect = CGRect(x: 4, y: y, width: catalogWidth - 8, height: Self.rowHeight - 2)
         let chosen = entry.path == shelf.catalog
         if chosen || (hovered.map(rect.contains) ?? false)
         {
@@ -499,7 +665,8 @@ extension Kraken
 
         (asset.name as NSString).draw(in: CGRect(x: rect.minX + 3, y: picture.maxY + 2, width: rect.width - 6, height: 15),
                                       withAttributes: attributes)
-        let caption = asset.kind == .material ? "Material" : asset.modelKind.isEmpty ? "Scene" : asset.modelKind.capitalized
+        let kind = asset.kind == .material ? "Material" : asset.modelKind.isEmpty ? "Scene" : asset.modelKind.capitalized
+        let caption = AssetThumbnails.shared.waits(asset) ? "Rendering…" : kind
         (caption as NSString).draw(in: CGRect(x: rect.minX + 3, y: picture.maxY + 16, width: rect.width - 6, height: 12),
                                    withAttributes: captionAttributes)
       }

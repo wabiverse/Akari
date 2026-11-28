@@ -44,6 +44,7 @@
 # include <Hd/sceneIndexPluginRegistry.h>
 # include <Hd/filteringSceneIndex.h>
 # include <Hd/legacyDisplayStyleSchema.h>
+# include <Hd/materialBindingsSchema.h>
 # include <Hd/meshSchema.h>
 # include <Tf/registryManager.h>
 # include <Tf/type.h>
@@ -54,6 +55,7 @@
 # include <pxr/imaging/hd/sceneIndexPluginRegistry.h>
 # include <pxr/imaging/hd/filteringSceneIndex.h>
 # include <pxr/imaging/hd/legacyDisplayStyleSchema.h>
+# include <pxr/imaging/hd/materialBindingsSchema.h>
 # include <pxr/imaging/hd/meshSchema.h>
 # include <pxr/base/tf/registryManager.h>
 # include <pxr/base/tf/type.h>
@@ -114,13 +116,12 @@ public:
     return _GetInputSceneIndex()->GetChildPrimPaths(primPath);
   }
 
-  void Dirty(SdfPath const &path)
+  void Dirty(SdfPath const &path, HdDataSourceLocatorSet const &locators, bool meshesOnly)
   {
-    if (!_IsObserved() || GetPrim(path).primType != HdPrimTypeTokens->mesh) return;
+    if (!_IsObserved()) return;
 
-    HdDataSourceLocatorSet locators;
-    locators.insert(HdMeshSchema::GetTopologyLocator());
-    locators.insert(HdLegacyDisplayStyleSchema::GetRefineLevelLocator());
+    const TfToken type = GetPrim(path).primType;
+    if (type.IsEmpty() || (meshesOnly && type != HdPrimTypeTokens->mesh)) return;
     _SendPrimsDirtied({{path, locators}});
   }
 
@@ -148,11 +149,11 @@ std::vector<HdAkariMeshDirtyingSceneIndexPtr> dirtying;
 
 }
 
-void
-HdAkariMarkMeshDirty(std::string const &path)
-{
-  if (!SdfPath::IsValidPathString(path)) return;
+namespace {
 
+/// tells every live akari scene index that these meshes changed where `locators` say
+void markDirty(SdfPathVector const &paths, HdDataSourceLocatorSet const &locators, bool meshesOnly)
+{
   std::vector<HdAkariMeshDirtyingSceneIndexPtr> live;
   {
     std::lock_guard<std::mutex> lock(dirtyingLock);
@@ -161,10 +162,31 @@ HdAkariMarkMeshDirty(std::string const &path)
     live = dirtying;
   }
 
-  const SdfPath prim(path);
   for (auto const &index : live) {
-    if (index) index->Dirty(prim);
+    if (!index) continue;
+    for (SdfPath const &path : paths) {
+      index->Dirty(path, locators, meshesOnly);
+    }
   }
+}
+
+}
+
+void
+HdAkariMarkMeshDirty(std::string const &path)
+{
+  if (!SdfPath::IsValidPathString(path)) return;
+
+  HdDataSourceLocatorSet locators;
+  locators.insert(HdMeshSchema::GetTopologyLocator());
+  locators.insert(HdLegacyDisplayStyleSchema::GetRefineLevelLocator());
+  markDirty({SdfPath(path)}, locators, true);
+}
+
+void
+HdAkariMarkMaterialUsersDirty(SdfPathVector const &paths)
+{
+  markDirty(paths, HdDataSourceLocatorSet{HdMaterialBindingsSchema::GetDefaultLocator()}, false);
 }
 
 // lets kraken resync a mesh after edits hydra ignores, like its own subdivision levels

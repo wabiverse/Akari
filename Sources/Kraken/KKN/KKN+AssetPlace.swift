@@ -742,6 +742,12 @@ extension Kraken
 
 extension Kraken.Layout
 {
+  /// a tap on a library asset, standing it in the viewer's studio in view mode and adding it to the scene otherwise
+  func tap(_ asset: Kraken.LibraryAsset)
+  {
+    if viewsAssets, asset.kind == .model { viewer.show(asset) } else { use(asset) }
+  }
+
   /// places a library asset under the middle of the viewport, or puts a material on the active object, for a tap or double click
   func use(_ asset: Kraken.LibraryAsset)
   {

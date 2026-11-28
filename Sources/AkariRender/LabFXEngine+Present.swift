@@ -68,14 +68,9 @@ extension Akari.LabFXEngine
   }
 
   /// runs the deferred graph, outlines the selection, presents and wraps the color, prim id and depth into the aovs hydra uses
-  public func present(target: Akari.GPU.HydraTarget,
-                      projection: Akari.Matrix4,
-                      hgi: Pixar.HgiMetal,
-                      lightProbes showLightProbes: Bool = false)
+  public func present(target: Akari.GPU.HydraTarget, projection: Akari.Matrix4, hgi: Pixar.HgiMetal)
   {
     guard let windowHandle else { return }
-
-    probeBake.update(enabled: showLightProbes, probes: lightProbes)
 
     ensureShadowBindings()
 

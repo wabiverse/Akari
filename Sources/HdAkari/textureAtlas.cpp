@@ -88,6 +88,18 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 namespace {
 
+/// the largest atlas side, held below the most metal allows on devices without the memory for it
+std::atomic<int> atlasSideLimit{HdAkariTextureAtlas::kMaxTexturePixels};
+
+}
+
+void HdAkariSetAtlasSideLimit(int side)
+{
+  atlasSideLimit.store(std::clamp(side, 1024, HdAkariTextureAtlas::kMaxTexturePixels), std::memory_order_relaxed);
+}
+
+namespace {
+
 /// empty atlas space reads fully opaque so filtering into it never dithers an opaque material
 void AssignMaterialPixels(std::vector<uint8_t> &pixels, size_t size)
 {
@@ -539,17 +551,19 @@ HdAkariTextureAtlas::EnsureGridSized(HdSceneDelegate *sceneDelegate)
   std::vector<HdAkariAtlasRegion> placed;
 
   // a scene with no textures yet still has room for the ones that load later
-  int width = 2048, height = 2048, used = 0, cap = kMaxTexturePixels;
+  const int limit = atlasSideLimit.load(std::memory_order_relaxed);
+  int width = 2048, height = 2048, used = 0, cap = limit;
   bool packed = _sizeItems.empty();
   for (int tryCap : {16384, 8192, 4096, 3072, 2048, 1536, 1024, 768, 512, 256, 128, 64}) {
     if (packed) break;
+    if (tryCap > limit) continue;
 
     sizes.clear();
     for (auto const &item : _sizeItems) {
       sizes.push_back(RegionSize(item.second.width, item.second.height, tryCap, kCellPadding, kRegionAlign));
     }
 
-    for (int tryWidth = 1024; tryWidth <= kMaxTexturePixels && !packed; tryWidth *= 2) {
+    for (int tryWidth = 1024; tryWidth <= limit && !packed; tryWidth *= 2) {
       // a sixteenth stays free for materials that load later
       if (PackShelves(sizes, tryWidth, tryWidth - std::max(tryWidth / 16, 256), placed, used)) {
         packed = true;

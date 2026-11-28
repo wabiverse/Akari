@@ -94,6 +94,8 @@ extension Akari.LabFXEngine
     /// the sun extracted from the dome in dome space, with irradiance before `color` and its spread angle.
     var sun: (direction: SIMD3<Float>, irradiance: SIMD3<Float>, angle: Float)?
     var sunDirection: SIMD3<Float>?
+    /// shown behind the scene, a dome kept out of it still lights
+    var cameraVisible = true
   }
 
   /// default world sun threshold.
@@ -210,6 +212,7 @@ extension Akari.LabFXEngine
     }
 
     next.color = SIMD3(data.colorR, data.colorG, data.colorB) * data.intensity * exp2(data.exposure)
+    next.cameraVisible = data.cameraVisible
     dome = next
 
     // baked lighting scales with the dome color so a color change only updates the tint, a new image or frame rebakes
@@ -348,6 +351,7 @@ extension Akari.LabFXEngine
   func applyDome(_ light: LightSettings)
   {
     setFloat(.domeEnabled, dome == nil ? 0 : environment.domeWeight)
+    setFloat(.domeBackground, dome?.cameraVisible == false ? 0 : 1)
     setVector(.iblTint, SIMD4(iblTint, 1))
     guard let dome else { return }
 

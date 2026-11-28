@@ -1,5 +1,5 @@
 {
-  "originHash" : "66c213f79cff15fa5c4f42bbbbf46e4da541a419daf04e1fa5e28ab17219309f",
+  "originHash" : "a55c4f91f3665edd2433d5cc408b71466248ebb4bd5d48b58b9d1649e3d91eaa",
   "pins" : [
     {
       "identity" : "androidkit",
@@ -465,8 +465,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/wabiverse/swift-usd.git",
       "state" : {
-        "revision" : "ca089b043264dc8d08a91cc9dffaf230d1fb6f7f",
-        "version" : "26.11.2"
+        "revision" : "4f52dbda1856845ab4cf1684522036d8b5f879bf",
+        "version" : "26.11.3"
       }
     },
     {

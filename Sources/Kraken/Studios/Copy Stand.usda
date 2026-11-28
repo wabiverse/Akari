@@ -1,0 +1,83 @@
+#usda 1.0
+(
+    defaultPrim = "Studio"
+    doc = """A two umbrella copy stand from the MetPhotometricReference rig, its glowing umbrellas lighting whatever stands on the table at the radiance the rig calibrated."""
+    metersPerUnit = 1
+    upAxis = "Z"
+    customLayerData = {
+        dictionary colorManagement = {
+            double exposure = 0.2
+            string viewTransform = "sRGB"
+        }
+    }
+)
+
+def Xform "Studio" (
+    assetInfo = {
+        dictionary previews = {
+            dictionary thumbnails = {
+                dictionary default = {
+                    asset defaultImage = @./Previews/Copy Stand.png@
+                }
+            }
+        }
+    }
+)
+{
+    # the photometric stager rig, authored in centimeters
+    def Xform "Rig" (
+        prepend references = @CopyStand/DCSG_MMAGrayscale_Umbrellas_Stager_PhysicalLights_HDRI_061526.usdz@
+    )
+    {
+        float3 xformOp:scale = (0.01, 0.01, 0.01)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+
+        # the dome is the same umbrellas baked into an hdri, the glowing umbrellas light the scene in its place
+        over "light_set" (
+            active = false
+        )
+        {
+        }
+
+        # floating labels and the hdri capture cameras
+        over "default_group_n3d" (
+            active = false
+        )
+        {
+        }
+
+        over "render_camera_n3d" (
+            active = false
+        )
+        {
+        }
+
+        over "render_camera_n3d2" (
+            active = false
+        )
+        {
+        }
+
+        over "DCSG_MMAGrayscale_Umbrellas_Stager_PhysicalLights_Only_050726_n3d"
+        {
+            over "DCSG_MMAGrayscale_Umbrellas_Stager_PhysicalLights_Only_050626_n3d"
+            {
+                over "Two_Umbrellas_with_Charts_Baseline_n3d"
+                {
+                    # the color charts sit where the subject stands
+                    over "DCSG_With_Met_Grayscale_Scene_sRGB_n3d" (
+                        active = false
+                    )
+                    {
+                    }
+                }
+            }
+        }
+    }
+
+    # the studio is dark but for the two umbrellas
+    def DomeLight "Darkroom"
+    {
+        float inputs:intensity = 0
+    }
+}

@@ -72,6 +72,30 @@ public extension Akari
     }
 
     /// the viewport's selection outline toggle, safe from any thread and never drawn into a final render
+    /// how far a light probe bake has come, in probes
+    public struct ProbeBake: Sendable, Equatable
+    {
+      public var done: Int
+      public var total: Int
+
+      public var fraction: Double
+      {
+        total > 0 ? Double(done) / Double(total) : 0
+      }
+    }
+
+    /// the viewport's light probe bake while one runs, nil once the probes in view are ready
+    public var probeBake: ProbeBake?
+    {
+      settingsLock.withLock { _probeBake }
+    }
+
+    /// the scene's prim id revision as of the last frame, prim id lookups start over when it moves
+    public var primIdRevision: UInt64
+    {
+      settingsLock.withLock { _primIdRevision }
+    }
+
     public var showsSelectionOutline: Bool
     {
       get { settingsLock.withLock { _showsSelectionOutline } }
@@ -93,6 +117,8 @@ public extension Akari
     private var _finalRenderSample: Int?
     private var _selection: Akari.Selection?
     private var _showsSelectionOutline = true
+    private var _primIdRevision: UInt64 = 0
+    private var _probeBake: ProbeBake?
     private var settingsPendingRebuild = false
     private var pipeline: RenderPipeline
     private var graph: [any Akari.GPU.RenderPassNode]
@@ -197,6 +223,11 @@ public extension Akari
                            isFinalRender: Bool)
     {
       labfx.makeCurrent()
+      if let scene = renderParam.GetScene()
+      {
+        let revision = scene.PrimIdRevision()
+        settingsLock.withLock { _primIdRevision = revision }
+      }
 
       var settings = applyPendingSettings()
       let finalSample = finalRenderSample
@@ -286,7 +317,17 @@ public extension Akari
       }
 
       frameIndex &+= 1
-      if !isFinalRender { viewportFrames += 1 }
+      if !isFinalRender
+      {
+        viewportFrames += 1
+
+        // six cube faces make a probe
+        let probes = labfx.lightProbes
+        let baking = settings.features.contains(.lightProbes) && probes.inView && probes.captureTotal > 0
+          && (probes.captured < probes.captureTotal || !probes.isReady)
+        let bake = baking ? ProbeBake(done: probes.captured / 6, total: probes.captureTotal / 6) : nil
+        settingsLock.withLock { _probeBake = bake }
+      }
     }
 
     private static func halton(_ index: UInt64, _ base: UInt64) -> Float

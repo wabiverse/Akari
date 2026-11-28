@@ -117,6 +117,23 @@ extension Kraken
     @Published var tool: Tool = .select
     @Published var selectMode: SelectMode = .vertex
     @Published var selection: [String] = []
+    /// the light probe bake the viewport is waiting on, for the status bar and the touch top bar
+    @Published private(set) var probeBake: Akari.RenderEngine.ProbeBake?
+
+    /// the add panel views library assets in a studio instead of adding them, kept between launches
+    @Published var viewsAssets = UserDefaults.standard.bool(forKey: Layout.viewsAssetsKey)
+    {
+      didSet
+      {
+        UserDefaults.standard.set(viewsAssets, forKey: Self.viewsAssetsKey)
+        if !viewsAssets { viewer.close() }
+      }
+    }
+
+    private static let viewsAssetsKey = "KrakenViewsAssets"
+
+    /// the studio the add panel shows assets in while it views them
+    lazy var viewer = AssetViewer(host: hydra, scene: engine)
     @Published var overlays = true
     {
       didSet { applyOverlays() }
@@ -239,11 +256,22 @@ extension Kraken
       inspector.layout = self
 
       let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
-        MainActor.assumeIsolated { self?.refresh() }
+        MainActor.assumeIsolated
+        {
+          self?.refresh()
+          self?.followBake()
+        }
       }
 
       RunLoop.main.add(timer, forMode: .common)
       self.timer = timer
+    }
+
+    /// picks up the viewport's light probe bake progress
+    private func followBake()
+    {
+      let bake = engine.probeBake
+      if bake != probeBake { probeBake = bake }
     }
 
     /// one meter in the stage's units

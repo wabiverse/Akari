@@ -49,6 +49,9 @@ public func registerAkariRenderer(engine: Akari.RenderEngine)
   // explicitly make its TF_REGISTRY_FUNCTION run.
   AkariHdEnsureLinked()
 
+  // material atlases stay within what this device's memory holds
+  Pixar.HdAkariSetAtlasSideLimit(Int32(Akari.GPU.Capabilities.current.atlasSide))
+
   AkariHydraSetRenderEngine(Unmanaged.passRetained(engine).toOpaque())
   AkariHydraSetRenderDelegate(Unmanaged.passRetained(Akari.RenderDelegate()).toOpaque())
 }

@@ -76,6 +76,9 @@ HDAKARI_API void HdAkariJournalClear();
 /// a value as the properties panel shows it
 HDAKARI_API std::string HdAkariDescribeValue(VtValue const &value);
 
+/// whether a layer opened or made, false when it couldn't be, as for a folder the app can't write to
+HDAKARI_API bool HdAkariIsLayer(SdfLayerRefPtr const &layer);
+
 /// writes up to 3 of a value's numbers into `out` and returns how many, 0 when it isn't numeric
 HDAKARI_API int HdAkariValueNumbers(VtValue const &value, double *out);
 

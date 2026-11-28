@@ -83,12 +83,15 @@ extension Kraken
         .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
         .foregroundColor: ink,
       ]
+      private static let accent = NSColor(srgbRed: 0.278, green: 0.447, blue: 0.702, alpha: 1)
+      private static let track = NSColor(white: 1, alpha: 0.12)
 
       private let device = MTLCreateSystemDefaultDevice()
       weak var layout: Layout?
       private var timer: Timer?
       private var hints: [Hint] = []
       private var memory = ""
+      private var bake: Akari.RenderEngine.ProbeBake?
       private var tick = 0
 
       override init(frame: NSRect)
@@ -228,6 +231,13 @@ extension Kraken
           }
         }
 
+        let baking = layout?.probeBake
+        if baking != bake
+        {
+          bake = baking
+          changed = true
+        }
+
         tick += 1
         if changed { needsDisplay = true }
       }
@@ -303,8 +313,24 @@ extension Kraken
         }
 
         let size = (memory as NSString).size(withAttributes: Self.digits)
-        (memory as NSString).draw(at: NSPoint(x: bounds.width - size.width - 10, y: (Self.height - size.height) / 2),
-                                  withAttributes: Self.digits)
+        let memoryX = bounds.width - size.width - 10
+        (memory as NSString).draw(at: NSPoint(x: memoryX, y: (Self.height - size.height) / 2), withAttributes: Self.digits)
+        if let bake { drawBake(bake, endingAt: memoryX - 18) }
+      }
+
+      /// the light probe bake's progress, a label and a bar left of the memory readout
+      private func drawBake(_ bake: Akari.RenderEngine.ProbeBake, endingAt right: CGFloat)
+      {
+        let bar = NSRect(x: right - 80, y: (Self.height - 4) / 2, width: 80, height: 4)
+        Self.track.setFill()
+        NSBezierPath(roundedRect: bar, xRadius: 2, yRadius: 2).fill()
+        Self.accent.setFill()
+        NSBezierPath(roundedRect: NSRect(x: bar.minX, y: bar.minY, width: bar.width * bake.fraction, height: bar.height),
+                     xRadius: 2, yRadius: 2).fill()
+
+        let label = "Baking light probes \(bake.done)/\(bake.total)" as NSString
+        let size = label.size(withAttributes: Self.digits)
+        label.draw(at: NSPoint(x: bar.minX - size.width - 8, y: (Self.height - size.height) / 2), withAttributes: Self.digits)
       }
     }
   #endif

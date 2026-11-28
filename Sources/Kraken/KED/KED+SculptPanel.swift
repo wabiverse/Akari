@@ -275,7 +275,7 @@ extension Kraken
     {
       if layout.showsToolbar
       {
-        ScrollView
+        PropertiesScroll
         {
           VStack(spacing: 2)
           {
@@ -745,7 +745,7 @@ extension Kraken
           .padding(.horizontal, 12)
           .padding(.vertical, 7)
 
-          ScrollView
+          PropertiesScroll
           {
             VStack(alignment: .leading, spacing: 4)
             {

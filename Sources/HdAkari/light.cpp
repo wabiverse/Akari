@@ -78,6 +78,23 @@ TF_DEFINE_PRIVATE_TOKENS(_tokens,
   ((userPropertiesAkariHero, "userProperties:akari_hero"))
 );
 
+namespace {
+
+/// whether the camera sees a light, its `akari:light:cameraVisible` or that primvar, true when neither is authored
+bool CameraVisible(HdSceneDelegate *sceneDelegate, SdfPath const &id)
+{
+  for (TfToken const &name : {_tokens->primvarsLightCameraVisible, _tokens->lightCameraVisible}) {
+    const VtValue v = sceneDelegate->GetLightParamValue(id, name);
+    if (v.IsHolding<bool>()) return v.UncheckedGet<bool>();
+    if (v.IsHolding<int>()) return v.UncheckedGet<int>() != 0;
+    if (v.IsHolding<VtArray<bool>>() && !v.UncheckedGet<VtArray<bool>>().empty()) return v.UncheckedGet<VtArray<bool>>()[0];
+  }
+
+  return true;
+}
+
+}
+
 HdAkariLight::HdAkariLight(SdfPath const &id, TfToken const &type)
   : HdLight(id),
     _type(type)
@@ -111,6 +128,7 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
     dome.id = id;
     dome.transform = sceneDelegate->GetTransform(id);
     dome.visible = sceneDelegate->GetVisible(id);
+    dome.cameraVisible = CameraVisible(sceneDelegate, id);
 
     const VtValue intensity = sceneDelegate->GetLightParamValue(id, HdLightTokens->intensity);
     if (intensity.IsHolding<float>())
@@ -271,13 +289,7 @@ HdAkariLight::Sync(HdSceneDelegate *sceneDelegate,
     if (data.hero) break;
   }
 
-  for (TfToken const &name : {_tokens->primvarsLightCameraVisible, _tokens->lightCameraVisible})
-  {
-    const VtValue v = sceneDelegate->GetLightParamValue(id, name);
-    if (v.IsHolding<bool>()) { data.cameraVisible = v.UncheckedGet<bool>(); break; }
-    if (v.IsHolding<int>()) { data.cameraVisible = v.UncheckedGet<int>() != 0; break; }
-    if (v.IsHolding<VtArray<bool>>() && !v.UncheckedGet<VtArray<bool>>().empty()) { data.cameraVisible = v.UncheckedGet<VtArray<bool>>()[0]; break; }
-  }
+  data.cameraVisible = CameraVisible(sceneDelegate, id);
 
   for (TfToken const &name : {_tokens->primvarsLightProbes, _tokens->lightProbes})
   {

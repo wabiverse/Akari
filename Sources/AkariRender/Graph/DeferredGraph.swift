@@ -880,13 +880,6 @@ extension Akari.RenderGraph
         Output(TonemapBuffer.tonemap)
       }
 
-      Pass(.probeBakeOverlay)
-      {
-        Callback(.drawProbeBake)
-        Blend(.alpha)
-        Output(TonemapBuffer.tonemap)
-      }
-
       Pass(.outlineMask)
       {
         Callback(.drawOutlineMask)

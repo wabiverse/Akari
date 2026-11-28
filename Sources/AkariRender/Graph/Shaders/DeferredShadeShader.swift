@@ -67,6 +67,7 @@ extension Akari.RenderGraph
       Uniforms.view
       Uniforms.iblEnabled
       Uniforms.domeEnabled
+      Uniforms.domeBackground
       Uniforms.domeFromWorld
       Uniforms.domeColor
       Uniforms.domeSun
@@ -392,6 +393,7 @@ extension Akari.RenderGraph
               vec2 uv = vec2((atan(d.z, d.x) + 0.5 * PI) / (2.0 * PI), acos(clamp(d.y, -1.0, 1.0)) / PI);
               sky = mix(sky, textureLod(u_domeMap, vec2(fract(uv.x), uv.y), 0.0).rgb * u_domeColor.rgb, u_domeEnabled);
             }
+            sky *= u_domeBackground;
             vec4 fog = volumeFog(gl_FragCoord.xy, u_volumeRange.y);
             o_final_texture = vec4(sky * fog.a + fog.rgb, 1.0);
           } else {
@@ -893,6 +895,7 @@ extension Akari.RenderGraph
               float2 uv = float2((atan2(d.z, d.x) + 0.5 * PI) / (2.0 * PI), acos(clamp(d.y, -1.0, 1.0)) / PI);
               sky = mix(sky, textureLod(u_domeMap, float2(fract(uv.x), uv.y), 0.0).rgb * u_domeColor.rgb, u_domeEnabled);
             }
+            sky *= u_domeBackground;
             float4 fog = volumeFog(gl_FragCoord.xy, u_volumeRange.y,
                                    u_volumeIntegrated_texture, u_volumeIntegrated_texture_smp, _u);
             o_final_texture = float4(sky * fog.a + fog.rgb, 1.0);

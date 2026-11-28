@@ -65,6 +65,7 @@ extension Akari.RenderGraph
     static let dofSampling = Uniform<SIMD4<Float>>("u_dofSampling")
     static let domeColor = Uniform<SIMD4<Float>>("u_domeColor")
     static let domeEnabled = Uniform<Float>("u_domeEnabled")
+    static let domeBackground = Uniform<Float>("u_domeBackground")
     static let domeFromSky = Uniform<Akari.Matrix4>("u_domeFromSky")
     static let domeFromWorld = Uniform<Akari.Matrix4>("u_domeFromWorld")
     static let domeSun = Uniform<SIMD4<Float>>("u_domeSun")

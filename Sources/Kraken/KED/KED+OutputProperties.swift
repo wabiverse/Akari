@@ -98,7 +98,7 @@ extension Kraken
 
     var body: some View
     {
-      ScrollView
+      PropertiesScroll
       {
         VStack(alignment: .leading, spacing: 4)
         {
@@ -216,7 +216,7 @@ extension Kraken
 
     var body: some View
     {
-      ScrollView
+      PropertiesScroll
       {
         VStack(alignment: .leading, spacing: 4)
         {

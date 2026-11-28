@@ -177,6 +177,9 @@ extension Kraken
       let made = FileManager.default.fileExists(atPath: url.path)
         ? Pixar.SdfLayer.FindOrOpen(std.string(url.path), Pixar.SdfLayer.FileFormatArguments())
         : Pixar.SdfLayer.CreateNew(std.string(url.path), Pixar.SdfLayer.FileFormatArguments())
+
+      // a scene opened from somewhere the app can only read keeps its sculpt in the scene's own layers
+      guard Pixar.HdAkariIsLayer(made) else { return nil }
       _ = made.pointee.Save(false)
       layers.append(made)
       root.pointee.InsertSubLayerPath(std.string("./\(file)"), 0)
